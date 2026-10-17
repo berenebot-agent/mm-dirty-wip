@@ -101,7 +101,7 @@ func TestAuthRejectRetriesWithoutResolving(t *testing.T) {
 	rc := newFakeReceiver(t)
 	rc.mode("reject")
 	var resolved atomic.Int64
-	rc.onResolve = func(fc *fakeConn, q mxwire.V2Resolve) {
+	rc.onResolve = func(fc *fakeConn, q mxwire.ResolveRequest) {
 		resolved.Add(1)
 	}
 
@@ -146,7 +146,7 @@ func TestCancelWhileBackendIngestingKeepsFileUntilWorkerExits(t *testing.T) {
 	payload := []byte("hello world")
 	digest := sha256Hex(payload)
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
 	}
 	// A conformant receiver starts ingest only after the resolve result.
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
@@ -159,9 +159,9 @@ func TestCancelWhileBackendIngestingKeepsFileUntilWorkerExits(t *testing.T) {
 			return true
 		}
 		meta := mxwire.IngestMetadata{Recipients: []string{rr.Results[0].Recipient}, ContentDigest: digest, Size: int64(len(payload))}
-		fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.V2IngestStart{Domains: []string{rr.Results[0].Domain}, Metadata: meta})
+		fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.IngestStart{Domains: []string{rr.Results[0].Domain}, Metadata: meta})
 		fc.write(mxwire.ChunkFrame(f.TxID, 0, 0, payload))
-		fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.V2IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
+		fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
 		return true
 	}
 
@@ -211,8 +211,8 @@ func TestGlobalTransactionCapAnswersPerRecipient(t *testing.T) {
 
 	results := make(chan mxwire.ResolveResponse, 4)
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
-		fc.send(mxwire.FrameResolve, 2, ch, mxwire.V2Resolve{Domain: domain, Recipient: "b@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 2, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "b@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		if f.Type == mxwire.FrameResolveResult {
@@ -271,7 +271,7 @@ func TestWrongSequenceCleansUpStaging(t *testing.T) {
 	digest := sha256Hex(payload)
 
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		if f.Type != mxwire.FrameResolveResult {
@@ -280,7 +280,7 @@ func TestWrongSequenceCleansUpStaging(t *testing.T) {
 		var rr mxwire.ResolveResponse
 		_ = mxwire.DecodeFrame(f, &rr)
 		meta := mxwire.IngestMetadata{Recipients: []string{rr.Results[0].Recipient}, ContentDigest: digest, Size: int64(len(payload))}
-		fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.V2IngestStart{Domains: []string{rr.Results[0].Domain}, Metadata: meta})
+		fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.IngestStart{Domains: []string{rr.Results[0].Domain}, Metadata: meta})
 		// seq 0 then a wrong seq 2.
 		fc.write(mxwire.ChunkFrame(f.TxID, 0, 0, payload[:3]))
 		fc.write(mxwire.ChunkFrame(f.TxID, 0, 2, payload[3:]))

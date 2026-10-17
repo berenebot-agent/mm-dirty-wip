@@ -26,7 +26,7 @@ func TestReplacedPinnedTransactionStillIngests(t *testing.T) {
 	ingested := make(chan string, 1)
 
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 7, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 7, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		switch f.Type {
@@ -40,9 +40,9 @@ func TestReplacedPinnedTransactionStillIngests(t *testing.T) {
 			// the already-pinned transaction to finish.
 			fc.send(mxwire.FrameDomainRevoked, 0, f.ChannelID, mxwire.DomainNotice{Domain: "example.test", Reason: "replaced"})
 			meta := mxwire.IngestMetadata{Recipients: []string{rr.Results[0].Recipient}, ContentDigest: digest, Size: int64(len(payload))}
-			fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.V2IngestStart{Domains: []string{"example.test"}, Metadata: meta})
+			fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.IngestStart{Domains: []string{"example.test"}, Metadata: meta})
 			fc.write(mxwire.ChunkFrame(f.TxID, 0, 0, payload))
-			fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.V2IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
+			fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
 			return true
 		case mxwire.FrameIngestResult:
 			ingested <- ""
@@ -81,7 +81,7 @@ func TestUnknownRecipientStaysPermanent(t *testing.T) {
 
 	result := make(chan mxwire.ResolveResponse, 1)
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "ghost@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "ghost@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		if f.Type == mxwire.FrameResolveResult {
@@ -121,7 +121,7 @@ func TestBackendPanicIsContained(t *testing.T) {
 
 	result := make(chan mxwire.ResolveResponse, 1)
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "x@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "x@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		if f.Type == mxwire.FrameResolveResult {
@@ -209,15 +209,15 @@ func TestMissingBackendResultGetsScopedTemporaryResult(t *testing.T) {
 	result := make(chan mxwire.IngestResponse, 1)
 
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
 	}
 	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
 		switch f.Type {
 		case mxwire.FrameResolveResult:
 			meta := mxwire.IngestMetadata{Recipients: []string{"a@example.test"}, ContentDigest: digest, Size: int64(len(payload))}
-			fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.V2IngestStart{Domains: []string{"example.test"}, Metadata: meta})
+			fc.send(mxwire.FrameIngestStart, f.TxID, 0, mxwire.IngestStart{Domains: []string{"example.test"}, Metadata: meta})
 			fc.write(mxwire.ChunkFrame(f.TxID, 0, 0, payload))
-			fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.V2IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
+			fc.send(mxwire.FrameIngestEnd, f.TxID, 0, mxwire.IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
 			return true
 		case mxwire.FrameIngestResult:
 			var r mxwire.IngestResponse
@@ -389,8 +389,8 @@ func TestDistinctTransactionsRunInParallel(t *testing.T) {
 		return false
 	}
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
-		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "a@" + domain})
-		fc.send(mxwire.FrameResolve, 2, ch, mxwire.V2Resolve{Domain: domain, Recipient: "b@" + domain})
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "a@" + domain})
+		fc.send(mxwire.FrameResolve, 2, ch, mxwire.ResolveRequest{Domain: domain, Recipient: "b@" + domain})
 	}
 
 	m, _ := managerFor(t, b, rc, t.TempDir())

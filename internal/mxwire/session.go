@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	V2Protocol      = "mx-v2"
-	SessionPath     = "/mx/v2/session"
+	V1Protocol      = "mx-v1"
+	SessionPath     = "/mx/v1/session"
 	AuthLifetime    = 5 * time.Minute
 	MaxFramePayload = 64 << 10
 	ChunkSize       = 32 << 10
@@ -80,7 +80,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return Frame{}, err
 	}
-	if header[0] != 2 || binary.BigEndian.Uint16(header[2:4]) != 0 {
+	if header[0] != 1 || binary.BigEndian.Uint16(header[2:4]) != 0 {
 		return Frame{}, fmt.Errorf("mxwire: unsupported frame version or flags")
 	}
 	n := binary.BigEndian.Uint32(header[4:8])
@@ -115,7 +115,7 @@ func WriteFrame(w io.Writer, f Frame) error {
 		return err
 	}
 	var header [FrameHeaderSize]byte
-	header[0], header[1] = 2, byte(f.Type)
+	header[0], header[1] = 1, byte(f.Type)
 	binary.BigEndian.PutUint32(header[4:8], uint32(len(f.Payload)))
 	binary.BigEndian.PutUint64(header[8:16], f.TxID)
 	binary.BigEndian.PutUint64(header[16:24], f.ChannelID)
@@ -232,17 +232,17 @@ type DomainNotice struct {
 	Reason string `json:"reason"`
 }
 
-type V2Resolve struct {
+type ResolveRequest struct {
 	Domain    string `json:"domain"`
 	Recipient string `json:"recipient"`
 }
 
-type V2IngestStart struct {
+type IngestStart struct {
 	Domains  []string       `json:"domains"`
 	Metadata IngestMetadata `json:"metadata"`
 }
 
-type V2IngestEnd struct {
+type IngestEnd struct {
 	Size          int64  `json:"size"`
 	ContentDigest string `json:"content_digest"`
 }
@@ -380,7 +380,7 @@ func AuthTranscript(c Challenge) ([]byte, error) {
 		return nil, fmt.Errorf("mxwire: invalid nonce")
 	}
 	h := sha256.New()
-	for _, field := range [][]byte{[]byte("mailmoose-mx-v2"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
+	for _, field := range [][]byte{[]byte("mailmoose-mx-v1"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
 		var length [4]byte
 		binary.BigEndian.PutUint32(length[:], uint32(len(field)))
 		h.Write(length[:])

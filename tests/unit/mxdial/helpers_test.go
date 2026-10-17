@@ -51,9 +51,9 @@ type fakeReceiver struct {
 	onAccepted func(fc *fakeConn, domain string, ch uint64)
 
 	// onResolve answers a resolve request. When nil, accepts automatically.
-	onResolve func(fc *fakeConn, q mxwire.V2Resolve)
+	onResolve func(fc *fakeConn, q mxwire.ResolveRequest)
 	// onIngest is invoked once the full chunked body is received.
-	onIngest func(fc *fakeConn, start mxwire.V2IngestStart, chunks [][]byte, end mxwire.V2IngestEnd)
+	onIngest func(fc *fakeConn, start mxwire.IngestStart, chunks [][]byte, end mxwire.IngestEnd)
 
 	// onFrame may consume a frame before the built-in handling.
 	onFrame func(fc *fakeConn, f mxwire.Frame) bool
@@ -173,7 +173,7 @@ func (rc *fakeReceiver) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fc := &fakeConn{rc: rc, w: w, flusher: w.(http.Flusher), chans: map[string]uint64{}, pending: map[uint64]mxwire.Challenge{}}
-	fc.send(mxwire.FrameReady, 0, 0, mxwire.Ready{Mode: readyMode, Version: mxwire.V2Protocol, ReceiverID: rc.receiverID, ConnectionID: rc.connID(), SMTPHostname: rc.hostname, MaxMessageBytes: 1 << 20, MaxDomains: maxDomains, MaxAuthInflight: maxAuthInflight})
+	fc.send(mxwire.FrameReady, 0, 0, mxwire.Ready{Mode: readyMode, Version: mxwire.V1Protocol, ReceiverID: rc.receiverID, ConnectionID: rc.connID(), SMTPHostname: rc.hostname, MaxMessageBytes: 1 << 20, MaxDomains: maxDomains, MaxAuthInflight: maxAuthInflight})
 
 	for {
 		f, err := mxwire.ReadFrame(r.Body)
@@ -224,7 +224,7 @@ func (rc *fakeReceiver) serve(w http.ResponseWriter, r *http.Request) {
 				rc.onAccepted(fc, proof.Domain, f.ChannelID)
 			}
 		case mxwire.FrameResolve:
-			var q mxwire.V2Resolve
+			var q mxwire.ResolveRequest
 			if mxwire.DecodeFrame(f, &q) != nil {
 				return
 			}
@@ -247,12 +247,12 @@ func (rc *fakeReceiver) serve(w http.ResponseWriter, r *http.Request) {
 func (rc *fakeReceiver) connID() string { return "conn" }
 
 func (rc *fakeReceiver) readIngest(r *http.Request, fc *fakeConn, f mxwire.Frame) {
-	var start mxwire.V2IngestStart
+	var start mxwire.IngestStart
 	if mxwire.DecodeFrame(f, &start) != nil {
 		return
 	}
 	var chunks [][]byte
-	var end mxwire.V2IngestEnd
+	var end mxwire.IngestEnd
 	for {
 		nf, e := mxwire.ReadFrame(r.Body)
 		if e != nil {

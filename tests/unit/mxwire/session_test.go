@@ -10,13 +10,17 @@ import (
 	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
-func TestV2FrameFixtureAndStrictBounds(t *testing.T) {
+func TestSessionFrameFixtureAndStrictBounds(t *testing.T) {
+	t.Parallel()
+	if mxwire.V1Protocol != "mx-v1" || mxwire.SessionPath != "/mx/v1/session" {
+		t.Fatalf("unexpected session contract: %s %s", mxwire.V1Protocol, mxwire.SessionPath)
+	}
 	f := mxwire.Frame{Type: mxwire.FrameResolve, TxID: 7, ChannelID: 9, Payload: []byte("{}")}
 	var buf bytes.Buffer
 	if err := mxwire.WriteFrame(&buf, f); err != nil {
 		t.Fatal(err)
 	}
-	want := "020b000000000002000000000000000700000000000000097b7d"
+	want := "010b000000000002000000000000000700000000000000097b7d"
 	if hex.EncodeToString(buf.Bytes()) != want {
 		t.Fatalf("frame = %x", buf.Bytes())
 	}
@@ -30,6 +34,11 @@ func TestV2FrameFixtureAndStrictBounds(t *testing.T) {
 		if _, err := mxwire.ReadFrame(bytes.NewReader(bad)); err == nil {
 			t.Fatalf("accepted invalid header at %d", index)
 		}
+	}
+	oldFrame := bytes.Clone(buf.Bytes())
+	oldFrame[0] = 2
+	if _, err := mxwire.ReadFrame(bytes.NewReader(oldFrame)); err == nil {
+		t.Fatal("accepted pre-release v2 frame")
 	}
 	if err := mxwire.DecodeFrame(mxwire.Frame{Payload: []byte(`{"domain":"example.com","extra":true}`)}, &mxwire.DomainAuth{}); err == nil {
 		t.Fatal("accepted unknown JSON field")
@@ -97,13 +106,14 @@ func TestContactEmailValidator(t *testing.T) {
 	}
 }
 
-func TestV2ProofAndDNSSelection(t *testing.T) {
+func TestSessionProofAndDNSSelection(t *testing.T) {
+	t.Parallel()
 	seed, _ := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
 	private := ed25519.NewKeyFromSeed(seed)
 	public := private.Public().(ed25519.PublicKey)
 	challenge := mxwire.Challenge{Domain: "example.com", KeyID: "key-1", ReceiverID: "rx", ConnectionID: "conn", Nonce: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
 	transcript, err := mxwire.AuthTranscript(challenge)
-	if err != nil || hex.EncodeToString(transcript) != "0083bf1af22cc8ccb013a30b015dc160b23796b1857e8116b349d3e7fbc99ddb" {
+	if err != nil || hex.EncodeToString(transcript) != "da24e29ac97410231a29b0ec438eaad68f7954b364502cffb21490c4c70a551a" {
 		t.Fatalf("transcript fixture: %x %v", transcript, err)
 	}
 	sig, err := mxwire.SignChallenge(private, challenge)
@@ -135,7 +145,7 @@ func TestV2ProofAndDNSSelection(t *testing.T) {
 	}
 }
 
-func TestV2ExactDomainAndURL(t *testing.T) {
+func TestSessionExactDomainAndURL(t *testing.T) {
 	if domain, err := mxwire.CanonicalDomain("EXAMPLE.COM."); err != nil || domain != "example.com" {
 		t.Fatalf("canonicalization %q %v", domain, err)
 	}
@@ -151,21 +161,21 @@ func TestV2ExactDomainAndURL(t *testing.T) {
 	}
 }
 
-// TestV2ReadyAdvertisedLimits pins the coordinated wire upgrade: Ready
+// TestSessionReadyAdvertisedLimits pins the coordinated wire upgrade: Ready
 // advertises optional limits, and Hello stays strictly versioned. A Ready with
 // none of the optional fields must still decode.
-func TestV2ReadyAdvertisedLimits(t *testing.T) {
-	hello, err := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+func TestSessionReadyAdvertisedLimits(t *testing.T) {
+	hello, err := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "gatehouse"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var gotHello mxwire.Hello
-	if err := mxwire.DecodeFrame(hello, &gotHello); err != nil || gotHello.Version != mxwire.V2Protocol {
+	if err := mxwire.DecodeFrame(hello, &gotHello); err != nil || gotHello.Version != mxwire.V1Protocol {
 		t.Fatalf("hello rejected: %#v %v", gotHello, err)
 	}
 
 	ready, err := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{
-		Version: mxwire.V2Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test",
+		Version: mxwire.V1Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test",
 		MaxMessageBytes: 1 << 20, MaxDomains: 8, MaxAuthInflight: 4, RevalidateSeconds: 240,
 	})
 	if err != nil {
@@ -179,7 +189,7 @@ func TestV2ReadyAdvertisedLimits(t *testing.T) {
 		t.Fatalf("ready limits not decoded: %#v", gotReady)
 	}
 	// An older Ready with none of the optional fields must still decode.
-	legacy, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test", MaxMessageBytes: 1 << 20})
+	legacy, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V1Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test", MaxMessageBytes: 1 << 20})
 	var gotLegacy mxwire.Ready
 	if err := mxwire.DecodeFrame(legacy, &gotLegacy); err != nil || gotLegacy.MaxDomains != 0 {
 		t.Fatalf("legacy ready rejected: %#v %v", gotLegacy, err)

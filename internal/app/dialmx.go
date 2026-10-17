@@ -102,7 +102,7 @@ func (b dialMXBackend) Domains(ctx context.Context) ([]mxdial.Domain, error) {
 }
 
 func (b dialMXBackend) Resolve(ctx context.Context, domain string, recipients []string) (mxwire.ResolveResponse, error) {
-	response := mxwire.ResolveResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK}
+	response := mxwire.ResolveResponse{Version: mxwire.V1Protocol, MachineCode: mxwire.CodeOK}
 	if len(recipients) == 0 {
 		return mxwire.ResolveResponse{MachineCode: mxwire.CodeUnknownRecipient}, nil
 	}
@@ -145,7 +145,7 @@ func (b dialMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}
-	response := mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK, MessageID: result.MessageID, PerRecipient: result.PerRecipient}
+	response := mxwire.IngestResponse{Version: mxwire.V1Protocol, MachineCode: mxwire.CodeOK, MessageID: result.MessageID, PerRecipient: result.PerRecipient}
 	for _, r := range result.PerRecipient {
 		if r.MachineCode != mxwire.CodeOK && r.MachineCode != mxwire.CodeDuplicate {
 			response.MachineCode = r.MachineCode

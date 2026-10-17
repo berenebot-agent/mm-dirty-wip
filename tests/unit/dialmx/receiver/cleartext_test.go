@@ -145,7 +145,7 @@ func cleartextSessionBearer(t *testing.T, base, bearer string) int {
 		resp, err := h2cClient().Do(req)
 		done <- result{resp, err}
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "test"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "test"})
 	// The admission gate may refuse and close the connection before the hello
 	// frame is written, so a write error is expected on rejection and must not
 	// fail the test: the response status below is authoritative.

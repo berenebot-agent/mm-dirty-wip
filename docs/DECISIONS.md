@@ -136,6 +136,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D126: A provider-accepted send is never resent automatically](#d126-a-provider-accepted-send-is-never-resent-automatically)
 - [D127: `attention` is an authorization verdict, not any provider error](#d127-attention-is-an-authorization-verdict-not-any-provider-error)
 - [D128: The root encryption key is generated when the operator does not supply one](#d128-the-root-encryption-key-is-generated-when-the-operator-does-not-supply-one)
+- [D132: The first public MX session protocol is v1](#d132-the-first-public-mx-session-protocol-is-v1)
 
 ---
 
@@ -5297,3 +5298,26 @@ directory.
 **Complexity:** `cryptox.LoadOrCreateKeyFile`, one call site in
 `cmd/server/main.go`, and the removal of the config requirement. No schema,
 dependency, transport or protocol change.
+
+## D132 — The first public MX session protocol is v1
+
+**Requirement:** Start the first real FOSS release at MX protocol v1. The old
+HTTP/HMAC `mx-v1` transport was never deployed and was removed by `D070`; its
+internal numbering must not dictate the public session protocol's first version.
+
+**Decision:** Renumber the current Dial MX session contract from `mx-v2` to
+`mx-v1`, served at `POST /mx/v1/session`. The frame version byte is `1` and the
+signed authentication transcript's domain separator is `mailmoose-mx-v1`.
+Both single and shared mode use this contract. This is not a restoration of
+the removed HTTP/HMAC transport. Earlier decisions retain their historical
+version names; this decision supersedes those names for the current protocol.
+
+**Consequences:** Core and receiver must be rebuilt and updated together.
+Pre-release v2 peers are incompatible; there is no alias, negotiation or fallback.
+Message storage, encrypted domain keys, DNS `MM1` proofs, `mxfp-v1` retry receipts,
+the Antler manifest schema and the separate `/v1` agent API do not change. No data
+migration is required, and existing domain keys need not be rotated.
+
+**Complexity:** Rename protocol identifiers, session types and source/test files;
+update wire fixtures, handshake consumers and receiver startup logging. No new
+dependency, runtime service or compatibility layer.

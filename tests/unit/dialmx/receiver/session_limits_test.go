@@ -48,7 +48,7 @@ func TestReadyAdvertisesSessionLimits(t *testing.T) {
 		resp, _ := hc.Do(req)
 		done <- resp
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "gatehouse"})
 	if err := mxwire.WriteFrame(pw, hello); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestIdleSessionSurvivesWriteDeadline(t *testing.T) {
 		resp, _ := client.Do(req)
 		done <- resp
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "gatehouse"})
 	if err := mxwire.WriteFrame(pw, hello); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func newRenewalDialer(t *testing.T, base string, client *tls.Config, priv ed2551
 		resp, _ := httpClient.Do(req)
 		done <- resp
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "renewal"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "renewal"})
 	if err := mxwire.WriteFrame(pw, hello); err != nil {
 		t.Fatal(err)
 	}

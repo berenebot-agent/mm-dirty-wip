@@ -247,7 +247,7 @@ func (b *scriptedBackend) Ingest(ctx context.Context, domains []string, meta mxw
 	after := b.after
 	b.mu.Unlock()
 	if fail {
-		out := mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeTempFail}
+		out := mxwire.IngestResponse{Version: mxwire.V1Protocol, MachineCode: mxwire.CodeTempFail}
 		for _, r := range meta.Recipients {
 			out.PerRecipient = append(out.PerRecipient, mxwire.RecipientIngestResult{Recipient: r, MachineCode: mxwire.CodeTempFail})
 		}

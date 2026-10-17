@@ -27,7 +27,7 @@ import (
 // enrolled. The fetch is best-effort: a cached last-known-good copy, then the
 // embedded copy, keep setup working through any network or hosting failure.
 //
-// The manifest decoder deliberately ignores unknown fields (unlike the mx-v2
+// The manifest decoder deliberately ignores unknown fields (unlike the mx-v1
 // wire contract), so the hosted document can grow fields without breaking older
 // cores; known fields are still validated strictly.
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/dialmx/receiver"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // TestCoreLifecycleRecordsAreInfo asserts the operator-facing connect and
@@ -81,7 +82,7 @@ func TestSessionRejectionIsInfoWithPeer(t *testing.T) {
 	sink := &jsonSink{}
 	r, _ := newLoggedServer(t, sink, receiver.Config{})
 
-	req, err := http.NewRequest(http.MethodPost, "http://receiver.test"+"/mx/v2/session", strings.NewReader("x"))
+	req, err := http.NewRequest(http.MethodPost, "http://receiver.test"+mxwire.SessionPath, strings.NewReader("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
