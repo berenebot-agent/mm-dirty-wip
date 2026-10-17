@@ -1,6 +1,6 @@
 # Agent connectors
 
-Connectors give AI agents and applications access to inboxes. Set them up from an inbox's **Connectors** tab or the **Clients** page. These are separate from [email providers](EMAIL_EMAIL_PROVIDERS.md), which handle receiving and sending mail.
+Connectors give AI agents and applications access to inboxes. Set them up from an inbox's **Connectors** tab or the **Clients** page. These are separate from [email providers](EMAIL_PROVIDERS.md), which handle receiving and sending mail.
 
 ## Choose a connector
 

@@ -38,7 +38,7 @@ Select the receiver in the application's settings as well. Publishing port 25 al
 
 For a separate webhook hostname, set `DEDICATED_RECEIVER_URL` to that HTTPS origin, and configure your reverse proxy to reach the receiving listener. Its port is set by `DEDICATED_RECEIVER_PORT` (default `8082`); disable the separate listener with `DEDICATED_RECEIVER_ENABLE=false` when not needed.
 
-See [Email providers](EMAIL_EMAIL_PROVIDERS.md) for provider setup or [Remote SMTP receiving](REMOTE_MX.md) for dedicated receivers.
+See [Email providers](EMAIL_PROVIDERS.md) for provider setup or [Remote SMTP receiving](REMOTE_MX.md) for dedicated receivers.
 
 ## Data and backups
 
