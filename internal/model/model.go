@@ -581,10 +581,10 @@ const (
 // outbound path, so a request is only presented as "awaiting approval" once the
 // approver has really been notified.
 const (
-	NotificationNone   = "none"
-	NotificationQueued = "queued"
-	NotificationSent   = "sent"
-	NotificationFailed = "failed"
+	NotificationNone      = "none"
+	NotificationQueued    = "queued"
+	NotificationSent      = "sent"
+	NotificationFailed    = "failed"
 	NotificationUncertain = "uncertain"
 )
 
