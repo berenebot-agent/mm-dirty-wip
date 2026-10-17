@@ -259,12 +259,22 @@ func (s *Server) uiAdminSetQuota(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "enter a storage quota of 0 (unlimited) or greater", 400)
 		return
 	}
+	// Reject oversize BEFORE converting: float64(math.MaxInt64) rounds to
+	// exactly 2^63, so equality is already out of int64 range. The product and
+	// rounded product are both checked because floating-point multiplication or
+	// rounding can itself reach 2^63; converting that value is implementation-
+	// dependent and on amd64 wraps negative, which the store reads as unlimited.
 	bytes := value * float64(m)
-	if bytes > math.MaxInt64 {
+	if bytes >= float64(math.MaxInt64) {
 		http.Error(w, "storage quota is too large", 400)
 		return
 	}
-	quota := int64(math.Round(bytes))
+	rounded := math.Round(bytes)
+	if rounded >= float64(math.MaxInt64) {
+		http.Error(w, "storage quota is too large", 400)
+		return
+	}
+	quota := int64(rounded)
 	if err := s.Service.Store.SetAccountStorageQuota(r.Context(), accountID, quota); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "account not found", 404)

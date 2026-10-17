@@ -242,6 +242,12 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 // is derived deterministically from the client and event id, so a retry's
 // scheduled time is stable across processes and a test can assert bounds.
 func webhookBackoff(previous int, clientID string, eventID int64) time.Duration {
+	// A negative attempt count (a caller that reuses an out parameter, or a
+	// corrupted row) would make the shift count negative and panic. Clamp it:
+	// the intent of "unknown attempts" is the first retry.
+	if previous < 0 {
+		previous = 0
+	}
 	base := time.Second * time.Duration(1<<min(previous, 10))
 	if base > time.Hour {
 		base = time.Hour

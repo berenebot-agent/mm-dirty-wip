@@ -145,10 +145,10 @@ func TestHealthAliasAndDocsRedirect(t *testing.T) {
 func TestExamplesDefaultToRequestOrigin(t *testing.T) {
 	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
-	get := func(path string) string {
+	get := func(path, host string) string {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Host = "mail.example.org"
+		req.Host = host
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
@@ -156,11 +156,17 @@ func TestExamplesDefaultToRequestOrigin(t *testing.T) {
 		}
 		return rr.Body.String()
 	}
-	if body := get("/examples/bash"); !strings.Contains(body, `DEFAULT_BASE_URL="http://mail.example.org"`) {
+	if body := get("/examples/bash", "mail.example.org"); !strings.Contains(body, `DEFAULT_BASE_URL="http://mail.example.org"`) {
 		t.Fatalf("bash client did not adopt request origin")
 	}
-	if body := get("/examples/python"); !strings.Contains(body, `DEFAULT_BASE_URL = "http://mail.example.org"`) {
+	if body := get("/examples/python", "mail.example.org"); !strings.Contains(body, `DEFAULT_BASE_URL = "http://mail.example.org"`) {
 		t.Fatalf("python client did not adopt request origin")
+	}
+	if body := get("/examples/bash", "mail.example.org:8081"); !strings.Contains(body, `DEFAULT_BASE_URL="http://mail.example.org:8081"`) {
+		t.Fatalf("bash client did not preserve a valid port")
+	}
+	if body := get("/examples/bash", "mail.example.org;$(touch${IFS}/tmp/mailmoose-shell-injection)"); !strings.Contains(body, `DEFAULT_BASE_URL="http://localhost:8081"`) {
+		t.Fatalf("bash client interpolated an unsafe Host header")
 	}
 }
 

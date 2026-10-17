@@ -38,10 +38,11 @@ func (a *Adapter) CreateFolder(ctx context.Context, path string) error {
 	if path == "" {
 		return fmt.Errorf("imap: a folder path is required")
 	}
-	if a.conn == nil {
+	conn := a.connRef()
+	if conn == nil {
 		return wrapErr(ErrNotConnected)
 	}
-	if err := a.conn.Create(path, nil).Wait(); err != nil {
+	if err := conn.Create(path, nil).Wait(); err != nil {
 		return wrapErr(err)
 	}
 	return nil
@@ -55,10 +56,11 @@ func (a *Adapter) RenameFolder(ctx context.Context, oldPath, newPath string) err
 	if oldPath == "" || newPath == "" {
 		return fmt.Errorf("imap: old and new folder paths are required")
 	}
-	if a.conn == nil {
+	conn := a.connRef()
+	if conn == nil {
 		return wrapErr(ErrNotConnected)
 	}
-	if err := a.conn.Rename(oldPath, newPath, nil).Wait(); err != nil {
+	if err := conn.Rename(oldPath, newPath, nil).Wait(); err != nil {
 		return wrapErr(err)
 	}
 	return nil
@@ -74,10 +76,11 @@ func (a *Adapter) DeleteFolder(ctx context.Context, path string) error {
 	if path == "" {
 		return fmt.Errorf("imap: a folder path is required")
 	}
-	if a.conn == nil {
+	conn := a.connRef()
+	if conn == nil {
 		return wrapErr(ErrNotConnected)
 	}
-	if err := a.conn.Delete(path).Wait(); err != nil {
+	if err := conn.Delete(path).Wait(); err != nil {
 		wrapped := wrapErr(err)
 		if isNonEmptyFolder(err) {
 			return fmt.Errorf("%w: %v", ErrFolderNotEmpty, wrapped)
@@ -146,6 +149,8 @@ func (a *Adapter) storeFlags(ctx context.Context, uid uint32, op imap.StoreFlags
 	for _, f := range flags {
 		store.Flags = append(store.Flags, toIMAPFlag(f))
 	}
+	// withSelectRW/withExamine run their closure with the adapter mutex held,
+	// which already synchronizes this field read against Close.
 	cmd := a.conn.Store(imap.UIDSetNum(imap.UID(uid)), store, nil)
 	var out []string
 	for {
@@ -300,7 +305,8 @@ func (a *Adapter) AppendReader(ctx context.Context, folder string, r io.Reader, 
 	if folder == "" {
 		return AppendResult{}, fmt.Errorf("imap: a folder is required")
 	}
-	if a.conn == nil {
+	conn := a.connRef()
+	if conn == nil {
 		return AppendResult{}, wrapErr(ErrNotConnected)
 	}
 	options := &imap.AppendOptions{}
@@ -311,7 +317,7 @@ func (a *Adapter) AppendReader(ctx context.Context, folder string, r io.Reader, 
 		options.Time = date
 	}
 
-	cmd := a.conn.Append(folder, size, options)
+	cmd := conn.Append(folder, size, options)
 	if _, err := copyWithContext(ctx, cmd, r); err != nil {
 		_ = cmd.Close()
 		return AppendResult{}, Ambiguous("append failed while writing the message", err)

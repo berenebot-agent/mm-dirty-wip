@@ -5013,3 +5013,29 @@ and the wizard/JS in `internal/httpapp/assets/app.js`; the absolute-name fix is 
 small helper plus its call sites. Tests are updated in place, with new
 absolute-name assertions in `internal/app/dns_check_test.go`. See `docs/REMOTE_MX.md`
 and `docs/API.md`.
+
+## D125 — Transient hub notifications are wake hints; SQLite remains event truth
+
+**Decision:** A full in-memory Hub subscriber buffer drops the new notification;
+it does not block the publisher and does not trigger a separate immediate
+re-poll. Hub notifications are wake hints only. Consumers recover from a dropped
+hint through their existing durable-read cadence: SSE polls periodically, Hermes
+Relay has its ping/replay loop, and long-poll returns on its bounded timeout so
+the caller can query again. The persisted event log and consumer cursors remain
+the source of truth; loss of a transient notification may delay delivery but
+must not lose the durable event.
+
+**Known timestamp caveat:** SQLite time values currently use UTC
+`time.RFC3339Nano` text, whose optional fractional part is trimmed. Text ordering
+can therefore misorder two timestamps within the same second when their
+fractional widths differ. The observed effect is bounded to sub-second ordering
+skew, so this review does not change the on-disk representation. If precise
+sub-second ordering becomes a requirement, replace it consistently with a
+fixed-width UTC fraction or an integer epoch representation before relying on
+lexicographic TEXT comparisons for scheduling or lease expiry.
+
+**Reason:** Durable state must not depend on bounded, process-local notification
+buffers. Adding immediate re-polling would change load and wakeup semantics across
+consumers without improving correctness; their established polling/replay loops
+already heal a dropped hint. Timestamp-format migration is likewise deferred
+until the small ordering skew is shown to affect a product behavior.

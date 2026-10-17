@@ -351,6 +351,14 @@ func TestSystemAdminEditsAccountStorageQuota(t *testing.T) {
 	if acc, _ = svc.Store.GetAccount(ctx, root.AccountID); acc.StorageQuotaBytes != 0 {
 		t.Fatalf("quota after clear = %d, want 0", acc.StorageQuotaBytes)
 	}
+	// float64 rounds MaxInt64 to 2^63; accepting this value and converting it
+	// to int64 would wrap negative and make the quota unlimited.
+	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"9223372036854775808"}, "quota_unit": {"b"}}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("overflow quota status = %d, want 400", rr.Code)
+	}
+	if acc, _ = svc.Store.GetAccount(ctx, root.AccountID); acc.StorageQuotaBytes != 0 {
+		t.Fatalf("overflow changed quota to %d, want 0", acc.StorageQuotaBytes)
+	}
 
 	// Invalid value, unknown unit and unknown account are rejected.
 	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"-5"}, "quota_unit": {"mb"}}); rr.Code != http.StatusBadRequest {
