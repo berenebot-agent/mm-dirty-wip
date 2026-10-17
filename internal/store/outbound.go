@@ -19,6 +19,9 @@ import (
 // ambiguous.
 var ErrClaimTaken = errors.New("outbox claim taken over by another attempt")
 
+// ErrUncertainDelivery means operator confirmation is required before retrying.
+var ErrUncertainDelivery = errors.New("delivery uncertain: acknowledge possible duplicate delivery before retry")
+
 // quarantinedReasonPrefix marks a terminal failure that a quarantined send was
 // resolved with: the provider may already have accepted the message, so a later
 // manual retry is only offered with an explicit duplicate warning. It is a plain
@@ -26,6 +29,11 @@ var ErrClaimTaken = errors.New("outbox claim taken over by another attempt")
 // attempted" fact is the send_attempt_state marker; the prefix survives the
 // marker's own clearing so an operator retry can still be warned.
 const quarantinedReasonPrefix = "uncertain delivery: "
+
+// IsUncertainDelivery identifies the durable warning exposed by Outbox reads.
+func IsUncertainDelivery(lastError string) bool {
+	return strings.HasPrefix(lastError, quarantinedReasonPrefix)
+}
 
 // claimTaken reports whether the stored claim owner invalidates the caller's
 // claim. An exact match, or an empty owner (the claim was released without a
@@ -354,6 +362,11 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	if status != "pending" && status != "failed" {
 		return model.Message{}, nil, ErrConflict
 	}
+	// A late failure cannot overwrite an already-failed or uncertain outcome.
+	if status == "failed" {
+		m, gerr := s.getMessageTx(ctx, tx, accountID, id)
+		return m, nil, gerr
+	}
 	// A stale attempt's failure must not clear another attempt's live claim:
 	// that attempt owns the outcome now, so this write is skipped entirely.
 	if claimTaken(owner, claim) {
@@ -658,6 +671,72 @@ func (s *Store) ResolveQuarantinedSend(ctx context.Context, p model.Principal, i
 	return nil
 }
 
+// MarkMessageUncertain records an unresolved provider handoff as a failed
+// Outbox item without generating a misleading delivery-failure notice.
+// The pre-send marker remains durable until an explicitly confirmed retry.
+func (s *Store) MarkMessageUncertain(ctx context.Context, accountID, id, reason, claim string) error {
+	if strings.TrimSpace(reason) == "" {
+		reason = "the provider outcome could not be verified"
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET status='failed',last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+		WHERE id=? AND account_id=? AND direction='outbound' AND status='pending'
+		AND send_attempt_state=? AND (claim_owner=? OR claim_owner='')`, quarantinedReasonPrefix+reason, id, accountID, claim, claim)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// ReconcileUncertainSends surfaces abandoned pre-send markers in the Outbox
+// and approval requests. During normal operation it only affects expired
+// leases; on restart there are no live provider calls in this process.
+func (s *Store) ReconcileUncertainSends(ctx context.Context, now time.Time, afterRestart bool) (int64, int64, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	guard := " AND (claim_expires_at='' OR claim_expires_at<=?)"
+	args := []any{quarantinedReasonPrefix + "previous send outcome could not be verified"}
+	if afterRestart {
+		guard = ""
+	} else {
+		args = append(args, timeText(now))
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE messages SET status='failed',last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+		WHERE direction='outbound' AND status='pending' AND send_attempt_state<>''`+guard, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	messageCount, _ := res.RowsAffected()
+	workflowArgs := []any{quarantinedReasonPrefix + "approval notification outcome could not be verified", timeText(now)}
+	if !afterRestart {
+		workflowArgs = append(workflowArgs, timeText(now))
+	}
+	res, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+		WHERE status='pending' AND send_attempt_state<>''`+guard, workflowArgs...)
+	if err != nil {
+		return 0, 0, err
+	}
+	workflowCount, _ := res.RowsAffected()
+	if workflowCount > 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE draft_send_requests SET notification_status=?,updated_at=?
+			WHERE status='pending' AND approval_workflow_id IN (
+				SELECT id FROM outbound_workflow WHERE status='failed' AND send_attempt_state<>'' AND last_error LIKE 'uncertain delivery: %')`,
+			model.NotificationUncertain, timeText(now))
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return messageCount, workflowCount, nil
+}
+
 // RequeuePendingForDomain resets every pending outbound message for a domain so
 // it retries immediately after the domain's sending configuration is saved.
 // This covers both messages whose inbox is on the domain and send-as-alias
@@ -689,7 +768,7 @@ func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID
 // operator-facing form that surfaces the duplicate risk of retrying a message
 // whose send was never resolved.
 func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string) error {
-	_, err := s.RequeueFailedWithWarning(ctx, p, id)
+	_, err := s.RequeueFailedConfirmed(ctx, p, id, false)
 	return err
 }
 
@@ -700,6 +779,12 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 // warning is non-empty in that case and the caller must surface it to the
 // operator; it is empty for an ordinary retry.
 func (s *Store) RequeueFailedWithWarning(ctx context.Context, p model.Principal, id string) (string, error) {
+	return s.RequeueFailedConfirmed(ctx, p, id, true)
+}
+
+// RequeueFailedConfirmed refuses an uncertain send unless its possible
+// duplicate delivery was explicitly acknowledged by the caller.
+func (s *Store) RequeueFailedConfirmed(ctx context.Context, p model.Principal, id string, confirmDuplicateRisk bool) (string, error) {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
 		return "", err
@@ -718,10 +803,17 @@ func (s *Store) RequeueFailedWithWarning(ctx context.Context, p model.Principal,
 	// unknown, so the retry must warn about a possible duplicate. The marker
 	// itself is cleared by that resolution, so the terminal failure reason is
 	// what distinguishes it from an ordinary provider failure.
-	quarantined := marker != "" || strings.HasPrefix(m.LastError, quarantinedReasonPrefix)
-	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='',deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID)
+	quarantined := marker != "" || IsUncertainDelivery(m.LastError)
+	if quarantined && !confirmDuplicateRisk {
+		return "", ErrUncertainDelivery
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='',deleted_at=NULL
+		WHERE id=? AND account_id=? AND direction='outbound' AND status='failed' AND last_error=? AND send_attempt_state=?`, id, p.AccountID, m.LastError, marker)
 	if err != nil {
 		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrConflict
 	}
 	if quarantined {
 		return "a previous attempt may already have been accepted by the provider; retrying this message can deliver a duplicate", nil

@@ -140,6 +140,7 @@ func (w *OutboxWorker) run() {
 	if err := w.svc.Store.RecoverAbandonedWorkflowClaims(context.Background()); err != nil {
 		w.log.Error("workflow claim recovery", "error", err)
 	}
+	w.reconcileUncertainSends(true)
 	if n, err := w.svc.Store.RecoverStaleIdempotency(context.Background(), time.Now().UTC()); err != nil {
 		w.log.Error("stale idempotency recovery", "error", err)
 	} else if n > 0 {
@@ -222,6 +223,7 @@ func (w *OutboxWorker) maintain() {
 		name string
 		fn   func()
 	}{
+		{"reconcileUncertainSends", func() { w.reconcileUncertainSends(false) }},
 		{"expireApprovals", w.expireApprovals},
 		{"sweepWorkflows", w.sweepWorkflows},
 		{"sweepMXReceipts", w.sweepMXReceipts},
@@ -232,6 +234,19 @@ func (w *OutboxWorker) maintain() {
 		{"sweepOrphanedMIME", w.sweepOrphanedMIME},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// reconcileUncertainSends parks abandoned provider handoffs without making
+// them eligible for automatic resend.
+func (w *OutboxWorker) reconcileUncertainSends(afterRestart bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	messages, workflows, err := w.svc.Store.ReconcileUncertainSends(ctx, time.Now().UTC(), afterRestart)
+	if err != nil {
+		w.log.Error("uncertain delivery reconciliation", "error", err)
+	} else if messages > 0 || workflows > 0 {
+		w.log.Warn("unresolved handoffs need review", "messages", messages, "approval_notifications", workflows)
 	}
 }
 

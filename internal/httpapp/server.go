@@ -1099,6 +1099,8 @@ func mapStoreError(w http.ResponseWriter, err error) {
 		// A duplicate domain name is a deliberate, actionable conflict: name it
 		// rather than answering a bare "conflict".
 		writeError(w, 409, err.Error())
+	case errors.Is(err, store.ErrUncertainDelivery):
+		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrConflict):
 		writeError(w, 409, "conflict")
 	case errors.Is(err, store.ErrQuota):
