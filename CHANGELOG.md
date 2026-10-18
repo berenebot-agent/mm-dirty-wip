@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A domain whose receiving setup was started and then cancelled no longer shows
+  an amber "Add" beside its live receiver light. The Antler MX wizard stores the
+  receiving provider on its first step (it has to, so the records and receivers
+  can be checked while it runs), so cancelling part-way leaves the domain
+  configured; the dashboard row now names that provider — "Antler MX", or
+  "Dial MX" for a custom receiver set — as soon as the light snapshot lands,
+  instead of keeping the pre-open "Add" until a manual reload.
+
 - A receiving connector that the core can reach but that will not take the
   session no longer reads as "Reconnecting" forever. A receiver that answers and
   declines is now a settled failure — "Receiver refused the session", "Receiver

@@ -115,7 +115,9 @@ func TestDashboardConnectorLightAbsentWithoutReceivers(t *testing.T) {
 		t.Fatalf("dashboard rendered %d receiving light(s) for a domain set with no receiver targets", n)
 	}
 	// The live lights snapshot must agree: the empty-receiver domain reports no
-	// receiving light, so the client tick cannot reintroduce the dot.
+	// receiving light, so the client tick cannot reintroduce the dot. The domain
+	// is still named — a configured domain carries its provider label even with
+	// no light — so only the light itself is asserted empty.
 	stateReq := httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
 	stateReq.AddCookie(cookie)
 	stateRR := httptest.NewRecorder()
@@ -128,8 +130,62 @@ func TestDashboardConnectorLightAbsentWithoutReceivers(t *testing.T) {
 		t.Fatalf("decode /ui/state: %v", err)
 	}
 	if domains, ok := state["domains"].(map[string]any); ok {
-		if _, present := domains[emptyDomain.ID]; present {
-			t.Fatalf("live state reported a light for a domain with no receivers: %v", domains[emptyDomain.ID])
+		if entry, present := domains[emptyDomain.ID]; present {
+			if m, _ := entry.(map[string]any); m["light"] != nil && m["light"] != "" {
+				t.Fatalf("live state reported a light for a domain with no receivers: %v", entry)
+			}
 		}
+	}
+}
+
+// TestDashboardReceivingLabelNamesStoredProvider proves the live dashboard
+// snapshot names a domain's receiving provider as soon as one is stored, with no
+// receiver ready. The Antler MX setup wizard stores the provider on its first
+// step, so an operator who starts a setup and cancels it part-way leaves a
+// configured domain: without the label the row keeps drawing its pre-open amber
+// "Add" beside the live light until a manual reload, even though the domain
+// already has a receiver.
+func TestDashboardReceivingLabelNamesStoredProvider(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	domain, err := svc.Store.CreateDomain(ctx, u.AccountID, "partial.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	label := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /ui/state = %d", rr.Code)
+		}
+		var snap struct {
+			Domains map[string]struct {
+				Label string `json:"label"`
+			} `json:"domains"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+			t.Fatalf("decode /ui/state: %v body=%s", err, rr.Body.String())
+		}
+		return snap.Domains[domain.ID].Label
+	}
+	if got := label(); got != "" {
+		t.Fatalf("unconfigured domain label = %q, want empty", got)
+	}
+	// The wizard's first step writes the provider and contact email but names no
+	// receiver yet: the state a cancelled setup leaves behind.
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	if got := label(); got != "Antler MX" {
+		t.Fatalf("partly configured domain label = %q, want Antler MX", got)
 	}
 }

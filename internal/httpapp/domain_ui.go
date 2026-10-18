@@ -261,6 +261,30 @@ func sortDomainEditors(editors []*domainEditorView, priorities map[string]int) {
 	})
 }
 
+// receivingProviderLabel is the short label the dashboard's Receiving cell shows
+// for a provider. Dial MX needs dialMXCustom because one provider carries two
+// labels: the hosted relay keeps its registered "Antler MX" description, while a
+// custom receiver set is the operator's own receiver and reads "Dial MX". Every
+// other provider uses its registered description, and "" means nothing is
+// configured. The page render and the live dashboard snapshot share this one
+// definition so the two cannot disagree about what a cell says.
+func receivingProviderLabel(provider string, dialMXCustom bool) string {
+	normalized := normalizeDomainProvider(provider)
+	if normalized == "" {
+		return ""
+	}
+	if normalized == "dialmx" && dialMXCustom {
+		return "Dial MX"
+	}
+	if normalized == "mx" {
+		return "Direct MX"
+	}
+	if t, ok := transport.LookupInbound(normalized); ok {
+		return t.Description()
+	}
+	return provider
+}
+
 // domainWorkerFlash carries freshly generated Cloudflare Worker code (which
 // contains the one-time shared secret) from the POST that generated it to the
 // domain page. It is bound to the account, user, domain, config id and revision

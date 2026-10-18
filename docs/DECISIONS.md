@@ -3158,10 +3158,11 @@ existing durable events and hub rather than adding a new mechanism.
   snapshot covers it).
 - **Snapshot endpoint.** `GET /ui/state?page=dashboard|inbox[&inbox=]` returns
   only what can change live — per-inbox unread/pending counts, the per-domain
-  inbound traffic light, and the inbox folder/label badges — computed from the
-  existing aggregate queries and the **in-memory** receiver statuses. It enforces
-  the same Read role as the pages (and 404s an unknown inbox even for an account
-  Admin, whose `CanRead` is true for any id). It is `Cache-Control: no-store`.
+  inbound traffic light with the receiving cell's provider label, and the inbox
+  folder/label badges — computed from the existing aggregate queries and the
+  **in-memory** receiver statuses. It enforces the same Read role as the pages
+  (and 404s an unknown inbox even for an account Admin, whose `CanRead` is true
+  for any id). It is `Cache-Control: no-store`.
   The published-MX lookup behind a dashboard light is the only costly step, so
   the computed light is cached briefly (10s), keyed on the domain id, key id and
   receiver hostnames, so a burst of snapshot calls does not each run a fresh

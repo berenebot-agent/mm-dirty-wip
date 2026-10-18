@@ -2390,20 +2390,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		for _, e := range recvEditors {
 			if e.Provider == recvProvider {
 				e.Selected = true
-				switch e.Provider {
-				case "mx":
-					receivingLabel[d.ID] = "Direct MX"
-				case "dialmx":
-					// A custom Dial MX setup keeps the plain Dial MX label; the
-					// Antler MX short label is reserved for the hosted service.
-					if setup := dialMXSetup[d.ID]; setup != nil && setup.Service == "custom" {
-						receivingLabel[d.ID] = "Dial MX"
-					} else {
-						receivingLabel[d.ID] = e.ProviderLabel
-					}
-				default:
-					receivingLabel[d.ID] = e.ProviderLabel
-				}
+				setup := dialMXSetup[d.ID]
+				receivingLabel[d.ID] = receivingProviderLabel(e.Provider, setup != nil && setup.Service == "custom")
 				receivingRegenerate[d.ID] = e.Generated
 			}
 		}
