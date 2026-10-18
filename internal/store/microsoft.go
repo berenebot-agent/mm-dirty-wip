@@ -114,7 +114,8 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 		return RemoteMessage{}, e
 	}
 	defer tx.Rollback()
-	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	id := microsoftMessageID(provider, inbox)
+	oldBytes, _, e := remoteMessageBytesTx(ctx, tx, account, inbox, id)
 	if e != nil {
 		return RemoteMessage{}, e
 	}
@@ -124,7 +125,6 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	if e != nil {
 		return RemoteMessage{}, e
 	}
-	id := microsoftMessageID(provider, inbox)
 	exists, e := microsoftMessageRowExistsTx(ctx, tx, account, inbox, id)
 	if e != nil {
 		return RemoteMessage{}, e
@@ -135,7 +135,11 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	if e = upsertMicrosoftMessageTx(ctx, tx, account, inbox, &MicrosoftDeltaCache{ProviderID: provider, Thread: thread, FolderID: folder, Input: in}); e != nil {
 		return RemoteMessage{}, e
 	}
-	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+	newBytes, _, e := remoteMessageBytesTx(ctx, tx, account, inbox, id)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
+	if e = applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, newBytes-oldBytes); e != nil {
 		return RemoteMessage{}, e
 	}
 	if e = tx.Commit(); e != nil {

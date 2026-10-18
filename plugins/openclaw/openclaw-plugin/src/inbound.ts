@@ -137,6 +137,7 @@ export async function dispatchMailMooseInbound(params: DispatchMailMooseInboundP
           accountId: account.accountId,
           to: target,
           text,
+          replyTo: messageId,
         });
       },
       durable: () => false,

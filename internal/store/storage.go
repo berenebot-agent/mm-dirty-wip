@@ -87,10 +87,15 @@ func inboxUsedTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string) (in
 // integer ids, timestamps and small flag columns that are not summed explicitly.
 const (
 	// remoteMessageRowOverhead is the fixed per-message-row allowance baked into
-	// remoteMetadataMessageBytesSQL (integer ids, timestamps, small flag columns).
+	// remoteMessageBytesSQL (integer ids, timestamps, small flag columns).
 	remoteMessageRowOverhead = 96
+	remoteLabelRowOverhead   = 32
 
-	remoteMetadataMessageBytesSQL = `(
+	// remoteMessageBytesSQL is the authoritative byte footprint of one cached
+	// message row. Individual mutations read the old and new expression for the
+	// affected row and apply the difference, so a small update never scans the
+	// whole mailbox.
+	remoteMessageBytesSQL = `(
 		LENGTH(CAST(folder_path AS BLOB)) + LENGTH(CAST(rfc_message_id AS BLOB)) +
 		LENGTH(CAST(in_reply_to AS BLOB)) + LENGTH(CAST(references_json AS BLOB)) +
 		LENGTH(CAST(thread_key AS BLOB)) + LENGTH(CAST(from_name AS BLOB)) +
@@ -98,12 +103,18 @@ const (
 		LENGTH(CAST(cc_json AS BLOB)) + LENGTH(CAST(subject AS BLOB)) +
 		LENGTH(CAST(snippet AS BLOB)) + LENGTH(CAST(flags_json AS BLOB)) + 96)`
 
-	remoteMetadataFolderBytesSQL = `(
+	remoteFolderBytesSQL = `(
 		LENGTH(CAST(path AS BLOB)) + LENGTH(CAST(name AS BLOB)) +
 		LENGTH(CAST(parent_path AS BLOB)) + LENGTH(CAST(role AS BLOB)) +
 		LENGTH(CAST(remote_metadata_json AS BLOB)) + 64)`
 
-	remoteMetadataLabelBytesSQL = `(LENGTH(CAST(label AS BLOB)) + 32)`
+	remoteLabelBytesSQL = `(LENGTH(CAST(label AS BLOB)) + 32)` // remoteLabelRowOverhead
+
+	// The metadata sum uses the same row expressions, so incremental deltas and
+	// the authoritative check share one definition.
+	remoteMetadataMessageBytesSQL = remoteMessageBytesSQL
+	remoteMetadataFolderBytesSQL  = remoteFolderBytesSQL
+	remoteMetadataLabelBytesSQL   = remoteLabelBytesSQL
 )
 
 // storedRemoteMessageBytes is the Go mirror of remoteMetadataMessageBytesSQL: the
@@ -140,6 +151,93 @@ func remoteMetadataBytesTx(ctx context.Context, tx *sql.Tx, accountID, inboxID s
 		return 0, err
 	}
 	return messageBytes + folderBytes + labelBytes, nil
+}
+
+// RemoteMetadataBytes returns the authoritative stored-byte total of an inbox's
+// remote metadata (messages, remote-owned folders and labels). Normal mutations
+// apply per-row deltas; this is the check/repair reference for drift and for
+// tests that compare the incremental counters with the stored truth.
+func (s *Store) RemoteMetadataBytes(ctx context.Context, accountID, inboxID string) (int64, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	return remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+}
+
+// remoteMessageBytesTx returns one cached message row's stored bytes and whether
+// it exists.
+func remoteMessageBytesTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, id string) (int64, bool, error) {
+	var b int64
+	err := tx.QueryRowContext(ctx, `SELECT `+remoteMessageBytesSQL+` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, id).Scan(&b)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return b, true, nil
+}
+
+// remoteMessageBytesByUIDTx is remoteMessageBytesTx keyed by the message's
+// remote locator, the identity an upsert conflicts on.
+func remoteMessageBytesByUIDTx(ctx context.Context, tx *sql.Tx, inboxID, folderPath string, uidValidity, uid uint32) (int64, bool, error) {
+	var b int64
+	err := tx.QueryRowContext(ctx, `SELECT `+remoteMessageBytesSQL+` FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? AND remote_uid_validity=? AND remote_uid=?`, inboxID, folderPath, uidValidity, uid).Scan(&b)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return b, true, nil
+}
+
+// remoteFolderBytesByIDTx returns one folder row's stored bytes, matched by id.
+func remoteFolderBytesByIDTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, folderID string) (int64, error) {
+	var b int64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, folderID).Scan(&b)
+	return b, err
+}
+
+// remoteLabelBytesTx returns the stored bytes of one message's local labels.
+func remoteLabelBytesTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, messageID string) (int64, error) {
+	var b int64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id=?`, accountID, inboxID, messageID).Scan(&b)
+	return b, err
+}
+
+// remoteLabelsForMessageBytes is the Go mirror of remoteLabelBytesSQL for a
+// replacement label set that has not been written yet.
+func remoteLabelsForMessageBytes(labels []string) int64 {
+	var total int64
+	for _, label := range labels {
+		total += int64(len(label)) + remoteLabelRowOverhead
+	}
+	return total
+}
+
+// rewriteThreadKeyTx moves every row in one inbox from one thread key to
+// another and returns the byte delta the rename applied to the metadata
+// counters. Thread-key length is part of the authoritative footprint, so a
+// merge must adjust the counters even though only the key changed.
+func rewriteThreadKeyTx(ctx context.Context, q threadQueryer, inboxID, from, to string) (int64, error) {
+	if from == to {
+		return 0, nil
+	}
+	var n int
+	var oldBytes int64
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(thread_key AS BLOB))),0) FROM inbox_remote_messages WHERE inbox_id=? AND thread_key=?`, inboxID, from).Scan(&n, &oldBytes); err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if _, err := q.ExecContext(ctx, `UPDATE inbox_remote_messages SET thread_key=? WHERE inbox_id=? AND thread_key=?`, to, inboxID, from); err != nil {
+		return 0, err
+	}
+	return int64(n)*int64(len(to)) - oldBytes, nil
 }
 
 // remoteMetadataHeadroomTx reports how many remote-metadata bytes an inbox can

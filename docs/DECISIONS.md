@@ -5591,3 +5591,36 @@ are protocol, DNS and in-image names, not published image names.
 **Complexity:** Renames published artifacts, deletes one duplicate Dockerfile
 and collapses two registry packages into one. No Go behaviour change, no new
 dependency, no new service, no new runtime option.
+
+## D138 — Relay replies carry their trigger; slow handlers heartbeat; remote metadata accounting is incremental
+
+**Decision:** Three related reliability changes.
+
+- A relay `outbound` action may carry `reply_to_message_id`, the exact local
+  message or remote arrival id that triggered the agent. The server resolves a
+  remote id through the same `RemoteMessages.ResolveRemoteReply` path a REST
+  reply uses, preserving RFC `In-Reply-To`/`References`, inbox permissions and
+  assistant approval. A local thread id still resolves exactly as before; an
+  omitted field keeps the old local-thread lookup for older gateways.
+- An inbound handler may send `inbound_processing` heartbeats every 20 seconds.
+  A matching heartbeat extends that event's 60-second acknowledgement window,
+  but never past a fixed 30-minute processing lease. Heartbeats never advance
+  the durable cursor; the OpenClaw plugin deduplicates by `bufferId` in memory
+  and remembers completed ids briefly so a completion during a reconnect is
+  acknowledged without a second agent turn.
+- Remote metadata counters move by the exact per-row byte delta on individual
+  inserts, updates, deletes, moves, label changes and thread merges. Batch index
+  and folder passes accumulate their deltas once per transaction.
+  `Store.RemoteMetadataBytes` remains the authoritative check, and the existing
+  full-scan reconcile stays for bulk operations and repair.
+
+**Why:** A remote event used the RFC Message-ID as a local thread id, so relay
+replies to connected mailboxes failed. A handler slower than one minute was
+disconnected and replayed unnecessarily. Every small remote update summed the
+whole mailbox's metadata twice, so a burst of arrivals became quadratic while
+holding the single SQLite writer.
+
+**Unchanged:** at-least-once delivery and durable-cursor semantics; local mail
+reply behaviour; the local-thread protocol fields; storage quotas, cap
+admission and thread-merge rules. Exactly-once execution after a client crash
+is not promised.

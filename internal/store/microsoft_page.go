@@ -121,10 +121,7 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 	if rowExists && generation != page.Generation {
 		return result, ErrStaleCursor
 	}
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, page.AccountID, page.InboxID)
-	if err != nil {
-		return result, err
-	}
+	metaDelta := int64(0)
 	accountRoom, accountLimited, inboxRoom, inboxLimited, err := remoteMetadataHeadroomTx(ctx, tx, page.AccountID, page.InboxID)
 	if err != nil {
 		return result, err
@@ -167,14 +164,28 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			if !exists {
 				usedThisBatch += add
 			}
+			oldBytes, _, err := remoteMessageBytesTx(ctx, tx, page.AccountID, page.InboxID, id)
+			if err != nil {
+				return MicrosoftDeltaPageResult{}, err
+			}
+			oldLabels, err := remoteLabelBytesTx(ctx, tx, page.AccountID, page.InboxID, id)
+			if err != nil {
+				return MicrosoftDeltaPageResult{}, err
+			}
 			if err := upsertMicrosoftMessageTx(ctx, tx, page.AccountID, page.InboxID, e.Cache); err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
 			// Labels are the entry's full current set, exactly as the provider
 			// reports them, so a removed category is removed locally too.
-			if err := setRemoteMessageLabelsTx(ctx, tx, page.AccountID, page.InboxID, id, normalizeRemoteLabels(e.Cache.Labels)); err != nil {
+			cleanLabels := normalizeRemoteLabels(e.Cache.Labels)
+			if err := setRemoteMessageLabelsTx(ctx, tx, page.AccountID, page.InboxID, id, cleanLabels); err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
+			newBytes, _, err := remoteMessageBytesTx(ctx, tx, page.AccountID, page.InboxID, id)
+			if err != nil {
+				return MicrosoftDeltaPageResult{}, err
+			}
+			metaDelta += newBytes - oldBytes + remoteLabelsForMessageBytes(cleanLabels) - oldLabels
 		}
 		if e.Delete {
 			id, err := microsoftLocalIDTx(ctx, tx, page.AccountID, page.InboxID, e.ProviderID)
@@ -185,9 +196,18 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			case err != nil:
 				return MicrosoftDeltaPageResult{}, err
 			default:
+				messageBytes, _, berr := remoteMessageBytesTx(ctx, tx, page.AccountID, page.InboxID, id)
+				if berr != nil {
+					return MicrosoftDeltaPageResult{}, berr
+				}
+				labelBytes, berr := remoteLabelBytesTx(ctx, tx, page.AccountID, page.InboxID, id)
+				if berr != nil {
+					return MicrosoftDeltaPageResult{}, berr
+				}
 				if err := deleteRemoteMessageTx(ctx, tx, page.AccountID, page.InboxID, id); err != nil {
 					return MicrosoftDeltaPageResult{}, err
 				}
+				metaDelta -= messageBytes + labelBytes
 			}
 		}
 		if e.Cache != nil {
@@ -210,13 +230,14 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 		return MicrosoftDeltaPageResult{}, err
 	}
 	if page.Prune {
-		pruned, err := pruneMicrosoftResyncTx(ctx, tx, page.AccountID, page.InboxID, page.FolderID)
+		pruned, prunedBytes, err := pruneMicrosoftResyncTx(ctx, tx, page.AccountID, page.InboxID, page.FolderID)
 		if err != nil {
 			return MicrosoftDeltaPageResult{}, err
 		}
 		result.Pruned = pruned
+		metaDelta -= prunedBytes
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, page.AccountID, page.InboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, page.AccountID, page.InboxID, metaDelta); err != nil {
 		return MicrosoftDeltaPageResult{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -309,15 +330,28 @@ func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox st
 	return err
 }
 
+// microsoftPruneIDs selects the cached message ids a superseded Microsoft sweep
+// left behind.
+const microsoftPruneIDs = `SELECT m.message_id FROM microsoft_message_ids m JOIN microsoft_delta d ON d.inbox_id=m.inbox_id AND d.folder_id=m.folder_id WHERE m.inbox_id=? AND m.folder_id=? AND d.generation<>'' AND m.generation<>d.generation`
+
 // pruneMicrosoftResyncTx removes a folder's cached rows whose recorded generation
 // no longer matches the folder's current generation, i.e. the rows a superseded
 // sweep left behind. A folder that was never resynced (generation ”) prunes
-// nothing. It returns the number of rows removed.
-func pruneMicrosoftResyncTx(ctx context.Context, tx *sql.Tx, account, inbox, folder string) (int, error) {
-	res, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT m.message_id FROM microsoft_message_ids m JOIN microsoft_delta d ON d.inbox_id=m.inbox_id AND d.folder_id=m.folder_id WHERE m.inbox_id=? AND m.folder_id=? AND d.generation<>'' AND m.generation<>d.generation)`, account, inbox, inbox, folder)
+// nothing. It returns the number of rows removed and the metadata bytes they
+// occupied.
+func pruneMicrosoftResyncTx(ctx context.Context, tx *sql.Tx, account, inbox, folder string) (int, int64, error) {
+	var bytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (`+microsoftPruneIDs+`)`, account, inbox, inbox, folder).Scan(&bytes); err != nil {
+		return 0, 0, err
+	}
+	var labelBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id IN (`+microsoftPruneIDs+`)`, account, inbox, inbox, folder).Scan(&labelBytes); err != nil {
+		return 0, 0, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (`+microsoftPruneIDs+`)`, account, inbox, inbox, folder)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return int(n), bytes + labelBytes, nil
 }

@@ -111,8 +111,14 @@ func (s *Store) DeleteRemoteFolderRow(ctx context.Context, accountID, inboxID, p
 		return err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
-	if err != nil {
+	var messageBytes, labelBytes, folderBytes int64
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND folder_path=?`, accountID, inboxID, path).Scan(&messageBytes); err != nil {
+		return err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id IN (SELECT id FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND folder_path=?)`, accountID, inboxID, accountID, inboxID, path).Scan(&labelBytes); err != nil {
+		return err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=? AND origin='remote'`, accountID, inboxID, path).Scan(&folderBytes); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, path); err != nil {
@@ -121,7 +127,7 @@ func (s *Store) DeleteRemoteFolderRow(ctx context.Context, accountID, inboxID, p
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=? AND origin='remote'`, accountID, inboxID, path); err != nil {
 		return err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, -(messageBytes + labelBytes + folderBytes)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -388,10 +394,7 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		backfillComplete = false
 	}
 
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
-	if err != nil {
-		return 0, err
-	}
+	metaDelta := int64(0)
 	// Cap awareness is opt-in and additive: when neither the account nor the
 	// inbox sets a cap, no metadata read is needed and every row is admitted as
 	// before. When a cap is set, an update to an already-cached UID replaces
@@ -431,6 +434,10 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 			}
 			usedThisBatch += add
 		}
+		oldBytes, _, oerr := remoteMessageBytesByUIDTx(ctx, tx, inboxID, folderPath, uidValidity, in.UID)
+		if oerr != nil {
+			return 0, oerr
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
@@ -444,12 +451,19 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 			boolInt(in.Answered), boolInt(in.Draft), jsonString(in.Flags), nullStringPtr(in.ReceivedAt), nullStringPtr(in.SentAt), nullStringPtr(in.InternalDate), now, now, now); err != nil {
 			return 0, err
 		}
+		newBytes, _, berr := remoteMessageBytesByUIDTx(ctx, tx, inboxID, folderPath, uidValidity, in.UID)
+		if berr != nil {
+			return 0, berr
+		}
+		metaDelta += newBytes - oldBytes
 		written++
 		// Merge any thread relatives now that this message exists: a reply that
 		// arrived before its parent is folded into the parent's thread.
-		if err = mergeRemoteThreadTx(ctx, tx, inboxID, in); err != nil {
-			return 0, err
+		mergeDelta, merr := mergeRemoteThreadTx(ctx, tx, inboxID, in)
+		if merr != nil {
+			return 0, merr
 		}
+		metaDelta += mergeDelta
 	}
 	// A truncated batch means the snapshot it represents is not fully indexed:
 	// never claim completeness or advance the backfill cursor, so the next pass
@@ -467,27 +481,37 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		// row not in keep. When the generation changed, this same complete
 		// snapshot is the proof that the stale-generation rows are obsolete, so
 		// they are dropped here too (never earlier, on a partial pass).
-		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
+		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity,`+remoteMessageBytesSQL+` FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
 		if err != nil {
 			return 0, err
 		}
-		var drop []string
+		type dropRow struct {
+			id    string
+			bytes int64
+		}
+		var drop []dropRow
 		for rows.Next() {
 			var id string
 			var uid, rowValidity uint32
-			if err = rows.Scan(&id, &uid, &rowValidity); err != nil {
+			var rowBytes int64
+			if err = rows.Scan(&id, &uid, &rowValidity, &rowBytes); err != nil {
 				rows.Close()
 				return 0, err
 			}
 			if rowValidity != uidValidity || !keep[uid] {
-				drop = append(drop, id)
+				drop = append(drop, dropRow{id: id, bytes: rowBytes})
 			}
 		}
 		rows.Close()
-		for _, id := range drop {
-			if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=?`, id); err != nil {
+		for _, row := range drop {
+			labelBytes, lerr := remoteLabelBytesTx(ctx, tx, accountID, inboxID, row.id)
+			if lerr != nil {
+				return 0, lerr
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=?`, row.id); err != nil {
 				return 0, err
 			}
+			metaDelta -= row.bytes + labelBytes
 		}
 	}
 	// When the generation changed but the snapshot was only partial (prune
@@ -506,7 +530,7 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		// pass partial and retries after the next folder reconcile.
 		return 0, fmt.Errorf("remote folder %q is not indexed for inbox %s", folderPath, inboxID)
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, metaDelta); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -547,10 +571,7 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	// here: a windowed (partial) enumeration of the new generation must not
 	// transiently empty the folder. The generation-aware prune below removes the
 	// stale rows only when messages is a COMPLETE enumeration.
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
-	if err != nil {
-		return 0, err
-	}
+	metaDelta := int64(0)
 	accountRoom, accountLimited, inboxRoom, inboxLimited, err := remoteMetadataHeadroomTx(ctx, tx, accountID, inboxID)
 	if err != nil {
 		return 0, err
@@ -584,6 +605,10 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 		}
 		keep[m.UID] = true
 		threadKey := remoteThreadKeyTx(ctx, tx, inboxID, in)
+		oldBytes, _, oerr := remoteMessageBytesByUIDTx(ctx, tx, inboxID, folderPath, uidValidity, in.UID)
+		if oerr != nil {
+			return 0, oerr
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
@@ -598,6 +623,11 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 		if err != nil {
 			return 0, err
 		}
+		newBytes, _, berr := remoteMessageBytesByUIDTx(ctx, tx, inboxID, folderPath, uidValidity, in.UID)
+		if berr != nil {
+			return 0, berr
+		}
+		metaDelta += newBytes - oldBytes
 		written++
 	}
 	// Prune cached rows in this folder whose UID is no longer present, but only
@@ -608,27 +638,37 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	// never prunes: its keep set is incomplete, so pruning would delete rows for
 	// messages outside the admitted window.
 	if prune && !truncated {
-		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
+		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity,`+remoteMessageBytesSQL+` FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
 		if err != nil {
 			return 0, err
 		}
-		var drop []string
+		type dropRow struct {
+			id    string
+			bytes int64
+		}
+		var drop []dropRow
 		for rows.Next() {
 			var id string
 			var uid, rowValidity uint32
-			if err = rows.Scan(&id, &uid, &rowValidity); err != nil {
+			var rowBytes int64
+			if err = rows.Scan(&id, &uid, &rowValidity, &rowBytes); err != nil {
 				rows.Close()
 				return 0, err
 			}
 			if rowValidity != uidValidity || !keep[uid] {
-				drop = append(drop, id)
+				drop = append(drop, dropRow{id: id, bytes: rowBytes})
 			}
 		}
 		rows.Close()
-		for _, id := range drop {
-			if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=?`, id); err != nil {
+		for _, row := range drop {
+			labelBytes, lerr := remoteLabelBytesTx(ctx, tx, accountID, inboxID, row.id)
+			if lerr != nil {
+				return 0, lerr
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=?`, row.id); err != nil {
 				return 0, err
 			}
+			metaDelta -= row.bytes + labelBytes
 		}
 	}
 	// Record the folder's UIDVALIDITY and index time on the folder row so a
@@ -636,7 +676,7 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE inbox_id=? AND path=?`, uidValidity, now, now, inboxID, folderPath); err != nil {
 		return 0, err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, metaDelta); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -734,18 +774,19 @@ func remoteThreadKeyTx(ctx context.Context, tx *sql.Tx, inboxID string, in Remot
 // updating every row sharing a merged key so an entire sub-thread travels together.
 // It is bounded by the thread component's size and never crosses the inbox scope.
 // Duplicate RFC Message-IDs are left alone (remoteThreadKey did not join them).
-func mergeRemoteThread(ctx context.Context, q threadQueryer, inboxID string, in RemoteMessageInput) error {
+func mergeRemoteThread(ctx context.Context, q threadQueryer, inboxID string, in RemoteMessageInput) (int64, error) {
 	msgID := strings.TrimSpace(in.RFCMessageID)
 	if msgID == "" {
-		return nil
+		return 0, nil
 	}
 	var canonical string
 	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MIN(thread_key),'') FROM inbox_remote_messages WHERE inbox_id=? AND rfc_message_id=?`, inboxID, msgID).Scan(&canonical); err != nil {
-		return err
+		return 0, err
 	}
 	if canonical == "" {
-		return nil
+		return 0, nil
 	}
+	var delta int64
 	// Prefer a cached ancestor's (deeper) root. A duplicate ancestor Message-ID is
 	// skipped, matching remoteThreadKey's duplicate guard.
 	for _, ref := range remoteAncestorRefs(in) {
@@ -755,9 +796,11 @@ func mergeRemoteThread(ctx context.Context, q threadQueryer, inboxID string, in 
 			continue
 		}
 		if count == 1 && k != "" && k != canonical {
-			if _, err := q.ExecContext(ctx, `UPDATE inbox_remote_messages SET thread_key=? WHERE inbox_id=? AND thread_key=?`, k, inboxID, canonical); err != nil {
-				return err
+			d, rerr := rewriteThreadKeyTx(ctx, q, inboxID, canonical, k)
+			if rerr != nil {
+				return 0, rerr
 			}
+			delta += d
 			canonical = k
 			break
 		}
@@ -765,38 +808,48 @@ func mergeRemoteThread(ctx context.Context, q threadQueryer, inboxID string, in 
 	// Fold direct replies that reference this message onto the canonical key.
 	rows, err := q.QueryContext(ctx, `SELECT DISTINCT thread_key FROM inbox_remote_messages WHERE inbox_id=? AND thread_key<>'' AND thread_key<>? AND (in_reply_to=? OR EXISTS (SELECT 1 FROM json_each(references_json) WHERE value=?))`, inboxID, canonical, msgID, msgID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var childKeys []string
 	for rows.Next() {
 		var k string
 		if err := rows.Scan(&k); err != nil {
 			rows.Close()
-			return err
+			return 0, err
 		}
 		childKeys = append(childKeys, k)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	for _, k := range childKeys {
 		if k == canonical {
 			continue
 		}
-		if _, err := q.ExecContext(ctx, `UPDATE inbox_remote_messages SET thread_key=? WHERE inbox_id=? AND thread_key=?`, canonical, inboxID, k); err != nil {
-			return err
+		d, rerr := rewriteThreadKeyTx(ctx, q, inboxID, k, canonical)
+		if rerr != nil {
+			return 0, rerr
 		}
+		delta += d
 	}
 	// Ensure the message's own rows carry the canonical key.
-	if _, err := q.ExecContext(ctx, `UPDATE inbox_remote_messages SET thread_key=? WHERE inbox_id=? AND rfc_message_id=? AND thread_key<>?`, canonical, inboxID, msgID, canonical); err != nil {
-		return err
+	var ownCount int
+	var ownBytes int64
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(thread_key AS BLOB))),0) FROM inbox_remote_messages WHERE inbox_id=? AND rfc_message_id=? AND thread_key<>?`, inboxID, msgID, canonical).Scan(&ownCount, &ownBytes); err != nil {
+		return 0, err
 	}
-	return nil
+	if ownCount > 0 {
+		if _, err := q.ExecContext(ctx, `UPDATE inbox_remote_messages SET thread_key=? WHERE inbox_id=? AND rfc_message_id=? AND thread_key<>?`, canonical, inboxID, msgID, canonical); err != nil {
+			return 0, err
+		}
+		delta += int64(ownCount)*int64(len(canonical)) - ownBytes
+	}
+	return delta, nil
 }
 
 // mergeRemoteThreadTx is mergeRemoteThread against a transaction.
-func mergeRemoteThreadTx(ctx context.Context, tx *sql.Tx, inboxID string, in RemoteMessageInput) error {
+func mergeRemoteThreadTx(ctx context.Context, tx *sql.Tx, inboxID string, in RemoteMessageInput) (int64, error) {
 	return mergeRemoteThread(ctx, tx, inboxID, in)
 }
 
@@ -953,14 +1006,14 @@ func (s *Store) SetRemoteMessageLabels(ctx context.Context, accountID, inboxID, 
 		return nil, err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	oldBytes, err := remoteLabelBytesTx(ctx, tx, accountID, inboxID, messageID)
 	if err != nil {
 		return nil, err
 	}
 	if err = setRemoteMessageLabelsTx(ctx, tx, accountID, inboxID, messageID, clean); err != nil {
 		return nil, err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, remoteLabelsForMessageBytes(clean)-oldBytes); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -1070,7 +1123,7 @@ func (s *Store) UpdateRemoteMessageFlags(ctx context.Context, accountID, inboxID
 		return err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	oldBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, id)
 	if err != nil {
 		return err
 	}
@@ -1082,7 +1135,11 @@ func (s *Store) UpdateRemoteMessageFlags(ctx context.Context, accountID, inboxID
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	newBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, id)
+	if err != nil {
+		return err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, newBytes-oldBytes); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1107,7 +1164,7 @@ func (s *Store) MoveRemoteMessageMetadata(ctx context.Context, accountID, inboxI
 	}
 	defer tx.Rollback()
 	now := nowText()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	oldBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, id)
 	if err != nil {
 		return RemoteMessage{}, err
 	}
@@ -1138,7 +1195,11 @@ func (s *Store) MoveRemoteMessageMetadata(ctx context.Context, accountID, inboxI
 			return RemoteMessage{}, err
 		}
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	newBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, m.ID)
+	if err != nil {
+		return RemoteMessage{}, err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, newBytes-oldBytes); err != nil {
 		return RemoteMessage{}, err
 	}
 	if err = tx.Commit(); err != nil {

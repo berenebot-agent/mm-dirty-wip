@@ -37,11 +37,22 @@ type Server struct {
 	Log                 *slog.Logger
 	RequireCallerBearer bool
 	upgrader            ws.Upgrader
+	// ackTimeout bounds the wait for an inbound_ack. A matching
+	// inbound_processing heartbeat re-arms it, but processingLease is absolute:
+	// a slow handler can hold an event for at most that long.
+	ackTimeout      time.Duration
+	processingLease time.Duration
 }
 
 // relayQuietReconnectWindow suppresses Info-level spam from the idle-timeout
 // reconnect loop: a gateway that connected recently logs at Debug instead.
 const relayQuietReconnectWindow = 10 * time.Minute
+
+const (
+	defaultRelayAckTimeout   = 60 * time.Second
+	defaultProcessingLease   = 30 * time.Minute
+	relayHeartbeatBufferSize = 8
+)
 
 // maxConcurrentOutbound bounds in-flight outbound operations per relay socket,
 // so a gateway cannot force unbounded goroutine and SQLite pressure by bursting
@@ -60,8 +71,58 @@ func New(svc *app.Service) *Server {
 		// cookie, so a cross-origin WebSocket cannot ride a logged-in session.
 		// The upgrader's same-origin default would instead reject legitimate
 		// cross-origin gateways, which have no browser origin to present.
-		upgrader: ws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		upgrader:        ws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		ackTimeout:      defaultRelayAckTimeout,
+		processingLease: defaultProcessingLease,
 	}
+}
+
+// SetAckTimeoutsForTest shortens the acknowledgement window and processing
+// lease so a test can exercise heartbeat extension and its cap without waiting
+// the production durations.
+func (s *Server) SetAckTimeoutsForTest(ackTimeout, processingLease time.Duration) {
+	if ackTimeout > 0 {
+		s.ackTimeout = ackTimeout
+	}
+	if processingLease > 0 {
+		s.processingLease = processingLease
+	}
+}
+
+// ackWait is one event's acknowledgement window. The timer is re-armed by a
+// matching processing heartbeat, but never past lease, which is fixed when the
+// event was sent.
+type ackWait struct {
+	timer      *time.Timer
+	ackTimeout time.Duration
+	lease      time.Time
+}
+
+func newAckWait(ackTimeout, lease time.Duration) *ackWait {
+	return &ackWait{timer: time.NewTimer(ackTimeout), ackTimeout: ackTimeout, lease: time.Now().Add(lease)}
+}
+
+func (w *ackWait) stop() { w.timer.Stop() }
+
+// extend re-arms the window for a live handler. It reports false once the fixed
+// processing lease has elapsed, at which point the caller must stop waiting.
+func (w *ackWait) extend() bool {
+	remaining := time.Until(w.lease)
+	if remaining <= 0 {
+		return false
+	}
+	wait := w.ackTimeout
+	if remaining < wait {
+		wait = remaining
+	}
+	if !w.timer.Stop() {
+		select {
+		case <-w.timer.C:
+		default:
+		}
+	}
+	w.timer.Reset(wait)
+	return true
 }
 
 type EnrollRequest struct {
@@ -245,8 +306,12 @@ type outboundAction struct {
 	Op       string `json:"op"`
 	ChatID   string `json:"chat_id"`
 	ThreadID string `json:"thread_id,omitempty"`
-	Content  string `json:"content,omitempty"`
-	Text     string `json:"text,omitempty"`
+	// ReplyToMessageID identifies the exact inbound mail the agent is answering
+	// (a local message id or a remote arrival/metadata id). Older gateways omit
+	// it; the server then keeps the existing local-thread resolution.
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	Content          string `json:"content,omitempty"`
+	Text             string `json:"text,omitempty"`
 }
 
 func descriptor() map[string]any {
@@ -286,6 +351,9 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 	// burst of acks (one per delivered event) without the read loop stalling or
 	// dropping them silently; the durable cursor remains the safety net.
 	ackCh := make(chan int64, 64)
+	// beatCh carries inbound_processing heartbeats. They only re-arm the current
+	// event's acknowledgement window; they never advance the durable cursor.
+	beatCh := make(chan int64, relayHeartbeatBufferSize)
 	helloCh := make(chan struct{}, 1)
 	errCh := make(chan error, 1)
 	// Bound concurrent outbound operations per socket. Each outbound op spawns a
@@ -324,6 +392,15 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 				if id := store.ParseCursor(f.BufferID); id > 0 {
 					select {
 					case ackCh <- id:
+					default:
+					}
+				}
+			case "inbound_processing":
+				// A handler heartbeat. The delivery loop matches it against the
+				// event it is waiting on; a stale or unknown id changes nothing.
+				if id := store.ParseCursor(f.BufferID); id > 0 {
+					select {
+					case beatCh <- id:
 					default:
 					}
 				}
@@ -407,7 +484,7 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 					after = ev.ID
 					continue
 				}
-				if derr := s.deliverRemote(ctx, h, wr, ev, arrival, &after, ackCh, errCh); derr != nil {
+				if derr := s.deliverRemote(ctx, h, wr, ev, arrival, &after, ackCh, beatCh, errCh); derr != nil {
 					return derr
 				}
 				continue
@@ -432,36 +509,19 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 				return err
 			}
 			s.Log.Info("relay inbound", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", m.ID, "from", m.From.Address, "to", m.To)
-			acked := false
-			for !acked {
-				select {
-				case id := <-ackCh:
-					// An acknowledgement at or beyond the event just sent means
-					// that event is acknowledged, but the durable cursor advances
-					// only to the event actually delivered. A gateway that
-					// (buggily or maliciously) acks a future buffer id must not
-					// cause the events in between to be skipped.
-					if id >= ev.ID {
-						after = ev.ID
-						if m, mErr := s.Store.ClientDeliveryLog(ctx, h.AccountID, h.ID, 1, ev.ID+1); mErr == nil && len(m) == 1 {
-							_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, m[0].Attempts)
-						} else {
-							_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
-						}
-						s.Log.Info("relay acked", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
-						acked = true
-					}
-				case err := <-errCh:
-					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
-					return err
-				case <-ctx.Done():
-					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay connection closed before acknowledgement")
-					return ctx.Err()
-				case <-time.After(60 * time.Second):
-					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay acknowledgement timeout")
-					return errors.New("relay acknowledgement timeout")
-				}
+			if err := s.awaitAcknowledgement(ctx, h, ev.ID, ackCh, beatCh, errCh); err != nil {
+				return err
 			}
+			// The durable cursor advances only to the event actually delivered:
+			// a gateway that (buggily or maliciously) acks a future buffer id
+			// must not cause the events in between to be skipped.
+			after = ev.ID
+			if m, mErr := s.Store.ClientDeliveryLog(ctx, h.AccountID, h.ID, 1, ev.ID+1); mErr == nil && len(m) == 1 {
+				_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, m[0].Attempts)
+			} else {
+				_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
+			}
+			s.Log.Info("relay acked", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
 			continue
 		}
 		if !errors.Is(err, store.ErrNotFound) {
@@ -486,35 +546,55 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 // after the gateway acknowledges, and the delivery log records the attempt. The
 // event is remote-aware and carries no body (the gateway fetches content through
 // the canonical API using the remote locator).
-func (s *Server) deliverRemote(ctx context.Context, h store.HermesConnection, wr *socketWriter, ev model.Event, arrival store.RemoteArrival, after *int64, ackCh <-chan int64, errCh <-chan error) error {
+func (s *Server) deliverRemote(ctx context.Context, h store.HermesConnection, wr *socketWriter, ev model.Event, arrival store.RemoteArrival, after *int64, ackCh, beatCh <-chan int64, errCh <-chan error) error {
 	_ = s.Store.RecordHermesDeliveryPending(ctx, h.ID, ev.ID)
 	if err := wr.JSON(map[string]any{"type": "inbound", "event": remoteMessageEvent(arrival), "bufferId": ev.Cursor}); err != nil {
 		_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
 		return err
 	}
 	s.Log.Info("relay inbound remote", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", arrival.ID, "from", arrival.FromAddress, "inbox_id", arrival.InboxID)
-	acked := false
-	for !acked {
+	if err := s.awaitAcknowledgement(ctx, h, ev.ID, ackCh, beatCh, errCh); err != nil {
+		return err
+	}
+	*after = ev.ID
+	_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
+	s.Log.Info("relay acked remote", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
+	return nil
+}
+
+// awaitAcknowledgement waits for the gateway's acknowledgement of one delivered
+// event. A matching inbound_processing heartbeat re-arms the ack timeout so a
+// slow handler is not disconnected, but the fixed processing lease caps that
+// extension. Heartbeats for any other event are ignored, and this function
+// never advances the durable cursor itself.
+func (s *Server) awaitAcknowledgement(ctx context.Context, h store.HermesConnection, evID int64, ackCh, beatCh <-chan int64, errCh <-chan error) error {
+	wait := newAckWait(s.ackTimeout, s.processingLease)
+	defer wait.stop()
+	for {
 		select {
 		case id := <-ackCh:
-			if id >= ev.ID {
-				*after = ev.ID
-				_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
-				s.Log.Info("relay acked remote", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
-				acked = true
+			if id >= evID {
+				return nil
+			}
+		case id := <-beatCh:
+			if id != evID {
+				continue
+			}
+			if !wait.extend() {
+				_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, evID, "relay acknowledgement timeout")
+				return errors.New("relay processing lease expired")
 			}
 		case err := <-errCh:
-			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, evID, "relay socket closed before acknowledgement")
 			return err
 		case <-ctx.Done():
-			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay connection closed before acknowledgement")
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, evID, "relay connection closed before acknowledgement")
 			return ctx.Err()
-		case <-time.After(60 * time.Second):
-			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay acknowledgement timeout")
+		case <-wait.timer.C:
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, evID, "relay acknowledgement timeout")
 			return errors.New("relay acknowledgement timeout")
 		}
 	}
-	return nil
 }
 
 // remoteMessageEvent projects a detected remote arrival onto the gateway event
@@ -529,8 +609,12 @@ func remoteMessageEvent(a store.RemoteArrival) map[string]any {
 	display := fmt.Sprintf("From: %s\nSubject: %s\n\n(remote message; fetch it via the API)", a.FromAddress, a.Subject)
 	return map[string]any{
 		"text": display, "message_type": "text", "user_id": a.FromAddress, "user_name": name, "message_id": a.ID,
-		"source":                map[string]any{"platform": "email", "chat_id": a.RFCMessageID, "chat_type": "thread", "chat_name": a.Subject, "user_id": a.FromAddress, "user_name": name, "thread_id": a.RFCMessageID, "chat_topic": nil, "message_id": a.ID},
-		"metadata":              map[string]any{"email_message_id": a.ID, "inbox_id": a.InboxID, "thread_id": a.RFCMessageID, "from": a.FromAddress, "subject": a.Subject, "remote": true, "folder_path": a.FolderPath, "rfc_message_id": a.RFCMessageID, "is_spam": false},
+		"source": map[string]any{"platform": "email", "chat_id": a.RFCMessageID, "chat_type": "thread", "chat_name": a.Subject, "user_id": a.FromAddress, "user_name": name, "thread_id": a.RFCMessageID, "chat_topic": nil, "message_id": a.ID},
+		// reply_to_message_id carries the exact trigger (the durable arrival id),
+		// so a reply targets this email and its remote threading metadata rather
+		// than treating the RFC Message-ID as a local thread id. It resolves
+		// through the same remote-message path as a REST reply.
+		"metadata":              map[string]any{"email_message_id": a.ID, "reply_to_message_id": a.ID, "inbox_id": a.InboxID, "thread_id": a.RFCMessageID, "from": a.FromAddress, "subject": a.Subject, "remote": true, "folder_path": a.FolderPath, "rfc_message_id": a.RFCMessageID, "is_spam": false},
 		"provenance":            map[string]any{"source": "email", "trust": "external_untrusted", "authenticated_sender": false},
 		"allow_gateway_control": false,
 	}
@@ -573,6 +657,45 @@ func outboundResult(requestID string, success bool, errText, messageID string) m
 	return map[string]any{"type": "outbound_result", "requestId": requestID, "result": result}
 }
 
+// resolveRelayReplyTarget resolves the exact mail a relay reply answers. The
+// local-thread lookup stays first, so local-mail replies keep their existing
+// behaviour. Only when no local thread matches is reply_to_message_id resolved:
+// first as a local message (for an outbound target), then through the shared
+// remote-message resolver, which understands both metadata ids and arrival ids.
+// The relay connection's own inbox is always enforced.
+func (s *Server) resolveRelayReplyTarget(ctx context.Context, h store.HermesConnection, thread, replyTo string) (model.Message, error) {
+	target, err := s.Store.LatestInboundMessageInThread(ctx, h.AccountID, h.InboxID, thread)
+	if err == nil {
+		return target, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return model.Message{}, err
+	}
+	id := strings.TrimSpace(replyTo)
+	if id == "" {
+		return model.Message{}, store.ErrNotFound
+	}
+	if target, lerr := s.Store.GetMessageByID(ctx, h.AccountID, id); lerr == nil {
+		if target.InboxID != h.InboxID || target.Internal {
+			return model.Message{}, store.ErrNotFound
+		}
+		return target, nil
+	} else if !errors.Is(lerr, store.ErrNotFound) {
+		return model.Message{}, lerr
+	}
+	if s.Service.RemoteMessages == nil {
+		return model.Message{}, store.ErrNotFound
+	}
+	target, ok, rerr := s.Service.RemoteMessages.ResolveRemoteReply(ctx, h.AccountID, id)
+	if rerr != nil {
+		return model.Message{}, rerr
+	}
+	if !ok || target.InboxID != h.InboxID || target.Internal {
+		return model.Message{}, store.ErrNotFound
+	}
+	return target, nil
+}
+
 func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.HermesConnection, requestID string, a outboundAction) {
 	// The connection may have been deleted since this socket was accepted;
 	// revalidate before performing any outbound operation.
@@ -599,8 +722,11 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 			_ = wr.JSON(outboundResult(requestID, false, "chat_id and content are required", ""))
 			return
 		}
-		target, err := s.Store.LatestInboundMessageInThread(ctx, h.AccountID, h.InboxID, thread)
+		target, err := s.resolveRelayReplyTarget(ctx, h, thread, a.ReplyToMessageID)
 		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				s.Log.Warn("relay reply target", "gateway_id", h.GatewayID, "request_id", requestID, "error", err)
+			}
 			_ = wr.JSON(outboundResult(requestID, false, "email thread not found", ""))
 			return
 		}

@@ -110,14 +110,18 @@ func (s *Store) SetFolderRole(ctx context.Context, p model.Principal, inboxID, f
 			return model.Folder{}, fmt.Errorf("%w: another folder is already mapped to the %s role", ErrConflict, role)
 		}
 	}
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
+	oldBytes, err := remoteFolderBytesByIDTx(ctx, tx, p.AccountID, inboxID, folderID)
 	if err != nil {
 		return model.Folder{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET role=?,role_locked=1,updated_at=? WHERE id=? AND inbox_id=?`, role, nowText(), folderID, inboxID); err != nil {
 		return model.Folder{}, err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
+	newBytes, err := remoteFolderBytesByIDTx(ctx, tx, p.AccountID, inboxID, folderID)
+	if err != nil {
+		return model.Folder{}, err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, p.AccountID, inboxID, newBytes-oldBytes); err != nil {
 		return model.Folder{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -416,8 +420,9 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 		return model.Folder{}, ErrFolderNameConflict
 	}
 	now := nowText()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
-	if err != nil {
+	var oldBytes int64
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND (id=? OR path LIKE ? ESCAPE '\')`,
+		inboxID, folderID, escapeLike(oldPath)+"/%").Scan(&oldBytes); err != nil {
 		return model.Folder{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,name=?,updated_at=? WHERE id=? AND inbox_id=?`, newPath, newName, now, folderID, inboxID); err != nil {
@@ -433,7 +438,12 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 		newPath, suffixFrom, oldPath, newPath, newPath, suffixFrom, now, inboxID, escapeLike(oldPath)+"/%"); err != nil {
 		return model.Folder{}, err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
+	var newBytes int64
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND (id=? OR path LIKE ? ESCAPE '\')`,
+		inboxID, folderID, escapeLike(newPath)+"/%").Scan(&newBytes); err != nil {
+		return model.Folder{}, err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, p.AccountID, inboxID, newBytes-oldBytes); err != nil {
 		return model.Folder{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -504,14 +514,14 @@ func (s *Store) DeleteFolder(ctx context.Context, p model.Principal, inboxID, fo
 	if children != 0 || messages != 0 {
 		return ErrFolderNotEmpty
 	}
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
+	oldBytes, err := remoteFolderBytesByIDTx(ctx, tx, p.AccountID, inboxID, folderID)
 	if err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE id=? AND inbox_id=?`, folderID, inboxID); err != nil {
 		return err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, p.AccountID, inboxID, -oldBytes); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -598,7 +608,7 @@ func (s *Store) SetFolderRemoteMetadata(ctx context.Context, accountID, inboxID,
 		return err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	oldBytes, err := remoteFolderBytesByIDTx(ctx, tx, accountID, inboxID, folderID)
 	if err != nil {
 		return err
 	}
@@ -609,7 +619,11 @@ func (s *Store) SetFolderRemoteMetadata(ctx context.Context, accountID, inboxID,
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	newBytes, err := remoteFolderBytesByIDTx(ctx, tx, accountID, inboxID, folderID)
+	if err != nil {
+		return err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, newBytes-oldBytes); err != nil {
 		return err
 	}
 	return tx.Commit()
