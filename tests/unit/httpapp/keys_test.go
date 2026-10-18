@@ -94,6 +94,25 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	if strings.Contains(body, "<h2>Hermes Relay</h2>") {
 		t.Fatal("standalone Hermes Relay card should be removed")
 	}
+	// The no-allow-list acknowledgement row carries an inline display:flex for
+	// layout, and the page CSS is [hidden]{display:none!important}, so only the
+	// hidden attribute can hide or reveal it. Both connector kinds must toggle
+	// that attribute (never the inline style) and recompute the gate when their
+	// inbox changes, or the checkbox is permanently invisible and Create stays
+	// disabled with no way to override.
+	for _, want := range []string{
+		"ackRow.hidden = !warn",
+		"hermesAckRow.hidden = true",
+		"openclawAckRow.hidden = true",
+		"hermesInbox.addEventListener('change', syncHermesRisk)",
+		"hermesAck.addEventListener('change', syncHermesRisk)",
+		"openclawInbox.addEventListener('change', syncHermesRisk)",
+		"openclawAck.addEventListener('change', syncHermesRisk)",
+	} {
+		if !strings.Contains(asset, want) {
+			t.Fatalf("connector no-allow-list risk gate is not wired: asset missing %q", want)
+		}
+	}
 	if strings.Contains(body, "onclick=") {
 		t.Fatal("inline event handlers are blocked by CSP and must not be used")
 	}

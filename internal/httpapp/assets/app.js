@@ -1244,10 +1244,11 @@
       if (warning) {
         warning.hidden = !warn;
       }
-      // The row carries an inline display:flex, which wins over [hidden];
-      // toggle display directly so it actually disappears when a list is set.
+      // The row keeps its inline display:flex for layout, so the hidden attribute
+      // is the only thing that can hide it: the page CSS is
+      // [hidden]{display:none!important}, which beats the inline style.
       if (ackRow) {
-        ackRow.style.display = warn ? 'flex' : 'none';
+        ackRow.hidden = !warn;
       }
       if (!warn) {
         if (ack) {
@@ -1263,10 +1264,10 @@
       }
     } else if (hermesWarning && hermesAckRow && hermesAck && submitBtn) {
       hermesWarning.hidden = true;
-      hermesAckRow.style.display = 'none';
+      hermesAckRow.hidden = true;
       if (openclawWarning && openclawAckRow && openclawAck) {
         openclawWarning.hidden = true;
-        openclawAckRow.style.display = 'none';
+        openclawAckRow.hidden = true;
       }
       submitBtn.disabled = false;
     }
@@ -1587,6 +1588,12 @@
   }
   if (hermesAck) {
     hermesAck.addEventListener('change', syncHermesRisk);
+  }
+  if (openclawInbox) {
+    openclawInbox.addEventListener('change', syncHermesRisk);
+  }
+  if (openclawAck) {
+    openclawAck.addEventListener('change', syncHermesRisk);
   }
   document.querySelectorAll('#key-matrix [data-set-role]').forEach(function (btn) {
     btn.addEventListener('click', function () {
