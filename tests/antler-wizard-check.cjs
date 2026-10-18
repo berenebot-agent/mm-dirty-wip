@@ -121,12 +121,18 @@ class Element {
       this.nodes['.antler-' + name] = new Element();
     }
     // The check row contains its note: the note carries the countdown text and the
-    // row is what the dialog shows or hides.
+    // row is what the dialog shows or hides. The manifest line lives in the same
+    // row and reports where the receiver set came from, so the closure reads it on
+    // every render and the stand-in must provide it.
     const checks = new Element('DIV');
     const note = new Element('P');
     checks.appendChild(note);
+    const manifestNote = new Element('P');
+    manifestNote.hidden = true;
+    checks.appendChild(manifestNote);
     this.nodes['.antler-checks'] = checks;
     this.nodes['.antler-check-note'] = note;
+    this.nodes['.antler-manifest-note'] = manifestNote;
   }
 }
 
