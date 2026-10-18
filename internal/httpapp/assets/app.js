@@ -4001,6 +4001,9 @@ function clearUrlParams(names) {
     var smtpSecurity = document.getElementById('inbox-remote-smtp-security');
     var smtpPw = document.getElementById('inbox-remote-smtp-pw');
     var smtpPwNote = document.getElementById('inbox-remote-smtp-pw-note');
+    [imapPwNote, smtpPwNote].forEach(function (note) {
+      if (note) note.textContent = '(leave blank only if host, port, username and security are unchanged)';
+    });
     var status = document.getElementById('inbox-remote-configured');
     var settingsLink = document.getElementById('inbox-remote-settings-link');
     if (host) host.value = cfg.host || '';

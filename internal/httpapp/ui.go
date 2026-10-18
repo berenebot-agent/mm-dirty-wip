@@ -2742,7 +2742,7 @@ func (s *Server) uiCreateInbox(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?error="+url.QueryEscape(createErrorMessage(err)), 303)
 		return
 	}
-	if err = s.applyInboxConfig(r.Context(), p.AccountID, inbox.ID, cfg); err != nil {
+	if err = s.applyInboxConfig(r.Context(), p, inbox.ID, cfg); err != nil {
 		http.Redirect(w, r, "/?error="+url.QueryEscape(createErrorMessage(err)), 303)
 		return
 	}
@@ -3106,10 +3106,13 @@ func validDeliveryTriggerValue(v string) bool {
 
 // applyInboxAliases resolves each submitted alias domain to an account-owned
 // domain id and replaces the inbox's alias set.
-func (s *Server) applyInboxAliases(ctx context.Context, accountID, inboxID string, aliases []aliasForm) error {
+func (s *Server) applyInboxAliases(ctx context.Context, p model.Principal, inboxID string, aliases []aliasForm) error {
+	if !p.Admin {
+		return store.ErrForbidden
+	}
 	inputs := make([]store.AliasInput, 0, len(aliases))
 	if len(aliases) > 0 {
-		domains, err := s.Service.Store.ListDomains(ctx, accountID)
+		domains, err := s.Service.Store.ListDomains(ctx, p.AccountID)
 		if err != nil {
 			return err
 		}
@@ -3125,10 +3128,14 @@ func (s *Server) applyInboxAliases(ctx context.Context, accountID, inboxID strin
 			inputs = append(inputs, store.AliasInput{DomainID: id, LocalPart: a.LocalPart, DisplayName: a.DisplayName})
 		}
 	}
-	return s.Service.Store.SetInboxAliases(ctx, accountID, inboxID, inputs)
+	return s.Service.Store.SetInboxAliases(ctx, p, inboxID, inputs)
 }
 
-func (s *Server) applyInboxConfig(ctx context.Context, accountID, inboxID string, cfg inboxConfig) error {
+func (s *Server) applyInboxConfig(ctx context.Context, p model.Principal, inboxID string, cfg inboxConfig) error {
+	if !p.Admin {
+		return store.ErrForbidden
+	}
+	accountID := p.AccountID
 	// Require-authenticated only applies to direct SMTP (MX) domains, where the
 	// edge supplies SPF/DKIM/DMARC evidence. Clearing it here keeps a hidden
 	// control's stale value from lingering when a domain's provider changes.
@@ -3184,7 +3191,7 @@ func (s *Server) applyInboxConfig(ctx context.Context, accountID, inboxID string
 			return err
 		}
 	}
-	if err := s.applyInboxAliases(ctx, accountID, inboxID, cfg.aliases); err != nil {
+	if err := s.applyInboxAliases(ctx, p, inboxID, cfg.aliases); err != nil {
 		return err
 	}
 	// Staged Clients & Access role changes, applied in the same save. This runs
@@ -3312,7 +3319,7 @@ func (s *Server) uiUpdateInbox(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, err, 400)
 		return
 	}
-	if err = s.applyInboxConfig(r.Context(), p.AccountID, id, cfg); err != nil {
+	if err = s.applyInboxConfig(r.Context(), p, id, cfg); err != nil {
 		s.uiError(w, err, 400)
 		return
 	}

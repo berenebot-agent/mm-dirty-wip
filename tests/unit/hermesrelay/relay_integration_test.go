@@ -366,7 +366,7 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 
 	// The inbox default sender is a managed alias on a second domain.
 	d2, _ := st.CreateDomain(ctx, u.AccountID, "other.com")
-	if err := st.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "agent", DisplayName: "Agent"}}); err != nil {
+	if err := st.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "agent", DisplayName: "Agent"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetInboxDefaultSender(ctx, u.AccountID, box.ID, "agent@other.com"); err != nil {
@@ -425,6 +425,26 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	}
 	if sent.From.Address != "agent@other.com" || sent.From.Name != "Agent" {
 		t.Fatalf("relay did not use the default managed alias: %+v", sent.From)
+	}
+	// Demotion must apply to the socket that authenticated as Owner above.
+	if err := st.SetHermesOutboundRole(ctx, u.AccountID, conn.ID, "assistant"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.writeJSON(map[string]any{"type": "outbound", "requestId": "req-demoted", "action": map[string]any{"op": "send", "chat_id": thread.ThreadID, "content": "review this reply"}}); err != nil {
+		t.Fatal(err)
+	}
+	result = nil
+	if err := client.readJSON(&result); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = result["result"].(map[string]any)
+	if res == nil || res["success"] != true {
+		t.Fatalf("demoted reply failed: %#v", result)
+	}
+	draftID, _ := res["message_id"].(string)
+	draft, err := st.GetDraftInternal(ctx, u.AccountID, draftID)
+	if err != nil || draft.Status != model.DraftStatusPendingApproval {
+		t.Fatalf("open demoted socket sent instead of requesting approval: %+v %v", draft, err)
 	}
 }
 

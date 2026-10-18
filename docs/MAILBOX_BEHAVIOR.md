@@ -181,7 +181,8 @@ External aliases are removed, so sending has one target shape per kind:
   configured remote connector.
 - Older router interfaces were removed; the active entry points are described above.
 - **Configuration:** `ConfigureStandaloneRemote` (non-secret fields plus
-  encrypted secrets; a blank secret retains the stored one), `TestStandaloneRemote`
+  encrypted secrets; a blank secret retains it only for an unchanged host, effective
+  port, username and security), `TestStandaloneRemote`
   (authenticate + resolve folder scope + optional SMTP AUTH check, no mailbox
   mutation), `ResolveRemote`, `InstallRemoteBridges`.
 - **Folders:** live `DiscoverFolders`, `CreateRemoteFolder`,

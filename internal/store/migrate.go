@@ -264,6 +264,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("outbound_workflow", "send_attempt_state"),
 		)},
 		{version: "078", sql: migration078, detect: allOf(tableExists("empty_trash_operations"), tableExists("empty_trash_targets"))},
+		{version: "079", sql: `CREATE INDEX IF NOT EXISTS idx_send_requests_issued_token ON draft_send_requests(token_hash) WHERE token_hash<>'';`, detect: stateOf(indexExists("idx_send_requests_issued_token"))},
 	}
 }
 

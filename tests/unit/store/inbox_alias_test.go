@@ -21,7 +21,7 @@ func TestInboxAliasResolvePrecedenceAndCrossDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, target.ID, []store.AliasInput{
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, target.ID, []store.AliasInput{
 		{DomainID: d2.ID, LocalPart: "sales"},
 		{DomainID: d.ID, LocalPart: "info"},
 	}); err != nil {
@@ -66,7 +66,7 @@ func TestInboxAliasListedOnInbox(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	target := b[0]
-	if err := s.SetInboxAliases(ctx, u.AccountID, target.ID, []store.AliasInput{{DomainID: target.DomainID, LocalPart: "sales"}, {DomainID: target.DomainID, LocalPart: "billing"}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, target.ID, []store.AliasInput{{DomainID: target.DomainID, LocalPart: "sales"}, {DomainID: target.DomainID, LocalPart: "billing"}}); err != nil {
 		t.Fatal(err)
 	}
 	box, err := s.GetInboxInternal(ctx, u.AccountID, target.ID)
@@ -93,12 +93,12 @@ func TestInboxAliasRejectsCollisionsAndForeignScope(t *testing.T) {
 	s, u, d, b := testStore(t)
 
 	// An alias may not shadow a real mailbox on the same domain.
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: b[1].LocalPart}}); err == nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: b[1].LocalPart}}); err == nil {
 		t.Fatal("alias shadowing a mailbox was accepted")
 	}
 
 	// A real inbox may not shadow an existing alias.
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales"}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateInbox(ctx, u.AccountID, d.ID, "sales", ""); err == nil {
@@ -106,7 +106,7 @@ func TestInboxAliasRejectsCollisionsAndForeignScope(t *testing.T) {
 	}
 
 	// Duplicate aliases in one submission are rejected.
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{
 		{DomainID: d.ID, LocalPart: "dup"},
 		{DomainID: d.ID, LocalPart: "dup"},
 	}); err == nil {
@@ -122,12 +122,12 @@ func TestInboxAliasRejectsCollisionsAndForeignScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: od.ID, LocalPart: "foreign"}}); !errors.Is(err, store.ErrForbidden) {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{{DomainID: od.ID, LocalPart: "foreign"}}); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("foreign domain err=%v", err)
 	}
 
 	// A foreign inbox target is not found in the caller's account.
-	if err := s.SetInboxAliases(ctx, other.AccountID, b[0].ID, nil); !errors.Is(err, store.ErrNotFound) {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: other.AccountID, Admin: true}, b[0].ID, nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("foreign inbox err=%v", err)
 	}
 }
@@ -137,7 +137,7 @@ func TestInboxAliasDisabledTargetAndCascade(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	target := b[0]
-	if err := s.SetInboxAliases(ctx, u.AccountID, target.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales"}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, target.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,10 +174,10 @@ func TestInboxAliasValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "bad local"}}); err == nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "bad local"}}); err == nil {
 		t.Fatal("invalid local part accepted")
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: ""}}); err == nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: ""}}); err == nil {
 		t.Fatal("empty local part accepted")
 	}
 }

@@ -36,6 +36,20 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Strix security remediation (D133): alias writes now require account Admin in
+  both API and store; existing delegated aliases keep working. Standalone IMAP
+  and SMTP password retention is limited to an unchanged host, effective port,
+  username and security; changed endpoints require re-entry, SMTP no longer
+  inherits the IMAP secret, and binding/credential saves are atomic. Approval
+  classification recognizes issued tokens rather than arbitrary marker-shaped
+  text, and a separate managed approver inbox may receive its notification.
+  Transient events obey inbox visibility/filtering, Read-only inbox responses
+  omit the approver, account Remote MX receivers cannot cross account boundaries,
+  and relay demotion applies to already-open sockets. Migration 079 adds the
+  issued-token lookup index. Resend's sender-provenance limitation is documented
+  as an accepted Low risk requiring a live token; private outbound remains
+  enabled by default for self-hosting, with documentation corrected accordingly.
+
 - `APP_ENCRYPTION_KEY` is no longer required to start. When it is unset,
   MailMoose reads `<DATA_DIR>/encryption_key` and generates it (0600, 64 hex
   characters) on first start, logging the path so the operator can back it up.

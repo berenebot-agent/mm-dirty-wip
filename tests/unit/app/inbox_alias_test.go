@@ -24,7 +24,7 @@ func TestInboxAliasCrossDomainIngest(t *testing.T) {
 	// The alias's own domain carries the receiving provider that authenticates
 	// the delivery; the target inbox lives on a different domain.
 	seedInbound(t, svc, u.AccountID, aliasDomain.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
-	if err = svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: aliasDomain.ID, LocalPart: "sales"}}); err != nil {
+	if err = svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: aliasDomain.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,7 +54,7 @@ func TestInboxAliasDisabledTargetUnrouted(t *testing.T) {
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
-	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
+	if err := svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	disabled := false

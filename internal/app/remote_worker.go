@@ -1115,6 +1115,13 @@ func (w *RemoteWorker) classifyArrival(ctx context.Context, inbox model.Inbox, a
 	if HasHandoffHeader(raw) {
 		return false, false, nil
 	}
+	issued, cerr := w.svc.isApprovalControl(ctx, inbox, inbox.Address, parsed)
+	if cerr != nil {
+		return false, true, fmt.Errorf("classify remote approval: %w", cerr)
+	}
+	if !issued {
+		return false, false, nil
+	}
 	// Force detection of a pending email approval: the shared handler validates
 	// the live token and the nominated approver From address before acting, and
 	// consumes the control mail so it never becomes a message. A consumed control

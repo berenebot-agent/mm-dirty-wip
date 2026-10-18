@@ -1723,6 +1723,7 @@ func TestRemoteRebindResetsCachedState(t *testing.T) {
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
 	if _, err := rm.ConfigureStandaloneRemote(ctx, p, box.ID, store.StandaloneRemoteUpdate{
 		Host: "imap.other.example", Port: 993, Username: "other@example.test", Security: model.RemoteSecurityTLS,
+		IMAPPassword: "replacement-password",
 	}); err != nil {
 		t.Fatal(err)
 	}

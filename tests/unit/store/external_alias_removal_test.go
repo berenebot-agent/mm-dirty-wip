@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"github.com/dellarb/mailmoose/internal/model"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/store"
@@ -74,7 +75,7 @@ func TestManagedAliasesSurviveExternalAliasRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Sales"}}); err != nil {
+	if err := st.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetInboxInternal(ctx, u.AccountID, box.ID)

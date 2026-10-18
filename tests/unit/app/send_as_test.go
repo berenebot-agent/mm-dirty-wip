@@ -23,7 +23,7 @@ func TestSendAsAliasUsesAliasDomainAndName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "sales", DisplayName: "Acme Sales"}}); err != nil {
+	if err := svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "sales", DisplayName: "Acme Sales"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,7 +74,7 @@ func TestDraftFromFrozenInApproval(t *testing.T) {
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 
-	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Acme Sales"}}); err != nil {
+	if err := svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Acme Sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	draft, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, FromAddress: "sales@example.com", To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"})
@@ -89,7 +89,7 @@ func TestDraftFromFrozenInApproval(t *testing.T) {
 	}
 	// Renaming the alias after the request does not change the frozen draft, so
 	// the approval still matches and proceeds with the reviewed name.
-	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Other Name"}}); err != nil {
+	if err := svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Other Name"}}); err != nil {
 		t.Fatal(err)
 	}
 	refetched, err := svc.Store.GetDraft(ctx, p, draft.ID)

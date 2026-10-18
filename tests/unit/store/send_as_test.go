@@ -25,7 +25,7 @@ func TestResolveSendingTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{
 		{DomainID: d.ID, LocalPart: "sales", DisplayName: "Acme Sales"},
 		{DomainID: d2.ID, LocalPart: "billing"}, // no name -> falls back to inbox name
 	}); err != nil {
@@ -78,7 +78,7 @@ func TestResolveSendingTarget(t *testing.T) {
 	}
 
 	// Replacing the alias set without the default's alias clears it.
-	if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "billing"}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "billing"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetInboxInternal(ctx, u.AccountID, box.ID); err != nil || got.DefaultSender != "" {
@@ -99,7 +99,7 @@ func TestSendAsMessageRecordsSendingDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "sales"}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "sales@other.com")
@@ -151,11 +151,11 @@ func TestAliasDisplayNameValidation(t *testing.T) {
 	s, u, d, boxes := testStore(t)
 	box := boxes[0]
 	for _, bad := range []string{"a,b", "line\nbreak", "car\rriage", "ctrl\x01"} {
-		if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "x", DisplayName: bad}}); err == nil {
+		if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "x", DisplayName: bad}}); err == nil {
 			t.Fatalf("alias display name %q accepted", bad)
 		}
 	}
-	if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "x", DisplayName: "  Acme Sales  "}}); err != nil {
+	if err := s.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "x", DisplayName: "  Acme Sales  "}}); err != nil {
 		t.Fatal(err)
 	}
 	box, err := s.GetInboxInternal(ctx, u.AccountID, box.ID)

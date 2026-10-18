@@ -181,7 +181,7 @@ func (rt *remoteMXRuntime) applyAccount(accountID string, settings app.AccountMX
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	mgr := mxdial.New(rt.svc.RemoteMXBackend(), cfg)
+	mgr := mxdial.New(rt.svc.RemoteMXBackend(accountID), cfg)
 
 	rt.mu.Lock()
 	if rt.stopping {

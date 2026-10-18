@@ -223,20 +223,31 @@ func (s *Store) SetInboxKind(ctx context.Context, accountID, inboxID, kind strin
 // a standalone inbox. Both blobs are ciphertext produced by the caller under the
 // account/inbox AAD; the store never sees plaintext credentials.
 func (s *Store) SaveRemoteCredentials(ctx context.Context, accountID, inboxID, encryptedIMAP, encryptedSMTP string, expected ConfigVersion) error {
-	var kind string
-	err := s.read.QueryRowContext(ctx, `SELECT kind FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&kind)
-	if err == sql.ErrNoRows {
-		return ErrNotFound
-	}
+	inbox, err := s.GetInboxInternal(ctx, accountID, inboxID)
 	if err != nil {
 		return err
 	}
-	if kind != model.InboxKindStandalone {
+	return s.SaveStandaloneRemote(ctx, inbox, encryptedIMAP, encryptedSMTP, expected)
+}
+
+// SaveStandaloneRemote atomically replaces a binding and its ciphertexts. Every
+// binding write advances the credential revision, so stale saves cannot mix them.
+func (s *Store) SaveStandaloneRemote(ctx context.Context, inbox model.Inbox, encryptedIMAP, encryptedSMTP string, expected ConfigVersion) error {
+	if inbox.Kind != model.InboxKindStandalone {
 		return ErrStandaloneRequired
 	}
+	validated, err := validateRemoteConnection(inbox.Remote)
+	if err != nil {
+		return err
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	now := nowText()
-	res, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_credentials SET encrypted_imap=?,encrypted_smtp=?,revision=revision+1,updated_at=? WHERE inbox_id=? AND account_id=? AND revision=?`,
-		encryptedIMAP, encryptedSMTP, now, inboxID, accountID, expected.Revision)
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_remote_credentials SET encrypted_imap=?,encrypted_smtp=?,revision=revision+1,updated_at=? WHERE inbox_id=? AND account_id=? AND revision=?`,
+		encryptedIMAP, encryptedSMTP, now, inbox.ID, inbox.AccountID, expected.Revision)
 	if err != nil {
 		return err
 	}
@@ -248,17 +259,25 @@ func (s *Store) SaveRemoteCredentials(ctx context.Context, accountID, inboxID, e
 	if encryptedIMAP != "" {
 		configured = 1
 	}
-	if _, err = s.write.ExecContext(ctx, `UPDATE inboxes SET remote_configured=? WHERE id=? AND account_id=?`, configured, inboxID, accountID); err != nil {
+	var rhost, ruser, rsec, shost, suser, ssec string
+	var rport, sport int
+	if validated != nil {
+		rhost, rport, ruser, rsec = validated.Host, validated.Port, validated.Username, validated.Security
+		if validated.SMTP != nil {
+			shost, sport, suser, ssec = validated.SMTP.Host, validated.SMTP.Port, validated.SMTP.Username, validated.SMTP.Security
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET namespace=?,remote_host=?,remote_port=?,remote_username=?,remote_security=?,smtp_host=?,smtp_port=?,smtp_username=?,smtp_security=?,remote_configured=? WHERE id=? AND account_id=? AND kind='standalone'`,
+		inbox.Namespace, rhost, rport, ruser, rsec, shost, sport, suser, ssec, configured, inbox.ID, inbox.AccountID); err != nil {
 		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 // StandaloneRemoteUpdate is a partial update of a standalone inbox's remote
 // binding. Non-secret fields are whole values (empty means "leave unchanged" for
 // the optional SMTP block and namespace); the secret fields are optional and a
-// blank value retains the stored ciphertext, so an operator can change only the
-// host without re-entering the password.
+// blank value retains a secret only for an unchanged connection.
 type StandaloneRemoteUpdate struct {
 	Host         string
 	Port         int
@@ -279,13 +298,32 @@ type StandaloneRemoteUpdate struct {
 // inbox: the IMAP host/port/username/security, the optional SMTP binding, and the
 // selected root namespace. Empty optional fields are retained rather than cleared,
 // so a partial update never blanks a field the operator did not supply. It does not
-// touch the encrypted credentials (see SaveRemoteCredentials) and never changes the
-// inbox kind.
+// transfer retained credentials: a changed endpoint clears its old ciphertext.
+// It never changes the inbox kind.
 func (s *Store) UpdateStandaloneRemote(ctx context.Context, accountID, inboxID string, in StandaloneRemoteUpdate) (model.Inbox, error) {
-	inbox, err := s.GetInboxInternal(ctx, accountID, inboxID)
+	inbox, creds, err := s.GetStandaloneRemoteState(ctx, accountID, inboxID)
 	if err != nil {
 		return model.Inbox{}, err
 	}
+	updated, err := ResolveStandaloneRemoteUpdate(inbox, in)
+	if err != nil {
+		return model.Inbox{}, err
+	}
+	// A description-only writer cannot transfer a secret to a new endpoint.
+	if !SameIMAPBinding(inbox.Remote, updated.Remote) {
+		creds.EncryptedIMAP = ""
+	}
+	if !SameSMTPBinding(inbox.Remote, updated.Remote) {
+		creds.EncryptedSMTP = ""
+	}
+	if err := s.SaveStandaloneRemote(ctx, updated, creds.EncryptedIMAP, creds.EncryptedSMTP, ConfigVersion{Revision: creds.Revision}); err != nil {
+		return model.Inbox{}, err
+	}
+	return s.GetInboxInternal(ctx, accountID, inboxID)
+}
+
+// ResolveStandaloneRemoteUpdate merges and validates a candidate without writing.
+func ResolveStandaloneRemoteUpdate(inbox model.Inbox, in StandaloneRemoteUpdate) (model.Inbox, error) {
 	if inbox.Kind != model.InboxKindStandalone {
 		return model.Inbox{}, ErrStandaloneRequired
 	}
@@ -340,17 +378,45 @@ func (s *Store) UpdateStandaloneRemote(ctx context.Context, accountID, inboxID s
 	if validated == nil {
 		return model.Inbox{}, fmt.Errorf("remote host is required")
 	}
-	var rhost, ruser, rsec, shost, suser, ssec string
-	var rport, sport int
-	rhost, rport, ruser, rsec = validated.Host, validated.Port, validated.Username, validated.Security
-	if validated.SMTP != nil {
-		shost, sport, suser, ssec = validated.SMTP.Host, validated.SMTP.Port, validated.SMTP.Username, validated.SMTP.Security
+	inbox.Remote, inbox.Namespace = validated, namespace
+	return inbox, nil
+}
+
+func SameIMAPBinding(a, b *model.RemoteConnection) bool {
+	return a != nil && b != nil && a.Host == b.Host && a.Port == b.Port && a.Username == b.Username && a.Security == b.Security
+}
+
+func SameSMTPBinding(a, b *model.RemoteConnection) bool {
+	if a == nil || b == nil || a.SMTP == nil || b.SMTP == nil {
+		return (a == nil || a.SMTP == nil) && (b == nil || b.SMTP == nil)
 	}
-	if _, err = s.write.ExecContext(ctx, `UPDATE inboxes SET namespace=?,remote_host=?,remote_port=?,remote_username=?,remote_security=?,smtp_host=?,smtp_port=?,smtp_username=?,smtp_security=? WHERE id=? AND account_id=?`,
-		namespace, rhost, rport, ruser, rsec, shost, sport, suser, ssec, inboxID, accountID); err != nil {
-		return model.Inbox{}, err
+	return *a.SMTP == *b.SMTP
+}
+
+// GetStandaloneRemoteState reads the endpoint and credentials from one snapshot.
+func (s *Store) GetStandaloneRemoteState(ctx context.Context, accountID, inboxID string) (model.Inbox, RemoteCredentials, error) {
+	tx, err := s.read.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Inbox{}, RemoteCredentials{}, err
 	}
-	return s.GetInboxInternal(ctx, accountID, inboxID)
+	defer tx.Rollback()
+	inbox, _, err := scanFullInbox(tx.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID))
+	if err == sql.ErrNoRows {
+		err = ErrNotFound
+	}
+	if err != nil {
+		return inbox, RemoteCredentials{}, err
+	}
+	if inbox.Kind != model.InboxKindStandalone {
+		return inbox, RemoteCredentials{}, ErrStandaloneRequired
+	}
+	var c RemoteCredentials
+	err = tx.QueryRowContext(ctx, `SELECT inbox_id,account_id,encrypted_imap,encrypted_smtp,revision,created_at,updated_at FROM inbox_remote_credentials WHERE inbox_id=? AND account_id=?`, inboxID, accountID).
+		Scan(&c.InboxID, &c.AccountID, &c.EncryptedIMAP, &c.EncryptedSMTP, &c.Revision, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return inbox, c, err
+	}
+	return inbox, c, tx.Commit()
 }
 
 // RemoteCredentials is the encrypted credential material of a standalone inbox.

@@ -127,6 +127,13 @@ domain catch-all) and may be chosen as the From address when sending. Sending
 `[]` clears the set (and clears `default_sender` if it referenced a removed
 alias).
 
+Writing either `aliases` or `alias_names` requires **account Admin**, including
+clearing the set or changing only a display name. A forbidden alias write rejects
+the entire PATCH before any settings change. Owners may still send through
+existing Admin-created aliases, including aliases on another account-owned domain.
+Inbox list, detail and bootstrap responses omit `approver_email` for read-only
+principals; Assistant, Owner and Admin retain access to that field.
+
 `default_sender` (optional) is the full address compose/reply preselects as
 From — the primary `address` or one of `aliases`; `""` clears it to the primary.
 An invalid value is rejected. The response includes `default_sender` when set.
@@ -247,10 +254,15 @@ PUT /v1/inboxes/{id}/authoring
 - `PUT /remote` sets the binding (Owner/Admin). `security` is `tls` (default),
   `starttls` or `plain`; plain is an explicit per-inbox choice and is never
   auto-selected or silently downgraded. A blank password field retains the
-  stored value. It also sets `sent_copy_enabled` and an optional
+  stored value only when that protocol's host, effective port, username and
+  security are unchanged. Changing any of those requires re-entering its password.
+  SMTP never inherits the stored IMAP password. Connection settings and encrypted
+  credentials are saved atomically with revision checking. It also sets `sent_copy_enabled` and an optional
   `sent_copy_folder` for the remote Sent copy.
-- `POST /remote/test` authenticates and resolves the folder scope without
-  mutating mailbox state. `POST /remote/refresh` forces a reconcile pass and
+- `POST /remote/test` requires Owner/Admin and authenticates and resolves the folder scope without
+  mutating mailbox state. The same password-retention rule applies before dialing;
+  `smtp_password` supplies a candidate SMTP password and `clear_smtp` excludes SMTP
+  from the test. `POST /remote/refresh` forces a reconcile pass and
   returns the resulting index `status`.
 - `POST /remote/roles/{role}` maps a role: it returns the folder already
   carrying the role, or with `{"create":true}` creates the conventional folder;
@@ -1335,7 +1347,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes/{id}/labels | List legacy flat labels | read |
 | GET | /v1/inboxes/{id}/remote | Get a standalone inbox's remote configuration | read |
 | PUT | /v1/inboxes/{id}/remote | Configure a standalone inbox's remote connector (Owner/Admin) | owner |
-| POST | /v1/inboxes/{id}/remote/test | Test a standalone inbox's remote connector | read |
+| POST | /v1/inboxes/{id}/remote/test | Test a standalone inbox's remote connector (Owner/Admin) | owner |
 | POST | /v1/inboxes/{id}/remote/refresh | Reconcile a standalone inbox against its server (Assistant/Owner) | assistant |
 | POST | /v1/inboxes/{id}/remote/roles/{role} | Map or create a standalone inbox's special folder role (Assistant/Owner) | assistant |
 | GET | /v1/inboxes/{id}/authoring | Get an inbox's assistant authoring settings | read |
