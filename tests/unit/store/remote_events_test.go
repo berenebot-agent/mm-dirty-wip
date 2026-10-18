@@ -9,68 +9,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// TestMigration057RemoteEvents proves migration 057 adds the durable remote
-// event/detection surface on a genuinely fresh database.
-func TestMigration057RemoteEvents(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "057"); n != 1 {
-		t.Fatalf("migration 057 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	for _, table := range []string{"inbox_remote_cursors", "inbox_remote_arrivals", "inbox_remote_notifications", "inbox_remote_actions"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("table %s missing after 057", table)
-		}
-	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name='remote_notify_baseline_set'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("inboxes.remote_notify_baseline_set missing after 057")
-	}
-}
-
-func TestMigration065RemoteArrivalSources(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "065"); n != 1 {
-		t.Fatalf("migration 065 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	for _, column := range []struct{ table, name string }{
-		{"inbox_remote_arrivals", "source"},
-		{"microsoft_push", "requested_source"},
-	} {
-		var n int
-		query := `SELECT count(*) FROM pragma_table_info('` + column.table + `') WHERE name=?`
-		if err := db.QueryRowContext(ctx, query, column.name).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("%s.%s missing after migration 065", column.table, column.name)
-		}
-	}
-}
-
 // remoteEventEnv seeds a standalone inbox with a configured remote binding and a
 // credential so it is detectable.
 func remoteEventEnv(t *testing.T) (*store.Store, string, model.Inbox) {

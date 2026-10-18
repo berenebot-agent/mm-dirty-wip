@@ -284,9 +284,9 @@ func TestRemoteMetadataUpsertCapSentinel(t *testing.T) {
 	}
 }
 
-// TestInboxStorageUsedMatchesMaintainedCounter proves the read fallback (SUM)
-// equals the maintained counter after remote writes, exercising the SQL byte
-// definition end to end.
+// TestInboxStorageUsedMatchesMaintainedCounter proves the maintained inbox
+// counter equals the account counter after remote writes, exercising the SQL
+// byte definition end to end.
 func TestInboxStorageUsedMatchesMaintainedCounter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -309,19 +309,11 @@ func TestInboxStorageUsedMatchesMaintainedCounter(t *testing.T) {
 	if _, err := s.SetRemoteMessageLabels(ctx, acct, inboxID, msg.ID, []string{"x"}); err != nil {
 		t.Fatal(err)
 	}
-	// Read fallback: NULL the counter so InboxStorageUsed must SUM.
-	db := rawDB(t, s.Path())
-	if _, err := db.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=NULL WHERE id=?`, inboxID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	sum, err := s.InboxStorageUsed(ctx, acct, inboxID)
+	used, err := s.InboxStorageUsed(ctx, acct, inboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum != accountUsed(t, s, acct) {
-		t.Fatalf("read SUM=%d account counter=%d, want equal", sum, accountUsed(t, s, acct))
+	if used != accountUsed(t, s, acct) {
+		t.Fatalf("inbox counter=%d account counter=%d, want equal", used, accountUsed(t, s, acct))
 	}
 }

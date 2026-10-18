@@ -203,9 +203,10 @@ type Inbox struct {
 	// account cap still applies); 0 means explicitly unlimited; a positive
 	// value is the cap in bytes.
 	StorageQuotaBytes *int64 `json:"storage_quota_bytes,omitempty"`
-	// StorageUsedBytes is this inbox's maintained storage usage in bytes. It
-	// is 0 for a new inbox and, for a pre-migration inbox, is computed on the
-	// first read or write that needs it.
+	// StorageUsedBytes is this inbox's maintained storage usage in bytes. It is
+	// 0 for a new inbox and is kept current by every write; the baseline schema
+	// holds it NOT NULL with DEFAULT 0 (a migration backfills any pre-existing
+	// inbox once from its stored bytes).
 	StorageUsedBytes int64 `json:"storage_used_bytes"`
 	// AutoMarkReadOnDelivery, when set, marks a message read once a connector
 	// bound to this inbox has successfully delivered it. It is an agent/relay

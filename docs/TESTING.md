@@ -11,7 +11,7 @@ self-contained run folder under `tests/logs/runs/<run-id>/` and prints only a
 one-line-per-tier summary to stdout.
 
 ```bash
-./tests/run.sh                      # default preset: unit + vet + fmt (CI parity)
+./tests/run.sh                      # default preset: unit + vet + fmt + lint + js (CI parity)
 ./tests/run.sh --unit --vet         # pick specific tiers
 ./tests/run.sh --all                # every tier, including smoke
 ./tests/run.sh --smoke              # slow gated tests only (opt-in)
@@ -19,6 +19,9 @@ one-line-per-tier summary to stdout.
 ./tests/run.sh --prune --keep 20    # reclaim space (runs are kept in full by default)
 ./tests/run.sh --list               # list tiers and flags
 ```
+
+The default preset is the local CI-parity set — it includes the **lint** and
+**js** tiers as well as unit, vet and fmt. The `js` tier needs Node on the host.
 
 `make` targets route through the runner so logs are always captured:
 
@@ -39,17 +42,22 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `vet` | `go vet ./...` |
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
+| `js` | Antler dialog, DKIM toggle, copy-controls and empty-trash checks (`node tests/*.cjs`) |
 | `smoke` | slow gated tests with `MAILMOOSE_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
 in the default preset:
 
 - `TestBinaryHTTP2AndSMTP` — compiles and runs the real `dialmx/cmd/receiver`
-  binary and drives it over HTTP/2 and SMTP.
+  binary and drives it over HTTP/2 and SMTP. The local smoke tier runs only this
+  receiver package (`./tests/unit/dialmx/receiver/`).
 
 They gate on `tests/support/smoke.Require`, which skips unless
 `MAILMOOSE_SMOKE=1`. CI runs them as an explicit step so coverage is never
-silently lost.
+silently lost, and that step adds one thing the local tier does not:
+`internal/auth`'s gated production-cost Argon2 tests
+(`MAILMOOSE_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
+Run that command directly if you need the auth smoke locally.
 
 ## Run folder layout
 
@@ -149,8 +157,8 @@ downloadable without re-running.
   storage quota enforcement).
 - Prefer the smallest tier that would catch a regression.
 - Tests that need a database should use `tests/support/testdb`, which hands out
-  isolated stores backed by a migrated template instead of replaying every
-  migration per fixture. Do **not** use it in tests that assert migration
+  isolated stores backed by a once-migrated template instead of applying the
+  baseline per fixture. Do **not** use it in tests that assert schema/baseline
   behaviour or need a genuinely fresh database.
 - Deliberately slow tests belong behind `tests/support/smoke.Require` so they
   run only in the `smoke` tier.

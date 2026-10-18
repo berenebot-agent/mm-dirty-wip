@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Pre-release data needs a one-time offline conversion.** The database is now
+  described by a single owned public baseline instead of a chain of 80
+  pre-release migrations, and several retired tables, columns and indexes are
+  gone (`api_keys`, `api_key_mailbox_roles`, `hermes_connections`, the obsolete
+  inbox index, and the private approval-handoff columns). An installation
+  created before the public beta is converted by a separate offline utility
+  (`docker build --target prerelease-rebaseline`) with the application stopped;
+  the server refuses a pre-release database rather than half-upgrading it. The
+  conversion is transactional, keeps all mail, credentials and configuration,
+  and has a documented backup and rollback path — see
+  [Pre-release database transition](docs/PRERELEASE_TRANSITION.md). Separately,
+  the core no longer imports the legacy MX environment: the receiver is
+  configured only by the persisted Admin → MX receiver settings.
+
 - The Antler MX setup wizard now offers Remove receiving as soon as it has
   stored the domain's receiving configuration. The receiving dialog's footer
   danger block is drawn (hidden) for every domain, so a setup started from

@@ -1,18 +1,11 @@
 // Package testdb hands out isolated store.Store instances for tests without
-// paying the full migration bootstrap on every fixture.
+// initializing the public schema on every fixture.
 //
-// Background: store.Open runs the whole migration chain (baseline + the
-// versioned migrations), each step its own transaction, marker check and
-// detector query. A test package with a per-test fixture (httpFixture,
-// testService, testStore) therefore pays that cost hundreds of times, and it
-// dominates the package's wall time.
-//
-// BuildTemplate migrates one database once per test binary, into a scratch dir,
+// BuildTemplate initializes one database once per test binary, into a scratch dir,
 // and consolidates it to a single file with VACUUM INTO (so no -wal/-shm side
 // files need copying). Open then copies that template into the test's own temp
-// dir and calls store.Open: every migration sees an already-populated
-// schema_migrations row, so each step is a marker SELECT that skips, with no
-// DDL and no commits.
+// dir and calls store.Open, which validates the public lineage and schema without
+// replaying DDL or changing migration metadata.
 //
 // Do not use this helper in tests that assert migration behaviour or need a
 // genuinely fresh database (fresh-migrate checks, pre-upgrade fixtures); those

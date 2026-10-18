@@ -9,42 +9,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-// Legacy ciphertext keeps its original AAD during the SQL-only upgrade. Each
-// row owns its copy; later key replacement uses inbox-specific AAD. No shared
-// credential record or cascade dependency remains.
-const migration067 = `
-CREATE TABLE inbox_one_bindings_new (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- connection_id TEXT NOT NULL, encrypted_connection_key TEXT NOT NULL,
- encrypted_key TEXT NOT NULL, key_aad TEXT NOT NULL, fingerprint TEXT NOT NULL,
- rate_group TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
- gmail_email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', last_error TEXT NOT NULL DEFAULT '',
- last_checked_at TEXT NOT NULL DEFAULT '', UNIQUE(account_id,connection_id)
-);
-INSERT INTO inbox_one_bindings_new
- SELECT b.inbox_id,b.account_id,b.connection_id,b.encrypted_connection_key,
- a.encrypted_key,'one_account:'||a.account_id||':'||a.id,a.fingerprint,a.id,a.revision,
- b.gmail_email,b.status,b.last_error,b.last_checked_at
- FROM inbox_one_bindings b JOIN one_accounts a ON a.id=b.one_account_id;
-DROP TABLE inbox_one_bindings;
-ALTER TABLE inbox_one_bindings_new RENAME TO inbox_one_bindings;
-DROP TABLE one_accounts;
-CREATE TABLE one_import_setups (
- id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- encrypted_key TEXT NOT NULL, fingerprint TEXT NOT NULL, expires_at TEXT NOT NULL
-);
-`
-
-// Revalidate auto-named inboxes so the next sync can resolve the actual sender
-// name. Never rewrite a custom name or fetch provider data during migration.
-const migration068 = `UPDATE inbox_one_bindings SET last_checked_at=''
- WHERE EXISTS(SELECT 1 FROM inboxes i WHERE i.id=inbox_one_bindings.inbox_id AND i.account_id=inbox_one_bindings.account_id AND (i.display_name=i.address OR i.display_name=i.address||' · Gmail via One'));
-UPDATE inboxes SET display_name=address
- WHERE kind='standalone' AND display_name=address||' · Gmail via One'
- AND EXISTS(SELECT 1 FROM inbox_one_bindings b WHERE b.inbox_id=inboxes.id AND b.account_id=inboxes.account_id);`
-
 type OneImportSetup struct {
 	ID, AccountID, UserID, EncryptedKey, Fingerprint string
 }

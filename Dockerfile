@@ -11,15 +11,16 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose ./cmd/server
-# The optional MX edge is built into the same image so the embedded mode
-# (MX_ENABLE=true) can spawn it. The remote deployment uses the
-# separate, minimal mailmoose-mx image instead (Dockerfile.mx), and selects it
-# with MX_ENABLE=remote.
+# The optional included MX edge is managed through persisted receiver settings.
+# Remote receivers use the separate, minimal image in Dockerfile.mx.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./dialmx/cmd/receiver
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-rebaseline ./cmd/prerelease-rebaseline
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime-base
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 && rm -rf /var/lib/apt/lists/*
 
 # The image has no USER: it boots as root so the in-process privilege drop can
@@ -29,10 +30,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 ARG MAILMOOSE_UID=65532
 ARG MAILMOOSE_GID=65532
 RUN mkdir -p /data && chown ${MAILMOOSE_UID}:${MAILMOOSE_GID} /data
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
 
+# Explicit offline maintenance image; historical conversion is not in the server.
+FROM runtime-base AS prerelease-rebaseline
+COPY --from=build /out/mailmoose-rebaseline /usr/local/bin/mailmoose-rebaseline
+VOLUME ["/data"]
+ENTRYPOINT ["/usr/local/bin/mailmoose-rebaseline"]
+
+FROM runtime-base AS runtime
 COPY --from=build /out/mailmoose /usr/local/bin/mailmoose
 COPY --from=build /out/mailmoose-mx /usr/local/bin/mailmoose-mx
-COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
 VOLUME ["/data"]
 EXPOSE 8081 8082
 ENTRYPOINT ["/usr/local/bin/mailmoose"]

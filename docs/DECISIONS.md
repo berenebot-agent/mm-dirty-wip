@@ -139,6 +139,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D132: The first public MX session protocol is v1](#d132-the-first-public-mx-session-protocol-is-v1)
 - [D133: Strix remediation: delegated authority, destination-bound secrets and approval delivery](#d133-strix-remediation-delegated-authority-destination-bound-secrets-and-approval-delivery)
 - [D134: A settled receiver refusal is an error state, not a retry](#d134-a-settled-receiver-refusal-is-an-error-state-not-a-retry)
+- [D135: The public database baseline replaces the pre-release migration lineage](#d135-the-public-database-baseline-replaces-the-pre-release-migration-lineage)
 
 ---
 
@@ -1268,6 +1269,10 @@ an outbound message.
 
 ## D046 — Atomic migration runner (BUG-04)
 
+> **Superseded by D135.** The historical migration runner and its
+> `internal/store/schema.go` migration constants are removed. The public
+> database is now a single baseline owned by `internal/dbschema`.
+
 Schema migrations and their `schema_migrations` marker are applied in one
 transaction on a pinned connection. Migrations that rebuild a table set
 `PRAGMA foreign_keys=OFF` outside the transaction and run
@@ -1678,6 +1683,10 @@ it is enforced before the first request rather than after it.
   found inside the trust set is logged at WARN").
 
 ## D062 — Unified clients and webhook delivery
+
+> **Superseded in part by D135.** The client tables remain current; the legacy
+> `api_keys` / `api_key_mailbox_roles` / `hermes_connections` tables are no
+> longer retained or dual-written — the public baseline drops them.
 
 **Context:** The product had two consumer kinds for an inbox: account-scoped API
 keys (pull, with per-mailbox roles) and inbox-bound Hermes relay connections
@@ -2099,6 +2108,11 @@ authentication policy and durable delivery semantics.
 
 ## D071 — MX receiver configuration is persisted and reconciled at runtime
 
+> **Superseded in part by D135.** The persisted `mx_settings` singleton and the
+> runtime reconciliation remain current. The one-time import of `MX_ENABLE`,
+> `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and the `MX_*` environment described
+> below is removed: the persisted receiver settings are authoritative.
+
 **Requirement:** The installation-wide MX receiver must be configurable from the
 system-administrator UI/API and survive restarts, instead of being fixed by the
 process environment (`MX_ENABLE`, `MX_RECEIVER_URL`, `DIALMX_CORE_KEY`). The
@@ -2469,6 +2483,11 @@ maintenance step reusing the existing event path and file-unlink flow, optional
 endpoint). No new dependency or service.
 
 ## D079 — Per-inbox storage quotas
+
+> **Superseded in part by D135.** `storage_used_bytes` is `NOT NULL DEFAULT 0`
+> in the public baseline; the "lazily initialized / NULL" counter path below
+> applies only to the pre-release lineage, whose NULL counters the one-time
+> conversion materialises. The quota model itself is unchanged.
 
 **Decision:** An inbox carries an optional storage cap layered on top of the
 existing account-level quota. It bounds **stored bytes** for one inbox so a
@@ -4924,6 +4943,10 @@ Additions should preserve the canonical mailbox/event model.
 
 ## D121 — Remote-draft mode just places the draft: no notification, no approver, no handoff UI
 
+> **Superseded in part by D135.** The unused `notification_status` /
+> `notification_message_id` columns on `assistant_handling_requests` are
+> dropped by the public baseline; the rest of this decision stands.
+
 **Date:** 2026-10-13. **Approved by:** Ben.
 
 **Context:** A standalone inbox in `remote_draft` mode is meant to do one thing: an
@@ -5436,3 +5459,72 @@ serving this core", not a credential the operator edits in MailMoose.
 status, three reason tokens and the state mapping in `mxdial`; label and mapping
 updates on the four status surfaces. No new dependency, schema, migration, config
 or behaviour: nothing gates delivery, auth or the retry loop on these states.
+
+## D135 — The public database baseline replaces the pre-release migration lineage
+
+**Requirement:** Cut the pre-beta consolidation before the public beta. The
+database had grown to 80 migrations; several carried tables, columns and indexes
+that were retired during development but were still physically present, and the
+live schema could not be described by a single owned baseline. The change must
+not lose stored mail, credentials or configuration, and must not be an
+implicit, half-applied upgrade an operator only discovers at startup.
+
+**Decision:**
+
+- **One owned public baseline.** `internal/dbschema` owns the complete schema
+  as `baseline.sql`, applied as the single migration `001` in one serializable
+  transaction, recorded in `schema_migrations` and marked by
+  `PRAGMA user_version=1`. `Format = 1` distinguishes the public `001` from the
+  historical pre-release `001`. The package pins a fingerprint of the whole DDL
+  (including FTS5 shadow structures) and validates a database against it before
+  use; drift is refused, never repaired.
+- **The historical runner is removed.** The per-migration constants, detector
+  runner and the `internal/store/schema.go` / `migrate*.go` code are deleted;
+  `internal/store` calls `dbschema.Migrate` on its pinned writer connection.
+  Provider runtime code that was reached from those files is preserved.
+  Supersedes D046.
+- **Retired objects are dropped from the public schema:** the legacy
+  `api_keys`, `api_key_mailbox_roles` and `hermes_connections` tables (the
+  `clients` family replaced them at migration 032 — supersedes the "retained and
+  dual-written" part of D062), the obsolete `idx_inboxes_id_account` index, and
+  the private handoff columns `notification_status` /
+  `notification_message_id` on `assistant_handling_requests`.
+- **`inboxes.storage_used_bytes` is `NOT NULL DEFAULT 0`.** Conversion
+  materialises only the counters that are `NULL`, using the frozen `080`
+  accounting (messages, drafts, draft attachments, remote metadata rows,
+  remote folders and labels) so a converted inbox reports the same usage the old build
+  would have, then rebuilds `inboxes` with `NOT NULL` and preserves every other
+  column.
+- **Conversion is explicit and offline.** A separate utility,
+  `cmd/prerelease-rebaseline` (packaged with `--target prerelease-rebaseline`,
+  never copied into the normal runtime image), takes exactly one of `--check` or
+  `--apply` and an existing `--data-dir` (default `/data`). It requires the
+  exact pre-release markers `001`–`080` plus the captured `080` structural
+  fingerprint, and refuses a non-Argon2id active password or live non-`v2`
+  ciphertext rather than migrating them; there is no support for arbitrary older
+  chains. `--apply` is fully transactional: it disables foreign keys outside
+  the `BEGIN IMMEDIATE`, restores them, and validates schema, integrity and
+  foreign keys before committing. It leaves FTS untouched and retains all active
+  ids, ciphertext, roles, events, event sequence and mail files. An
+  already-converted database is validated and left alone by both modes. The
+  utility reads no encryption key, changes no mail-content/key files and does
+  no network, sweep or environment-import work. Operator procedure, backup and rollback live in
+  `docs/PRERELEASE_TRANSITION.md`.
+- **The core's MX environment import is removed.** The persisted `mx_settings`
+  row is the sole authoritative receiver configuration; the legacy `MX_ENABLE`,
+  `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and `MX_*` SMTP tunables are no longer
+  imported or validated. Supersedes the import half of D071. The standalone
+  receiver's own environment and the active MX receipt retention are unchanged.
+- **Compatibility that stays.** The public API aliases and shapes (openagent
+  aliases, the notify authoring fields, flat labels/cursors, durable cleanup,
+  receiver signing secrets, uncertainty/idempotency handling and privacy
+  redaction) are retained.
+
+**Reason:** A single locked baseline makes the public schema describable, keeps
+the fingerprint meaningful, and turns a lineage change into a deliberate offline
+action instead of a startup surprise. Dropping the retired objects removes the
+historical migration and redundant credential-persistence baggage.
+
+**Complexity:** One schema package with a baseline, a small offline utility, and
+deletion of the historical runner and the retired tables. No new dependency,
+runtime service or infrastructure.

@@ -2087,8 +2087,8 @@ func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 // the verification and is used by tests and callers outside the worker.
 //
 // Safety contract: a message whose provider send was started but never resolved
-// is never resent automatically. The store's durable pre-send marker (see
-// migration077) is armed before the provider call and is cleared only by a
+// is never resent automatically. The store's durable pre-send marker is armed
+// before the provider call and is cleared only by a
 // definitive outcome (MarkSent/MarkFailed) or by an explicit operator action, so
 // a crash, a lease expiry or a failed outcome write leaves the message held for
 // operator review rather than requeued.

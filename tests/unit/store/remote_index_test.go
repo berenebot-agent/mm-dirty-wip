@@ -9,49 +9,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// TestMigration056RemoteIndex proves migration 056 adds the remote-index columns,
-// the local-label table and the sent-copy queue on a genuinely fresh database.
-func TestMigration056RemoteIndex(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "056"); n != 1 {
-		t.Fatalf("migration 056 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	for _, col := range []string{"is_answered", "is_draft", "flags_json", "internal_date", "indexed_at"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inbox_remote_messages') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inbox_remote_messages.%s missing after 056", col)
-		}
-	}
-	for _, col := range []string{"remote_index_status", "remote_indexed_at", "remote_index_error"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inboxes.%s missing after 056", col)
-		}
-	}
-	for _, table := range []string{"inbox_remote_labels", "remote_sent_copies"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("table %s missing after 056", table)
-		}
-	}
-}
-
 // TestRemoteIndexAndLabels proves remote metadata reconcile, folder validity,
 // labels and sent-copy durability.
 func TestRemoteIndexAndLabels(t *testing.T) {
@@ -238,80 +195,6 @@ func TestRemoteFolderPruneKeepsFoldersWithMessages(t *testing.T) {
 	}
 	if msgs, _ := st.ListRemoteMessages(ctx, acct, in.ID, "Archive"); len(msgs) != 1 {
 		t.Fatalf("empty discovery pruned cached messages: %d", len(msgs))
-	}
-}
-
-// TestMigration058RoleLockAndSentCopy proves migration 058 adds the role-lock and
-// sent-copy columns and the notification-message-id column on a fresh database.
-func TestMigration058RoleLockAndSentCopy(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "058"); n != 1 {
-		t.Fatalf("migration 058 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	for _, col := range []string{"role_locked", "backfill_before_uid", "backfill_complete"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inbox_folders') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inbox_folders.%s missing after 058", col)
-		}
-	}
-	for _, col := range []string{"remote_sent_copy_enabled", "remote_sent_copy_folder"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inboxes.%s missing after 058", col)
-		}
-	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('assistant_handling_requests') WHERE name='notification_message_id'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("assistant_handling_requests.notification_message_id missing after 058")
-	}
-}
-
-// TestMigration060RemoteSyncColumns proves the per-inbox sync-cadence columns are
-// added and round-trip through SetInboxRemoteSync and a full-inbox read.
-func TestMigration060RemoteSyncColumns(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "060"); n != 1 {
-		t.Fatalf("migration 060 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	for _, col := range []string{"remote_poll_seconds", "remote_full_sync_minutes"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inboxes.%s missing after 060", col)
-		}
-	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inbox_folders') WHERE name='remote_highest_modseq'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("inbox_folders.remote_highest_modseq missing after 060")
 	}
 }
 

@@ -390,7 +390,7 @@ curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
 
 # A RemoteDraft handoff is one-way to the connected remote Drafts folder. The
 # history retains terminal records (published, ambiguous, failed/cancelled) even
-# after the local draft is cleaned up, and reports publication and notification
-# independently.
+# after the local draft is cleaned up. A handoff never queues a notification
+# email, so it reports publication state only.
 curl -sS -H "Authorization: Bearer $KEY" \
-  "$BASE/v1/inboxes/$INBOX/handoffs" | jq '{handoffs: [.items[] | {draft_id, publication, notification_status, remote_folder, last_error}]}'
+  "$BASE/v1/inboxes/$INBOX/handoffs" | jq '{handoffs: [.items[] | {draft_id, publication, remote_folder, last_error}]}'

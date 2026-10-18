@@ -9,19 +9,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-const migration078 = `
-CREATE TABLE empty_trash_operations (
- action_id TEXT PRIMARY KEY REFERENCES inbox_message_actions(id) ON DELETE CASCADE,
- phase TEXT NOT NULL DEFAULT 'discovering', folder TEXT NOT NULL DEFAULT '',
- cursor TEXT NOT NULL DEFAULT '', uid_validity INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE empty_trash_targets (
- operation_id TEXT NOT NULL REFERENCES empty_trash_operations(action_id) ON DELETE CASCADE,
- target_id TEXT NOT NULL, target_json TEXT NOT NULL, child_id TEXT NOT NULL DEFAULT '',
- PRIMARY KEY(operation_id,target_id)
-);
-CREATE INDEX idx_empty_trash_children ON empty_trash_targets(child_id);`
-
 // TrashTarget is a frozen purge locator. It does not require a metadata cache
 // row, so cache quotas/backfill cannot silently limit provider-side emptying.
 type TrashTarget struct {

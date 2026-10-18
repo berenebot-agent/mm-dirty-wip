@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-const migration069 = `CREATE TABLE inbox_metadata_sync (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- state TEXT NOT NULL DEFAULT 'waiting', phase TEXT NOT NULL DEFAULT 'initial',
- total INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
-);`
-
 // MetadataSyncSnapshot stores only safe operator status, never provider errors
 // or credentials. Indexed is the current durable row count, not attempted fetches.
 type MetadataSyncSnapshot struct {

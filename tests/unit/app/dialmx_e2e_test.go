@@ -50,7 +50,7 @@ func dialMXDomain(t *testing.T, name, local string) (*dialMXCore, model.Inbox) {
 		AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901",
 		MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour,
 		LoginLimitPerMinute: 10, SendLimitPerMinute: 60, InboundConcurrency: 8,
-		MXReceiveEnabled: true, MXReceiptRetention: time.Hour,
+		MXReceiptRetention: time.Hour,
 	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
@@ -332,7 +332,6 @@ func TestDialMXEndToEndFanoutRetry(t *testing.T) {
 	beA := &scriptedBackend{Backend: coreA.svc.DialMXBackend()}
 	beB := &scriptedBackend{Backend: coreB.svc.DialMXBackend()}
 	beB.failNext = true
-	coreB.svc.Config.MXReceiveEnabled = false
 	local, err := coreA.svc.Store.CreateDomain(context.Background(), coreA.user.AccountID, "local.example.com")
 	if err != nil {
 		t.Fatal(err)

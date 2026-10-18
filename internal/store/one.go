@@ -6,55 +6,6 @@ import (
 	"time"
 )
 
-// Historical migration retained unchanged. Migration 067 removes its shared
-// credentials and replaces the binding schema with inbox-owned credentials.
-const migration066 = `
-CREATE TABLE inbox_gmail_sync (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- history_id TEXT NOT NULL DEFAULT '', backfill_page TEXT NOT NULL DEFAULT '',
- backfill_done INTEGER NOT NULL DEFAULT 0, sync_generation TEXT NOT NULL DEFAULT '',
- backfill_offset INTEGER NOT NULL DEFAULT 0, backfill_snapshot TEXT NOT NULL DEFAULT ''
-);
-INSERT INTO inbox_gmail_sync(inbox_id,account_id,history_id,backfill_page,backfill_done,sync_generation)
- SELECT inbox_id,account_id,history_id,backfill_page,backfill_done,sync_generation FROM inbox_google_connections;
-CREATE TABLE one_accounts (
- id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
- encrypted_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
- revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active',
- last_validated_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- UNIQUE(account_id,owner_user_id), UNIQUE(id,account_id)
-);
-CREATE TABLE inbox_one_bindings (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- one_account_id TEXT NOT NULL, connection_id TEXT NOT NULL, encrypted_connection_key TEXT NOT NULL,
- gmail_email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', last_error TEXT NOT NULL DEFAULT '',
- last_checked_at TEXT NOT NULL DEFAULT '',
- FOREIGN KEY(one_account_id,account_id) REFERENCES one_accounts(id,account_id) ON DELETE CASCADE,
- UNIQUE(one_account_id,connection_id)
-);
-CREATE TABLE gmail_history_pages (
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- purpose TEXT NOT NULL CHECK(purpose IN ('sync','detection')),
- anchor TEXT NOT NULL, page_token TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '',
- item_offset INTEGER NOT NULL DEFAULT 0,
- PRIMARY KEY(inbox_id,purpose)
-);
-`
-
-// Migration 070 records an optional history horizon for a One/Google inbox's
-// progressive metadata backfill. An empty value keeps the unbounded behaviour;
-// a YYYY-MM-DD value stops the backfill walk at that Gmail search boundary.
-const migration070 = `ALTER TABLE inbox_gmail_sync ADD COLUMN backfill_after TEXT NOT NULL DEFAULT '';`
-
-// Migration 080 counts consecutive authorization failures for each One binding.
-// One transient rejection must not mark an inbox unavailable, so the binding is
-// flagged only once the count reaches OneFailureThreshold, and a confirmed
-// revalidation clears it. The default backfills existing rows to "no failures".
-const migration080 = `ALTER TABLE inbox_one_bindings ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0;`
-
 // OneFailureThreshold is how many consecutive authorization failures a One
 // binding may record before it is marked unavailable.
 const OneFailureThreshold = 3

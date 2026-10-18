@@ -318,7 +318,7 @@ func (rt *mxRuntime) applyIncluded(ctx context.Context, s app.MXReceiverSettings
 	}
 	hostname := s.Hostname
 	if hostname == "" {
-		hostname = edgeHostname()
+		hostname = "mailmoose-mx"
 	}
 	// The included edge must never advertise a message limit larger than the
 	// core ingest path accepts. When the core cap is known, clamp to the smaller

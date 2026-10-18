@@ -568,19 +568,20 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured,i.remote_sent_copy_enabled,i.remote_sent_copy_folder,i.remote_poll_seconds,i.remote_full_sync_minutes`
 
 // scanFullInbox reads one row projected by fullInboxSelectCols. It resolves the
-// address and remote description and never queries further tables. storageKnown
-// reports whether the storage_used_bytes counter is populated (a NULL counter
-// means the inbox predates migration 047 and must be recomputed on read).
-func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, error) {
+// address and remote description and never queries further tables. The
+// storage_used_bytes counter is NOT NULL in the baseline schema, so it scans
+// straight into the model.
+func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, error) {
 	var i model.Inbox
 	var domain, allowed, created, ns, rhost, ruser, rsec, shost, suser, ssec, sentCopyFolder string
 	var enabled, restricted, requireAuth, autoMarkRead, remoteConfigured, sentCopyEnabled int
 	var rport, sport int
 	var domainID sql.NullString
-	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
+	var trashRetention, autoTrashHours, storageQuota sql.NullInt64
+	var storageUsed int64
 	var remotePollSeconds, remoteFullSyncMinutes sql.NullInt64
 	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured, &sentCopyEnabled, &sentCopyFolder, &remotePollSeconds, &remoteFullSyncMinutes); err != nil {
-		return model.Inbox{}, false, err
+		return model.Inbox{}, err
 	}
 	i.DomainID = domainID.String
 	if i.Kind == model.InboxKindStandalone {
@@ -614,9 +615,7 @@ func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, erro
 		quota := storageQuota.Int64
 		i.StorageQuotaBytes = &quota
 	}
-	if storageUsed.Valid {
-		i.StorageUsedBytes = storageUsed.Int64
-	}
+	i.StorageUsedBytes = storageUsed
 	if autoTrashHours.Valid {
 		hours := int(autoTrashHours.Int64)
 		i.AutoTrashAfterDeliveryHours = &hours
@@ -630,7 +629,7 @@ func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, erro
 		i.RemoteFullSyncMinutes = &v
 	}
 	i.CreatedAt = parseTime(created)
-	return i, storageUsed.Valid, nil
+	return i, nil
 }
 
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
@@ -655,14 +654,10 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	}
 	defer rows.Close()
 	out := []model.Inbox{}
-	inboxInitialized := map[string]bool{}
 	for rows.Next() {
-		i, storageKnown, scanErr := scanFullInbox(rows)
+		i, scanErr := scanFullInbox(rows)
 		if scanErr != nil {
 			return nil, scanErr
-		}
-		if storageKnown {
-			inboxInitialized[i.ID] = true
 		}
 		out = append(out, i)
 	}
@@ -670,18 +665,6 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		return nil, err
 	}
 	rows.Close()
-	for i := range out {
-		// A NULL counter means the inbox predates migration 047 and has not been
-		// written since. Compute its live usage for display without persisting,
-		// so the advertised number already equals what enforcement would use.
-		if !inboxInitialized[out[i].ID] {
-			used, uerr := s.recomputeInboxStorage(ctx, p.AccountID, out[i].ID)
-			if uerr != nil {
-				return nil, uerr
-			}
-			out[i].StorageUsedBytes = used
-		}
-	}
 	if len(out) > 0 {
 		aliases, aerr := s.ListInboxAliases(ctx, p.AccountID)
 		if aerr != nil {
@@ -741,20 +724,12 @@ func redactInbox(p model.Principal, i *model.Inbox) {
 	}
 }
 func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (model.Inbox, error) {
-	i, storageKnown, err := scanFullInbox(s.read.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID))
+	i, err := scanFullInbox(s.read.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID))
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
 	if err != nil {
 		return i, err
-	}
-	if !storageKnown {
-		// A pre-migration inbox: show live usage without persisting.
-		used, uerr := s.recomputeInboxStorage(ctx, accountID, id)
-		if uerr != nil {
-			return i, uerr
-		}
-		i.StorageUsedBytes = used
 	}
 	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name,a.display_name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
 	if err != nil {
@@ -909,53 +884,15 @@ func (s *Store) SetInboxStorageQuota(ctx context.Context, accountID, inboxID str
 	return nil
 }
 
-// InboxStorageUsed returns an inbox's current storage usage in bytes. It reads
-// the maintained counter, falling back to a live SUM (messages, drafts and
-// draft attachments) for an inbox whose counter has not yet been initialized by
-// a write, so the display is correct for pre-migration data.
+// InboxStorageUsed returns an inbox's maintained storage usage in bytes. The
+// counter is maintained by every write and is NOT NULL in the baseline schema.
 func (s *Store) InboxStorageUsed(ctx context.Context, accountID, inboxID string) (int64, error) {
-	var used sql.NullInt64
-	if err := s.read.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&used); err != nil {
-		if err == sql.ErrNoRows {
-			return 0, ErrNotFound
-		}
-		return 0, err
+	var used int64
+	err := s.read.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&used)
+	if err == sql.ErrNoRows {
+		return 0, ErrNotFound
 	}
-	if used.Valid {
-		return used.Int64, nil
-	}
-	return s.recomputeInboxStorage(ctx, accountID, inboxID)
-}
-
-// recomputeInboxStorage sums every byte attributable to an inbox: its message
-// rows (all directions and states), its draft bodies and its draft attachment
-// files. It is the read-side equivalent of recomputeInboxStorageTx.
-func (s *Store) recomputeInboxStorage(ctx context.Context, accountID, inboxID string) (int64, error) {
-	var total int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&total); err != nil {
-		return 0, err
-	}
-	var draftBodies int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(LENGTH(CAST(text_body AS BLOB))+LENGTH(CAST(html_body AS BLOB))),0) FROM drafts WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&draftBodies); err != nil {
-		return 0, err
-	}
-	var draftAtts int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(da.size_bytes),0) FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id WHERE d.account_id=? AND d.inbox_id=?`, accountID, inboxID).Scan(&draftAtts); err != nil {
-		return 0, err
-	}
-	var remoteMessages int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&remoteMessages); err != nil {
-		return 0, err
-	}
-	var remoteFolders int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote'`, accountID, inboxID).Scan(&remoteFolders); err != nil {
-		return 0, err
-	}
-	var remoteLabels int64
-	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&remoteLabels); err != nil {
-		return 0, err
-	}
-	return total + draftBodies + draftAtts + remoteMessages + remoteFolders + remoteLabels, nil
+	return used, err
 }
 
 // SetInboxAllowedSenders replaces an inbox's allowed-senders allowlist. An

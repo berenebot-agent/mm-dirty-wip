@@ -18,8 +18,6 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -255,124 +253,6 @@ func (f *fakeEdge) calls() (configures, deactivates int, active bool) {
 	return len(f.configure), f.deactivate, f.active
 }
 
-// TestImportLegacyMXSettings covers the one-time environment transition.
-func TestImportLegacyMXSettings(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc := newTestService(t)
-
-	// No environment and no stored row: nothing is written, so a later
-	// deliberate environment change can still be imported.
-	importLegacyMXSettings(ctx, svc, config.Config{}, testLogger())
-	if initialized, err := svc.Store.MXSettingsInitialized(ctx); err != nil || initialized {
-		t.Fatalf("unexpected initialization: %v, %v", initialized, err)
-	}
-
-	// A legacy embedded environment imports as included with a generated key
-	// and preserves an explicit verification choice.
-	verifyDKIM := false
-	cfg := config.Config{MXImport: config.MXReceiverImport{Set: true, Mode: "included", VerifyDKIM: &verifyDKIM}}
-	importLegacyMXSettings(ctx, svc, cfg, testLogger())
-	got, err := svc.MXReceiverSettingsForRuntime(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Mode != app.MXModeIncluded || got.BearerKey == "" || !got.KeyConfigured {
-		t.Fatalf("imported included = %+v", got)
-	}
-	if !got.VerifySPFEnabled() || got.VerifyDKIMEnabled() || !got.VerifyDMARCEnabled() {
-		t.Fatalf("imported verification toggles = %+v", got)
-	}
-
-	// A second run with a different environment is ignored: the stored row wins,
-	// even when the environment is partial or stale.
-	cfg2 := config.Config{MXImport: config.MXReceiverImport{Set: true, Mode: "remote", ReceiverURL: "https://r.example", CoreKey: "new-key"}, MXReceiverURL: "https://r.example", MXCoreKey: "new-key"}
-	importLegacyMXSettings(ctx, svc, cfg2, testLogger())
-	again, err := svc.MXReceiverSettingsForRuntime(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.Mode != app.MXModeIncluded || again.BearerKey != got.BearerKey {
-		t.Fatalf("environment overrode stored settings: %+v", again)
-	}
-}
-
-// TestImportLegacyIncludedTunablesAndTLS verifies the one-time import carries
-// every legacy included SMTP tunable and reads the STARTTLS files into the
-// persisted PEM pair.
-func TestImportLegacyIncludedTunablesAndTLS(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc := newTestService(t)
-	certPEM, keyPEM := tlsTestPair(t)
-	certFile := writeTempFile(t, certPEM)
-	keyFile := writeTempFile(t, keyPEM)
-	requireTLS := true
-	verifyDKIM := false
-
-	importLegacyMXSettings(ctx, svc, config.Config{MXImport: config.MXReceiverImport{
-		Set: true, Mode: "included",
-		Hostname: "legacy.mx", MaxMessageBytes: 2 << 20, MaxStagingBytes: 5 << 20,
-		MaxRecipients: 40, MaxConnections: 90, RequireTLS: &requireTLS, VerifyDKIM: &verifyDKIM,
-		DNSResolver: "1.1.1.1:53", DNSTimeoutSeconds: 9, ReadTimeoutSeconds: 11,
-		WriteTimeoutSeconds: 12, DataTimeoutSeconds: 300,
-		TLSCertFile: certFile, TLSKeyFile: keyFile,
-	}}, testLogger())
-
-	got, err := svc.MXReceiverSettingsForRuntime(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Hostname != "legacy.mx" || got.MaxMessageBytes != 2<<20 || got.MaxStagingBytes != 5<<20 ||
-		got.MaxRecipients != 40 || got.MaxConnections != 90 {
-		t.Fatalf("limits not imported: %+v", got)
-	}
-	if !got.RequireTLSEnabled() || got.VerifyDKIMEnabled() || got.DNSResolver != "1.1.1.1:53" ||
-		got.DNSTimeoutSeconds != 9 || got.ReadTimeoutSeconds != 11 || got.WriteTimeoutSeconds != 12 || got.DataTimeoutSeconds != 300 {
-		t.Fatalf("tunables not imported: %+v", got)
-	}
-	if got.SMTPTLSCert != strings.TrimSpace(certPEM) || got.SMTPTLSKey != strings.TrimSpace(keyPEM) || !got.SMTPTLSKeyConfigured {
-		t.Fatal("legacy STARTTLS pair not imported")
-	}
-}
-
-// TestImportLegacyUnusableTLSFilesAbortsImport verifies a partial or unreadable
-// legacy STARTTLS pair aborts the whole import rather than silently persisting a
-// receiver without TLS: no row is written, so the core keeps running
-// unconfigured for the operator to fix.
-func TestImportLegacyUnusableTLSFilesAbortsImport(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	for name, imp := range map[string]config.MXReceiverImport{
-		"missing files":    {Set: true, Mode: "included", TLSCertFile: "/nonexistent/cert.pem", TLSKeyFile: "/nonexistent/key.pem"},
-		"cert only":        {Set: true, Mode: "included", TLSCertFile: "/nonexistent/cert.pem"},
-		"key only":         {Set: true, Mode: "included", TLSKeyFile: "/nonexistent/key.pem"},
-		"cert real no key": {Set: true, Mode: "included", TLSCertFile: writeTempFile(t, "x")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc := newTestService(t)
-			importLegacyMXSettings(ctx, svc, config.Config{MXImport: imp}, testLogger())
-			if initialized, err := svc.Store.MXSettingsInitialized(ctx); err != nil || initialized {
-				t.Fatalf("unusable TLS should leave no row: initialized=%v err=%v", initialized, err)
-			}
-		})
-	}
-}
-
-// TestImportLegacyPartialRemoteRejectedOnce verifies a partial remote
-// environment is rejected only when it is actually imported, and never blocks a
-// deployment whose settings are already persisted.
-func TestImportLegacyPartialRemoteRejectedOnce(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc := newTestService(t)
-	// A remote mode with no key must not create a row.
-	importLegacyMXSettings(ctx, svc, config.Config{MXImport: config.MXReceiverImport{Set: true, Mode: "remote", ReceiverURL: "https://r.example"}}, testLogger())
-	if initialized, err := svc.Store.MXSettingsInitialized(ctx); err != nil || initialized {
-		t.Fatalf("partial remote import created a row: %v, %v", initialized, err)
-	}
-}
-
 // TestTLSConfigFromPEM verifies the runtime TLS hook: system roots by default,
 // a custom pool for a valid bundle, and a hard error for non-PEM input.
 func TestTLSConfigFromPEM(t *testing.T) {
@@ -510,6 +390,26 @@ func TestMXRuntimeActiveConfigUpdate(t *testing.T) {
 		t.Fatalf("verification toggles not defaulted on: %+v", last.SMTP)
 	}
 	rt.shutdown()
+}
+
+func TestIncludedReceiverIgnoresLegacyHostnameEnv(t *testing.T) {
+	// Serial: this test changes process-global environment.
+	t.Setenv("MX_HOSTNAME", "obsolete.example.test")
+	ctx := context.Background()
+	svc := newTestService(t)
+	edge := &fakeEdge{}
+	rt := newMXRuntime(svc, edge, testLogger())
+	svc.MXRuntime = rt
+	defer rt.shutdown()
+	if _, err := svc.SaveMXReceiverSettings(ctx, model.Principal{SystemAdmin: true}, app.MXReceiverInput{Mode: app.MXModeIncluded}); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	edge.mu.Lock()
+	defer edge.mu.Unlock()
+	if len(edge.configure) != 1 || edge.configure[0].Hostname != "mailmoose-mx" || edge.configure[0].SMTP.Hostname != "mailmoose-mx" {
+		t.Fatalf("legacy environment changed persisted receiver settings: %+v", edge.configure)
+	}
 }
 
 // TestMXRuntimeForwardsIncludedSMTPFields verifies every persisted included SMTP
@@ -664,7 +564,7 @@ func TestMXRuntimeChildExitForcesRetry(t *testing.T) {
 }
 
 // tlsTestPair returns a valid self-signed certificate and PKCS#8 private key as
-// PEM text, for the STARTTLS import tests.
+// PEM text, for the STARTTLS forwarding test.
 func tlsTestPair(t *testing.T) (string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -689,16 +589,6 @@ func tlsTestPair(t *testing.T) (string, string) {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
 		string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
-}
-
-// writeTempFile writes content to a temp file and returns its path.
-func writeTempFile(t *testing.T, content string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "file.pem")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 // testSelfSignedPEM returns a syntactically valid self-signed certificate PEM,

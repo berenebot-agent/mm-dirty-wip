@@ -400,7 +400,7 @@ func (s *Store) GetStandaloneRemoteState(ctx context.Context, accountID, inboxID
 		return model.Inbox{}, RemoteCredentials{}, err
 	}
 	defer tx.Rollback()
-	inbox, _, err := scanFullInbox(tx.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID))
+	inbox, err := scanFullInbox(tx.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID))
 	if err == sql.ErrNoRows {
 		err = ErrNotFound
 	}
@@ -451,7 +451,7 @@ func (s *Store) ListStandaloneInboxes(ctx context.Context, accountID string) ([]
 	defer rows.Close()
 	out := []model.Inbox{}
 	for rows.Next() {
-		i, _, scanErr := scanFullInbox(rows)
+		i, scanErr := scanFullInbox(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}

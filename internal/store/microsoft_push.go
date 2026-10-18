@@ -6,22 +6,6 @@ import (
 	"time"
 )
 
-// No inbox FK: retain the encrypted grant until a removed inbox's upstream
-// subscription has been deleted (or expired). There is no message content here.
-const migration062 = `
-CREATE TABLE microsoft_push (
- inbox_id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
- subscription_id TEXT NOT NULL DEFAULT '', encrypted_state TEXT NOT NULL,
- state_hash TEXT NOT NULL, callback_url TEXT NOT NULL,
- expires_at TEXT NOT NULL DEFAULT '', retry_at TEXT NOT NULL DEFAULT '',
- status TEXT NOT NULL DEFAULT 'setting up',
- requested INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0,
- lifecycle TEXT NOT NULL DEFAULT '',
- client_id TEXT NOT NULL, tenant TEXT NOT NULL, encrypted_token TEXT NOT NULL
-);
-CREATE UNIQUE INDEX microsoft_push_subscription ON microsoft_push(subscription_id) WHERE subscription_id<>'';
-`
-
 type MicrosoftPush struct {
 	AccountID, InboxID, SubscriptionID, EncryptedState, StateHash, CallbackURL string
 	Status, Lifecycle, ClientID, Tenant, EncryptedToken, RequestedSource       string

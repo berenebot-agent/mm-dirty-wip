@@ -7,38 +7,6 @@ import (
 	"time"
 )
 
-const migration059 = `
-CREATE TABLE inbox_google_connections (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- client_id TEXT NOT NULL, encrypted_secret TEXT NOT NULL, encrypted_token TEXT NOT NULL,
- expires_at TEXT NOT NULL, history_id TEXT NOT NULL DEFAULT '', backfill_page TEXT NOT NULL DEFAULT '',
- backfill_done INTEGER NOT NULL DEFAULT 0
- ,sync_generation TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE google_message_ids (
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- message_id TEXT NOT NULL REFERENCES inbox_remote_messages(id) ON DELETE CASCADE,
- provider_id TEXT NOT NULL, thread_id TEXT NOT NULL, labels_json TEXT NOT NULL DEFAULT '[]',
- sync_generation TEXT NOT NULL DEFAULT '',
- PRIMARY KEY(inbox_id,provider_id), UNIQUE(message_id)
-);
-CREATE TABLE google_label_memberships (
- message_id TEXT NOT NULL REFERENCES inbox_remote_messages(id) ON DELETE CASCADE,
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- label_id TEXT NOT NULL,
- PRIMARY KEY(message_id,label_id)
-);
-CREATE INDEX idx_google_label_memberships ON google_label_memberships(inbox_id,label_id,message_id);
-CREATE TABLE google_oauth_attempts (
- state_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- user_id TEXT NOT NULL, inbox_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL,
- client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, encrypted_pending TEXT NOT NULL,
- expires_at TEXT NOT NULL
-);
-CREATE TABLE google_detection (inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,history_id TEXT NOT NULL);
-`
-
 type GoogleConnection struct {
 	InboxID, AccountID, ClientID, EncryptedSecret, EncryptedToken string
 	ExpiresAt                                                     time.Time

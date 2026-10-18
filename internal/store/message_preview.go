@@ -8,11 +8,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-// Existing messages retain an empty preview; only new writes generate one.
-const migration072 = `ALTER TABLE messages ADD COLUMN snippet TEXT NOT NULL DEFAULT '';
-ALTER TABLE inbox_remote_messages ADD COLUMN snippet_pending INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX remote_snippet_pending ON inbox_remote_messages(snippet_pending,created_at,id) WHERE snippet_pending=1;`
-
 func cacheLocalPreview(ctx context.Context, tx *sql.Tx, id, text, markup string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE messages SET snippet=? WHERE id=?`, messagepreview.FromBodies(text, markup), id)
 	return err

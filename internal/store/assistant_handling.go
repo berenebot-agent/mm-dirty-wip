@@ -32,9 +32,8 @@ func (s *Store) inboxAuthoring(ctx context.Context, accountID, inboxID string) (
 type InboxAuthoringSettings struct {
 	// Mode is the effective authoring mode (see model.Authoring* constants).
 	Mode string
-	// NotifyAddress is the effective address notifications are sent to. When the
-	// stored override is blank this is the inbox's own connected address, so a
-	// notification always has a destination.
+	// NotifyAddress is retained authoring metadata, defaulting to the connected
+	// address. RemoteDraft handoffs never send notifications.
 	NotifyAddress string
 	// NotifyOverridden reports whether an explicit per-inbox notify address is
 	// set (as opposed to the blank default that follows the connected address).
@@ -71,10 +70,7 @@ func (s *Store) inboxAuthoringSettingsInternal(ctx context.Context, accountID, i
 	return out, nil
 }
 
-// connectedAddress returns the address MailMoose sends notifications from and to
-// for an inbox when no explicit notify override is set: the inbox's own primary
-// address (the standalone connected address, or the domain inbox's managed
-// address).
+// connectedAddress supplies the default returned by the authoring metadata.
 func (s *Store) connectedAddress(ctx context.Context, accountID, inboxID string) string {
 	var address string
 	if err := s.read.QueryRowContext(ctx, `SELECT address FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&address); err != nil {
@@ -110,8 +106,8 @@ func (s *Store) SetInboxAuthoringMode(ctx context.Context, p model.Principal, in
 	return nil
 }
 
-// SetInboxNotifyAddress sets the per-inbox default notification address. A blank
-// value clears the override so notifications follow the connected address.
+// SetInboxNotifyAddress stores the retained authoring address metadata. A blank
+// value clears the override; this setting does not cause notifications.
 func (s *Store) SetInboxNotifyAddress(ctx context.Context, p model.Principal, inboxID, address string) error {
 	if !p.CanOwn(inboxID) {
 		return ErrForbidden
@@ -176,13 +172,13 @@ type AssistantHandlingInsert struct {
 
 // handlingColumns projects every assistant_handling_requests column, in the order
 // scanAssistantHandling reads them.
-const handlingColumns = `id,account_id,inbox_id,draft_id,mode,content_hash,handoff_id,message_id,remote_folder,raw_path,size_bytes,publication,remote_uid,notification_status,attempts,last_error,requested_at,published_at,created_at,updated_at,notification_message_id`
+const handlingColumns = `id,account_id,inbox_id,draft_id,mode,content_hash,handoff_id,message_id,remote_folder,raw_path,size_bytes,publication,remote_uid,attempts,last_error,requested_at,published_at,created_at,updated_at`
 
 func scanAssistantHandling(row interface{ Scan(...any) error }) (model.AssistantHandlingRequest, error) {
 	var r model.AssistantHandlingRequest
 	var accountID, rawPath, requested, created, updated string
 	var published sql.NullString
-	err := row.Scan(&r.ID, &accountID, &r.InboxID, &r.DraftID, &r.Mode, &r.ContentHash, &r.HandoffID, &r.MessageID, &r.RemoteFolder, &rawPath, &r.SizeBytes, &r.Publication, &r.RemoteUID, &r.NotificationStatus, &r.Attempts, &r.LastError, &requested, &published, &created, &updated, &r.NotificationMessageID)
+	err := row.Scan(&r.ID, &accountID, &r.InboxID, &r.DraftID, &r.Mode, &r.ContentHash, &r.HandoffID, &r.MessageID, &r.RemoteFolder, &rawPath, &r.SizeBytes, &r.Publication, &r.RemoteUID, &r.Attempts, &r.LastError, &requested, &published, &created, &updated)
 	if err == sql.ErrNoRows {
 		return r, ErrNotFound
 	}
@@ -280,8 +276,8 @@ func (s *Store) CreateAssistantHandling(ctx context.Context, p model.Principal, 
 	if ins.ID == "" {
 		ins.ID = idgen.New("dsh")
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO assistant_handling_requests(id,account_id,inbox_id,draft_id,mode,content_hash,handoff_id,message_id,remote_folder,raw_path,size_bytes,publication,remote_uid,notification_status,attempts,last_error,requested_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ins.ID, p.AccountID, ins.InboxID, ins.DraftID, ins.Mode, ins.ContentHash, ins.HandoffID, ins.MessageID, ins.RemoteFolder, ins.RawPath, ins.SizeBytes, model.HandoffPending, 0, model.NotificationNone, 0, "", now, now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO assistant_handling_requests(id,account_id,inbox_id,draft_id,mode,content_hash,handoff_id,message_id,remote_folder,raw_path,size_bytes,publication,remote_uid,attempts,last_error,requested_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ins.ID, p.AccountID, ins.InboxID, ins.DraftID, ins.Mode, ins.ContentHash, ins.HandoffID, ins.MessageID, ins.RemoteFolder, ins.RawPath, ins.SizeBytes, model.HandoffPending, 0, 0, "", now, now, now); err != nil {
 		return model.AssistantHandlingRequest{}, nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusPendingApproval, now, ins.DraftID, p.AccountID); err != nil {

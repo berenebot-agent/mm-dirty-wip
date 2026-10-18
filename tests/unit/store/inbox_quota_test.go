@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -140,60 +139,45 @@ func TestInboxQuotaChargesDrafts(t *testing.T) {
 	}
 }
 
-// TestInboxQuotaLazyInitFromSum proves an inbox row whose counter is NULL (as
-// an upgraded install would have) is initialized from its existing stored bytes
-// on the first adjustment, then enforced.
-func TestInboxQuotaLazyInitFromSum(t *testing.T) {
+// TestInboxQuotaCounterMaintainedInDB proves the inbox counter is physically
+// maintained in the inboxes row: writes accumulate on the stored column, the
+// baseline schema holds the column NOT NULL, and the API read matches it.
+func TestInboxQuotaCounterMaintainedInDB(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
 
-	// Simulate a pre-migration inbox: write a message through the normal path,
-	// then NULL the counter out from under it.
-	rec := inbound(box, "lazy-1", "<lazy-1@test>", "", nil, "Legacy", "x")
+	rec := inbound(box, "cnt-1", "<cnt-1@test>", "", nil, "Keep", "x")
 	rec.SizeBytes = 40
 	if _, _, _, err := s.CommitInbound(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
 	db := rawDB(t, s.Path())
-	if _, err := db.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=NULL WHERE id=?`, box.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// The display read falls back to the SUM without persisting.
-	used, err := s.InboxStorageUsed(ctx, u.AccountID, box.ID)
-	if err != nil {
+	defer db.Close()
+	var used int64
+	if err := db.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=?`, box.ID).Scan(&used); err != nil {
 		t.Fatal(err)
 	}
 	if used != 40 {
-		t.Fatalf("lazy display used = %d, want 40", used)
+		t.Fatalf("inbox counter column = %d, want 40", used)
 	}
-
-	// Set a cap below existing usage plus a new message; the check must see the
-	// SUM (40) and reject.
-	quota := int64(50)
-	setInboxQuota(t, s, u.AccountID, box.ID, &quota)
-	more := inbound(box, "lazy-2", "<lazy-2@test>", "", nil, "More", "x")
-	more.SizeBytes = 20
-	if _, _, _, err := s.CommitInbound(ctx, more); !errors.Is(err, store.ErrQuota) {
-		t.Fatalf("lazy init should have rejected: %v", err)
+	// The baseline schema is NOT NULL: writing NULL is a constraint violation.
+	if _, err := db.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=NULL WHERE id=?`, box.ID); err == nil {
+		t.Fatal("storage_used_bytes must reject NULL in the baseline schema")
 	}
-	// After a successful small write the counter is persisted and authoritative.
-	tiny := inbound(box, "lazy-3", "<lazy-3@test>", "", nil, "Tiny", "x")
-	tiny.SizeBytes = 5
-	if _, _, _, err := s.CommitInbound(ctx, tiny); err != nil {
+	// A further write accumulates on the maintained counter.
+	more := inbound(box, "cnt-2", "<cnt-2@test>", "", nil, "More", "x")
+	more.SizeBytes = 5
+	if _, _, _, err := s.CommitInbound(ctx, more); err != nil {
 		t.Fatal(err)
 	}
-	used, err = s.InboxStorageUsed(ctx, u.AccountID, box.ID)
+	got, err := s.InboxStorageUsed(ctx, u.AccountID, box.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if used != 45 {
-		t.Fatalf("inbox used after init+write = %d, want 45", used)
+	if got != 45 {
+		t.Fatalf("inbox used = %d, want 45", got)
 	}
 }
 
@@ -229,70 +213,53 @@ func TestSetInboxStorageQuotaValidation(t *testing.T) {
 	}
 }
 
-// TestInboxQuotaMigrationFreshAndUpgrade proves migration 047 adds the nullable
-// inbox storage columns on both a fresh database and an upgrade from the v012
-// fixture, and that the upgraded counter starts NULL so lazy init can run.
-func TestInboxQuotaMigrationFreshAndUpgrade(t *testing.T) {
-	t.Parallel()
-	t.Run("fresh", func(t *testing.T) {
-		st, err := store.Open(t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer st.Close()
-		if n := markerCount(t, st, "047"); n != 1 {
-			t.Fatalf("migration 047 marker count %d", n)
-		}
-		if !columnPresent(t, st, "inboxes", "storage_quota_bytes") || !columnPresent(t, st, "inboxes", "storage_used_bytes") {
-			t.Fatal("inbox quota columns missing after fresh migrate")
-		}
-	})
-	t.Run("upgrade-v012", func(t *testing.T) {
-		dir := newV012(t)
-		seedV012(t, dir)
-		st, err := store.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer st.Close()
-		if n := markerCount(t, st, "047"); n != 1 {
-			t.Fatalf("migration 047 marker count %d", n)
-		}
-		db := rawDB(t, st.Path())
-		defer db.Close()
-		var used sql.NullInt64
-		if err := db.QueryRowContext(context.Background(), `SELECT storage_used_bytes FROM inboxes WHERE id='inbA'`).Scan(&used); err != nil {
-			t.Fatal(err)
-		}
-		if used.Valid {
-			t.Fatalf("upgraded inbox counter should be NULL, got %d", used.Int64)
-		}
-	})
-}
-
-// TestInboxQuotaPurgeFromUninitializedCounter proves purging a message from an
-// inbox whose counter is still NULL (a pre-migration inbox) initializes it
-// first, so the refund does not clobber the remaining usage to zero.
-func TestInboxQuotaPurgeFromUninitializedCounter(t *testing.T) {
+// TestInboxStorageBaselineDefaults proves the baseline schema's public contract:
+// a new inbox starts at a zero maintained counter with no per-inbox cap, and an
+// explicit 0 quota is stored as "explicitly unlimited" rather than cleared.
+func TestInboxStorageBaselineDefaults(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
-	// Two messages, then NULL the counter to simulate a pre-migration inbox.
-	for i, d := range []string{"u1", "u2"} {
+
+	got, err := s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StorageUsedBytes != 0 {
+		t.Fatalf("new inbox counter = %d, want 0", got.StorageUsedBytes)
+	}
+	if got.StorageQuotaBytes != nil {
+		t.Fatalf("new inbox quota = %v, want nil (no cap)", got.StorageQuotaBytes)
+	}
+
+	// An explicit 0 is stored as "explicitly unlimited", distinct from nil.
+	zero := int64(0)
+	setInboxQuota(t, s, u.AccountID, box.ID, &zero)
+	got, err = s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StorageQuotaBytes == nil || *got.StorageQuotaBytes != 0 {
+		t.Fatalf("explicit zero quota = %v, want 0", got.StorageQuotaBytes)
+	}
+}
+
+// TestInboxQuotaPurgeMaintainsColumn proves purging a message decrements the
+// maintained inbox column itself, so the counter stays authoritative without
+// any read-time recompute.
+func TestInboxQuotaPurgeMaintainsColumn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	// Two messages, then purge one; the column must reflect the refund.
+	for _, d := range []string{"u1", "u2"} {
 		rec := inbound(box, d, "<"+d+"@test>", "", nil, "S", "x")
 		rec.SizeBytes = 30
-		_ = i
 		if _, _, _, err := s.CommitInbound(ctx, rec); err != nil {
 			t.Fatal(err)
 		}
-	}
-	db := rawDB(t, s.Path())
-	if _, err := db.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=NULL WHERE id=?`, box.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	msgs, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
@@ -308,11 +275,13 @@ func TestInboxQuotaPurgeFromUninitializedCounter(t *testing.T) {
 	if _, _, _, err := s.PurgeMessage(ctx, p, msgs[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	used, err := s.InboxStorageUsed(ctx, u.AccountID, box.ID)
-	if err != nil {
+	db := rawDB(t, s.Path())
+	defer db.Close()
+	var used int64
+	if err := db.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=?`, box.ID).Scan(&used); err != nil {
 		t.Fatal(err)
 	}
 	if used != 30 {
-		t.Fatalf("inbox used after purge from NULL counter = %d, want 30", used)
+		t.Fatalf("inbox counter column after purge = %d, want 30", used)
 	}
 }

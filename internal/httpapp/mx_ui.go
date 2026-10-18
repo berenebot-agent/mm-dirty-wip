@@ -136,7 +136,7 @@ const mxReceiverSection = `<div class="mx-editor">
 <label>Certificate (PEM, public)</label><textarea name="smtp_tls_cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----">{{.MXForm.SMTPTLSCert}}</textarea>
 <label>Private key (PEM)</label><textarea name="smtp_tls_key" rows="4" autocomplete="off" placeholder="{{if .MXForm.SMTPTLSKeyConfigured}}Leave blank to keep the stored private key{{else}}-----BEGIN PRIVATE KEY-----{{end}}"></textarea>
 <p class="muted small">The private key is never shown again. A blank field keeps the stored key.</p></details></div>
-<p class="muted small">Existing <code>MX_ENABLE</code>/<code>MX_RECEIVER_URL</code>/<code>DIALMX_CORE_KEY</code> and the legacy <code>MX_*</code> SMTP settings are imported once on first start; after that these settings are authoritative and the environment is ignored.</p>
+<p class="muted small">Receiver settings are stored in the database and managed here; they are authoritative and legacy MX environment variables are no longer read at startup.</p>
 </div>`
 
 // uiAdminMXSave handles the domain MX form submission. It validates through the

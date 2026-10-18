@@ -8,7 +8,7 @@
 # use --last for the newest one.
 #
 # Usage:
-#   ./tests/run.sh                      # default preset: unit + vet + fmt + js (CI parity)
+#   ./tests/run.sh                      # default preset: unit + vet + fmt + lint + js
 #   ./tests/run.sh --unit --vet         # pick specific tiers
 #   ./tests/run.sh --all                # every tier
 #   ./tests/run.sh --smoke              # slow gated tests only (opt-in)

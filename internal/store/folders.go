@@ -12,9 +12,8 @@ import (
 )
 
 // This file is the local/domain custom-folder surface. It reuses the shared
-// inbox_folders table (introduced for standalone mailboxes in migration 052)
-// for BOTH inbox kinds. Folders are a single hierarchical tree per inbox; a
-// message belongs to exactly one folder (messages.mailbox_id), and labels remain
+// inbox_folders table for BOTH inbox kinds. Folders are a single hierarchical
+// tree per inbox; a message belongs to exactly one folder (messages.mailbox_id), and labels remain
 // independent free-text message metadata that is never a folder.
 //
 // Ownership: the store owns folder rows and single-folder membership. The remote

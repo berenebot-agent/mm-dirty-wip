@@ -18,139 +18,6 @@ import (
 // InboundAddr is the default address of the dedicated inbound webhook listener.
 const InboundAddr = ":8082"
 
-// MXMode is the user-facing direct-SMTP (MX) switch.
-type MXMode string
-
-const (
-	// MXOff disables MX: no ingress endpoints, no edge.
-	MXOff MXMode = "false"
-	// MXLocal ("true") enables MX and embeds the edge in this container as a
-	// separate-uid child process. It is the default-on form of the switch.
-	MXLocal MXMode = "true"
-	// MXRemote enables MX for an edge that runs as a separate container/host and
-	// authenticates with an operator-supplied bearer key.
-	MXRemote MXMode = "remote"
-)
-
-// MXReceiverImport is the legacy environment MX configuration, carried so
-// cmd/server can perform a single one-time import into the persisted
-// mx_settings row. Once the row exists it is never consulted again.
-type MXReceiverImport struct {
-	// Set reports whether MX_ENABLE named a non-off receiver mode, so there is
-	// something to import.
-	Set bool
-	// Mode is the imported receiver mode: "included" for the embedded edge,
-	// "remote" for a separate edge.
-	Mode string
-	// ReceiverURL and CoreKey are the legacy remote endpoint and shared key.
-	ReceiverURL string
-	CoreKey     string
-	// VerifySPF/DKIM/DMARC carry the legacy included-edge verification toggles
-	// (MX_VERIFY_*), so an operator who disabled one keeps that choice after the
-	// import. They are nil when unset, which the importer resolves to the
-	// default (on).
-	VerifySPF   *bool
-	VerifyDKIM  *bool
-	VerifyDMARC *bool
-
-	// The remaining included-edge SMTP tunables, read from the legacy MX_*
-	// environment. Zero/nil means "unset", which the importer maps to the child
-	// default. They are only populated for included mode.
-	Hostname            string
-	MaxMessageBytes     int64
-	MaxStagingBytes     int64
-	MaxRecipients       int
-	MaxConnections      int
-	RequireTLS          *bool
-	DNSResolver         string
-	DNSTimeoutSeconds   int
-	ReadTimeoutSeconds  int
-	WriteTimeoutSeconds int
-	DataTimeoutSeconds  int
-	// TLSCertPEM/TLSKeyPEM are the contents of the legacy MX_TLS_CERT/MX_TLS_KEY
-	// files, read once at import. Reading is deferred to the importer (not Load)
-	// so a missing file only matters on the single import that uses it.
-	TLSCertFile string
-	TLSKeyFile  string
-}
-
-// parseMXMode maps the MX_ENABLE value to a mode. It accepts false/off for off,
-// true/local/on for the embedded edge, and remote for a separate edge; it
-// rejects anything unrecognised so a typo does not silently disable MX.
-func parseMXMode(raw string) (MXMode, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "false", "off", "0", "no":
-		return MXOff, nil
-	case "true", "local", "on", "1", "yes":
-		return MXLocal, nil
-	case "remote":
-		return MXRemote, nil
-	default:
-		return MXOff, fmt.Errorf("MX_ENABLE must be false, true or remote, got %q", raw)
-	}
-}
-
-// mxImport derives the one-time import from the parsed mode. Only a non-off
-// MX_ENABLE produces an import; embedded mode carries no secret (the core
-// generates one), while remote mode carries the operator URL and key.
-func mxImport(mode MXMode) MXReceiverImport {
-	if mode == MXOff {
-		return MXReceiverImport{}
-	}
-	imp := MXReceiverImport{
-		Set:         true,
-		ReceiverURL: strings.TrimRight(env("MX_RECEIVER_URL", ""), "/"),
-		CoreKey:     strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")),
-	}
-	if mode == MXLocal {
-		imp.Mode = string(MXModeIncludedSetting)
-		imp.VerifySPF = envBoolPtr("MX_VERIFY_SPF")
-		imp.VerifyDKIM = envBoolPtr("MX_VERIFY_DKIM")
-		imp.VerifyDMARC = envBoolPtr("MX_VERIFY_DMARC")
-		imp.RequireTLS = envBoolPtr("MX_REQUIRE_TLS")
-		imp.Hostname = strings.TrimSpace(os.Getenv("MX_HOSTNAME"))
-		imp.MaxMessageBytes = envInt64("MX_MAX_MESSAGE_BYTES", 0)
-		imp.MaxStagingBytes = envInt64("MX_STAGING_BYTES", 0)
-		imp.MaxRecipients = envInt("MX_MAX_RECIPIENTS", 0)
-		imp.MaxConnections = envInt("MX_MAX_CONNECTIONS", 0)
-		imp.DNSResolver = strings.TrimSpace(os.Getenv("MX_DNS_RESOLVER"))
-		imp.DNSTimeoutSeconds = envInt("MX_DNS_TIMEOUT_SECONDS", 0)
-		imp.ReadTimeoutSeconds = envInt("MX_READ_TIMEOUT_SECONDS", 0)
-		imp.WriteTimeoutSeconds = envInt("MX_WRITE_TIMEOUT_SECONDS", 0)
-		imp.DataTimeoutSeconds = envInt("MX_DATA_TIMEOUT_SECONDS", 0)
-		// Paths only; the importer reads the files once so a later missing file
-		// cannot fail startup.
-		imp.TLSCertFile = strings.TrimSpace(os.Getenv("MX_TLS_CERT"))
-		imp.TLSKeyFile = strings.TrimSpace(os.Getenv("MX_TLS_KEY"))
-		return imp
-	}
-	imp.Mode = string(MXModeRemoteSetting)
-	return imp
-}
-
-// envBoolPtr parses an optional boolean environment variable, returning nil when
-// it is unset or unrecognised so the caller can apply its own default. It is the
-// tri-state form of envBool and is used only for the import path.
-func envBoolPtr(name string) *bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		v := true
-		return &v
-	case "0", "false", "no", "off":
-		v := false
-		return &v
-	}
-	return nil
-}
-
-// Persisted receiver mode names. They live in the store package as the mx_settings
-// values; config mirrors the two literals it can import so the transition does
-// not require config to import store (which would be a cycle).
-const (
-	MXModeIncludedSetting = "included"
-	MXModeRemoteSetting   = "remote"
-)
-
 type Config struct {
 	ListenAddr              string
 	BaseURL                 string
@@ -234,34 +101,13 @@ type Config struct {
 	// cancelled).
 	ApprovalExpiryHours int
 	WebhookRetryWindow  time.Duration
-	// MXMode reflects the legacy MX_ENABLE environment value. It is no longer
-	// authoritative at runtime: the persisted mx_settings row decides the
-	// receiver mode, and cmd/server imports MX_ENABLE once when the settings
-	// have never been initialized (see MXImport). It is retained so the
-	// one-time import and existing tooling keep working.
-	MXMode MXMode
-	// MXReceiveEnabled and MXEmbedded are derived from MXMode for the one-time
-	// import path and compatibility. Runtime gating reads the persisted
-	// settings, not these fields.
-	MXReceiveEnabled bool
-	// Private receiver session URL and bearer credential, read from the legacy
-	// environment for the one-time import. Never authoritative after import.
-	MXReceiverURL string
-	MXCoreKey     string
-	// MXImport is the legacy environment MX configuration, captured for the
-	// one-time import into the store. It is Set only when MX_ENABLE named a
-	// non-off mode; when Set it is offered to the store on first start and
-	// thereafter ignored in favour of the persisted settings.
-	MXImport MXReceiverImport
 	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
 	// must cover the supported sender retry window and expected outage recovery.
 	MXReceiptRetention time.Duration
-	// MXEmbedded is true only in embedded mode: cmd/server spawns the edge as a
-	// child under MXUID/MXGID and drops privileges. Remote mode leaves it false.
-	MXEmbedded bool
-	// MXUID/MXGID are the uid/gid the embedded edge process runs as, separate
+	// MXUID/MXGID are the uid/gid the included edge child runs as, separate
 	// from the app's runtime user, so the edge cannot read /data or the app's
-	// encryption key.
+	// encryption key. The receiver mode itself comes from the persisted
+	// mx_settings row, not the environment.
 	MXUID int
 	MXGID int
 	// InboundTLSCertFile/InboundTLSKeyFile optionally serve the inbound listener
@@ -292,10 +138,6 @@ func Load() (Config, error) {
 		if _, err := parseBaseHost(receiverURL); err != nil {
 			return Config{}, fmt.Errorf("DEDICATED_RECEIVER_URL: %w", err)
 		}
-	}
-	mxMode, err := parseMXMode(env("MX_ENABLE", "false"))
-	if err != nil {
-		return Config{}, err
 	}
 	admin, err := loadAdmin()
 	if err != nil {
@@ -347,12 +189,6 @@ func Load() (Config, error) {
 		RemoteSyncConcurrency:   envInt("REMOTE_SYNC_CONCURRENCY", 2),
 		ApprovalExpiryHours:     envInt("APPROVAL_EXPIRY_HOURS", 48),
 		WebhookRetryWindow:      time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
-		MXMode:                  mxMode,
-		MXReceiveEnabled:        mxMode != MXOff,
-		MXEmbedded:              mxMode == MXLocal,
-		MXReceiverURL:           strings.TrimRight(env("MX_RECEIVER_URL", ""), "/"),
-		MXCoreKey:               strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")),
-		MXImport:                mxImport(mxMode),
 		MXReceiptRetention:      time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
 		MXUID:                   envInt("MX_UID", 65533),
 		MXGID:                   envInt("MX_GID", 65533),
@@ -390,13 +226,11 @@ func Load() (Config, error) {
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
 	}
-	// MX_ENABLE, MX_RECEIVER_URL and DIALMX_CORE_KEY are transition inputs only:
-	// cmd/server imports them once when no persisted mx_settings row exists, and
-	// the persisted row is authoritative thereafter. Nothing here is validated or
-	// rejected: a deployment that has already been configured may leave stale or
-	// partial values in its environment, and startup must not fail because of
-	// them. The importer validates the environment only when it actually imports,
-	// which happens at most once.
+	// The legacy MX environment variables (MX_ENABLE, MX_RECEIVER_URL,
+	// DIALMX_CORE_KEY and the MX_* SMTP tunables) are no longer read or
+	// validated here: the persisted mx_settings row is the authoritative
+	// receiver configuration, so a stale or partial legacy value must not fail
+	// startup.
 	if cfg.MXUID <= 0 || cfg.MXGID <= 0 {
 		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")
 	}

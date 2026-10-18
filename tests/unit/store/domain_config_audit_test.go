@@ -64,40 +64,6 @@ func TestDomainConfigSendingReceivingIsolation(t *testing.T) {
 	}
 }
 
-// TestMigrationConfigCopiesRotateIndependently verifies that the per-domain
-// copies made by migration 013 are genuinely independent rows: rotating one
-// domain's config leaves the sibling's encrypted bytes untouched.
-func TestMigrationConfigCopiesRotateIndependently(t *testing.T) {
-	t.Parallel()
-	dir := newV012(t)
-	seedV012(t, dir)
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("upgrade open: %v", err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-
-	a, err := st.GetDomainSendingConfig(ctx, "acc1", "domA")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := st.GetDomainSendingConfig(ctx, "acc1", "domB")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = st.SaveDomainSendingConfig(ctx, "acc1", "domA", "smtp", "rotated-A", store.ConfigVersion{ID: a.ID, Revision: a.Revision}); err != nil {
-		t.Fatal(err)
-	}
-	gotB, err := st.GetDomainSendingConfig(ctx, "acc1", "domB")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotB.EncryptedConfig != b.EncryptedConfig || gotB.Revision != b.Revision {
-		t.Fatalf("sibling config changed by rotation: before=%+v after=%+v", b, gotB)
-	}
-}
-
 // TestDomainConfigFKRejectsMismatchedAccount checks the composite foreign key
 // at the storage boundary: a config row cannot name a domain owned by a
 // different account.
@@ -114,37 +80,6 @@ func TestDomainConfigFKRejectsMismatchedAccount(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO domain_sending_configs(id,domain_id,account_id,provider,encrypted_config,revision,created_at,updated_at) VALUES('dsc_bad',?,?,?,?,1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, d.ID, other.AccountID, "brevo", "enc")
 	if err == nil {
 		t.Fatal("expected the composite foreign key to reject a mismatched account")
-	}
-}
-
-// TestMigration013MarkerRecovery verifies a lost 013 marker is re-recorded from
-// the already-applied schema without resurrecting the retired tables.
-func TestMigration013MarkerRecovery(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db := rawDB(t, dir+"/inbox.db")
-	if _, err := db.ExecContext(context.Background(), `DELETE FROM schema_migrations WHERE version='013'`); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	db.Close()
-	st2, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("reopen after marker loss: %v", err)
-	}
-	defer st2.Close()
-	if n := queryInt(t, st2, `SELECT count(*) FROM schema_migrations WHERE version='013'`); n != 1 {
-		t.Fatalf("013 marker not recovered: %d", n)
-	}
-	if n := queryInt(t, st2, `SELECT count(*) FROM sqlite_master WHERE name='outbound_credentials'`); n != 0 {
-		t.Fatalf("recovery resurrected outbound_credentials")
 	}
 }
 
@@ -191,42 +126,5 @@ func TestDomainConfigConcurrentSaveOneWins(t *testing.T) {
 	got, err := s.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
 	if err != nil || got.Revision != base.Revision+1 {
 		t.Fatalf("final revision %+v err=%v, want %d", got, err, base.Revision+1)
-	}
-}
-
-// TestMigration013FinalForeignKeysClean proves the rebuilt schema has no foreign
-// key violations after upgrade and that enforcement is active on a fresh
-// connection, i.e. the composite config FK and the log's domain FK are valid.
-func TestMigration013FinalForeignKeysClean(t *testing.T) {
-	t.Parallel()
-	dir := newV012(t)
-	seedV012(t, dir)
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("upgrade open: %v", err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	rows, err := db.QueryContext(ctx, `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		t.Fatal("foreign_key_check reported a violation after migration 013")
-	}
-	if err = rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	// Enforcement is on for an independent connection (the rawDB default), so a
-	// child row naming an unknown domain must be rejected.
-	if _, err = db.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.ExecContext(ctx, `INSERT INTO domain_receiving_configs(id,domain_id,account_id,provider,encrypted_config,revision,created_at,updated_at) VALUES('drc_bad','dom_missing','acc1','resend','x',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
-	if err == nil {
-		t.Fatal("expected the composite foreign key to reject an unknown domain")
 	}
 }

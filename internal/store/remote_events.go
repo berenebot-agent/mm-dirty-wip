@@ -590,7 +590,7 @@ func (s *Store) ListDetectableRemoteInboxes(ctx context.Context) ([]model.Inbox,
 	defer rows.Close()
 	out := []model.Inbox{}
 	for rows.Next() {
-		ib, _, scanErr := scanFullInbox(rows)
+		ib, scanErr := scanFullInbox(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
