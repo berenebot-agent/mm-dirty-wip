@@ -194,10 +194,13 @@ func remoteMessageBytesByUIDTx(ctx context.Context, tx *sql.Tx, inboxID, folderP
 	return b, true, nil
 }
 
-// remoteFolderBytesByIDTx returns one folder row's stored bytes, matched by id.
+// remoteFolderBytesByIDTx returns one remote-owned folder row's stored bytes,
+// matched by id. It is scoped to origin='remote' so a locally created folder
+// (which the authoritative remote-metadata total never counts) cannot move the
+// counters when it is renamed, re-roled, given adapter metadata or deleted.
 func remoteFolderBytesByIDTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, folderID string) (int64, error) {
 	var b int64
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, folderID).Scan(&b)
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND id=? AND origin='remote'`, accountID, inboxID, folderID).Scan(&b)
 	return b, err
 }
 

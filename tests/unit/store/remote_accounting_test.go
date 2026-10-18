@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
@@ -108,5 +109,111 @@ func TestRemoteMetadataIncrementalAccountingMatchesAuthoritative(t *testing.T) {
 	}
 	if finalUsed != finalAuth {
 		t.Fatalf("final account counter=%d authoritative=%d", finalUsed, finalAuth)
+	}
+}
+
+// TestLocalFolderChangesDoNotAffectRemoteStorage is the regression guard for
+// charging locally created folders to remote-metadata storage. Only
+// origin='remote' rows are part of the authoritative remote total, so renaming,
+// re-roling, giving adapter metadata to, or deleting a local folder must leave
+// the counters untouched. A remote-folder mutation is the positive control: it
+// must still move the counters by exactly the authoritative delta.
+func TestLocalFolderChangesDoNotAffectRemoteStorage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, acct, inboxID := remoteMetaSetup(t)
+	p := model.Principal{AccountID: acct, Admin: true}
+
+	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{
+		{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 1},
+		{Path: "Remote Projects", Name: "Remote Projects", Role: model.FolderRoleFolder, Selectable: true, UIDValidity: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	used := accountUsed(t, s, acct)
+	auth, err := s.RemoteMetadataBytes(ctx, acct, inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(step string, wantChange bool) int64 {
+		t.Helper()
+		nextUsed := accountUsed(t, s, acct)
+		nextAuth, aerr := s.RemoteMetadataBytes(ctx, acct, inboxID)
+		if aerr != nil {
+			t.Fatal(aerr)
+		}
+		usedDelta := nextUsed - used
+		authDelta := nextAuth - auth
+		if usedDelta != authDelta {
+			t.Fatalf("%s: counter delta=%d authoritative delta=%d", step, usedDelta, authDelta)
+		}
+		if !wantChange && usedDelta != 0 {
+			t.Fatalf("%s: local folder changed remote storage by %d", step, usedDelta)
+		}
+		if wantChange && usedDelta == 0 {
+			t.Fatalf("%s: remote folder change did not move storage", step)
+		}
+		used, auth = nextUsed, nextAuth
+		return usedDelta
+	}
+
+	// A local parent with a nested child exercises the subtree rewrite too.
+	parent, err := s.CreateFolder(ctx, p, inboxID, store.FolderCreate{Path: "LocalProjects", Name: "LocalProjects"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := s.CreateFolder(ctx, p, inboxID, store.FolderCreate{Path: "LocalProjects/2026", Name: "2026", Parent: "LocalProjects"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("create local folder", false)
+
+	if _, err := s.RenameFolder(ctx, p, inboxID, parent.ID, "LocalProjectsRenamed"); err != nil {
+		t.Fatal(err)
+	}
+	check("rename local folder subtree", false)
+
+	if _, err := s.RenameFolder(ctx, p, inboxID, parent.ID, "LocalProjects"); err != nil {
+		t.Fatal(err)
+	}
+	check("rename local folder back", false)
+
+	if _, err := s.SetFolderRole(ctx, p, inboxID, parent.ID, model.FolderRoleLabel); err != nil {
+		t.Fatal(err)
+	}
+	check("change local folder role", false)
+
+	if err := s.SetFolderRemoteMetadata(ctx, acct, inboxID, parent.ID, `{"uid_validity":42}`); err != nil {
+		t.Fatal(err)
+	}
+	check("set local folder adapter metadata", false)
+
+	// Delete the child first: a folder with children is deliberately not
+	// deletable, so this also proves the refusal changes no counters.
+	if err := s.DeleteFolder(ctx, p, inboxID, parent.ID); !errors.Is(err, store.ErrFolderNotEmpty) {
+		t.Fatalf("delete non-empty local folder err=%v, want ErrFolderNotEmpty", err)
+	}
+	check("refused delete of local folder", false)
+	if err := s.DeleteFolder(ctx, p, inboxID, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	check("delete local child folder", false)
+	if err := s.DeleteFolder(ctx, p, inboxID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	check("delete local folder", false)
+
+	// Positive control: a remote-owned folder still moves the counters.
+	remoteFolder, err := s.GetFolder(ctx, acct, inboxID, "Remote Projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetFolderRole(ctx, p, inboxID, remoteFolder.ID, model.FolderRoleLabel); err != nil {
+		t.Fatal(err)
+	}
+	check("change remote folder role", true)
+
+	if finalUsed := accountUsed(t, s, acct); finalUsed != auth {
+		t.Fatalf("final account counter=%d authoritative=%d", finalUsed, auth)
 	}
 }
