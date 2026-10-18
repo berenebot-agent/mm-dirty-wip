@@ -193,6 +193,16 @@ func (w *DNSWatcher) RequestCheckIfStale(domainID string) {
 	}
 }
 
+// Stale reports whether a domain's verdict was last computed longer ago than the
+// demand floor, i.e. whether a read had to queue a re-check to serve it. A read
+// that served a stale verdict knows its picture is superseded; asking once more
+// after the check has run is what turns the fresh answer into pixels.
+func (w *DNSWatcher) Stale(domainID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.checkedAt[domainID].IsZero() || time.Since(w.checkedAt[domainID]) >= dnsDemandFloor
+}
+
 // takeDemanded returns the domains a read asked to re-check and clears the set.
 func (w *DNSWatcher) takeDemanded() map[string]bool {
 	w.mu.Lock()
