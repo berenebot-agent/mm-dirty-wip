@@ -55,7 +55,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`} {
+	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`, `id="key-openclaw-alpha"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -87,7 +87,8 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		!strings.Contains(asset, "connector-config-row") ||
 		!strings.Contains(asset, "inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-edit-form')") ||
 		!strings.Contains(asset, "showInboxSubview") ||
-		!strings.Contains(asset, "#key-dialog #key-form>.dialog-actions") {
+		!strings.Contains(asset, "#key-dialog #key-form>.dialog-actions") ||
+		!strings.Contains(asset, "openclawAlpha.hidden = sel.value !== 'openclaw'") {
 		t.Fatalf("connector setup script does not remove inbox-level controls: status=%d", assetRR.Code)
 	}
 	if strings.Contains(body, "<h2>Hermes Relay</h2>") {

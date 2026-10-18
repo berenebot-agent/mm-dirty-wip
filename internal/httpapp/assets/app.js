@@ -928,6 +928,7 @@
   var openclawWarning = document.getElementById('key-openclaw-warning');
   var openclawAckRow = document.getElementById('key-openclaw-ack-row');
   var openclawAck = document.getElementById('key-openclaw-ack');
+  var openclawAlpha = document.getElementById('key-openclaw-alpha');
   var adminSnapshot = null;
   // adminSendSnapshot holds the checked domain-wide sending boxes while the Admin
   // checkbox is ticked, so unticking restores the operator's staged state.
@@ -1024,6 +1025,11 @@
     });
     syncHermesRisk();
     syncBearer();
+    // The OpenClaw connector's early-alpha note sits between the Type and Name
+    // fields, so it follows the selected type like the per-type field sets.
+    if (openclawAlpha) {
+      openclawAlpha.hidden = sel.value !== 'openclaw';
+    }
   }
 
   function rolesRadios() {
