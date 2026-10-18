@@ -69,6 +69,43 @@ func domainPost(t *testing.T, h http.Handler, cookie *http.Cookie, path string, 
 	return rr
 }
 
+// TestReceivingDialogDangerBlockFollowsStoredConfig proves the receiving dialog's
+// footer danger block is drawn for every domain but hidden until a receiving
+// config is stored. The Dial MX wizard stores the config as it runs, so it needs
+// the block already in the document to reveal the same Remove receiving the saved
+// status view shows, while a domain with nothing stored must not offer to remove
+// a configuration that does not exist.
+func TestReceivingDialogDangerBlockFollowsStoredConfig(t *testing.T) {
+	t.Parallel()
+	svc, h, u, configured, _ := httpFixture(t)
+	ctx := context.Background()
+	empty, err := svc.Store.CreateDomain(ctx, u.AccountID, "noreceiving.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := domainGet(t, h, cookie, "/")
+	if page.Code != http.StatusOK {
+		t.Fatalf("GET / = %d", page.Code)
+	}
+	body := page.Body.String()
+
+	// A domain with no receiving config: the block is present, because the wizard
+	// needs it in the document, but hidden, and it still carries Remove receiving.
+	emptyDialog := dialogHTML(t, body, "domain-receiving-dialog-"+empty.ID)
+	if !strings.Contains(emptyDialog, `<div class="dialog-danger" hidden>`) {
+		t.Fatalf("an unconfigured domain must draw the danger block hidden:\n%s", emptyDialog)
+	}
+	if !strings.Contains(emptyDialog, `<button class="secondary danger">Remove receiving</button>`) {
+		t.Fatalf("the hidden block must still carry the Remove receiving control:\n%s", emptyDialog)
+	}
+	// The configured fixture domain draws it visible: there is something to remove.
+	configuredDialog := dialogHTML(t, body, "domain-receiving-dialog-"+configured.ID)
+	if !strings.Contains(configuredDialog, `<div class="dialog-danger">`) {
+		t.Fatalf("a configured domain must draw the danger block visible:\n%s", configuredDialog)
+	}
+}
+
 func TestUIDomainPagePickersAndInstructions(t *testing.T) {
 	t.Parallel()
 	svc, h, u, d, box := httpFixture(t)
