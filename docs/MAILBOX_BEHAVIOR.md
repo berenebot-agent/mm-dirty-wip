@@ -110,8 +110,7 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
 
 The schema is the public baseline `001` in `internal/dbschema/baseline.sql`,
 applied as one versioned migration and validated by `internal/dbschema`.
-A pre-beta database is converted offline once (see
-[Pre-release database transition](PRERELEASE_TRANSITION.md)). Key tables:
+Future changes use versioned public migrations. Key tables:
 
 - `inboxes` — `kind`, `address`, `namespace`, `remote_*`, `smtp_*`,
   `remote_configured`, `remote_sent_copy_enabled`, `remote_sent_copy_folder`,

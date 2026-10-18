@@ -140,6 +140,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D133: Strix remediation: delegated authority, destination-bound secrets and approval delivery](#d133-strix-remediation-delegated-authority-destination-bound-secrets-and-approval-delivery)
 - [D134: A settled receiver refusal is an error state, not a retry](#d134-a-settled-receiver-refusal-is-an-error-state-not-a-retry)
 - [D135: The public database baseline replaces the pre-release migration lineage](#d135-the-public-database-baseline-replaces-the-pre-release-migration-lineage)
+- [D136: Retire the completed developer database transition](#d136-retire-the-completed-developer-database-transition)
 
 ---
 
@@ -5462,6 +5463,9 @@ or behaviour: nothing gates delivery, auth or the retry loop on these states.
 
 ## D135 — The public database baseline replaces the pre-release migration lineage
 
+**Historical note:** D136 retires the completed one-time converter, maintenance
+image and transition guide. The public baseline and versioned runner remain.
+
 **Requirement:** Cut the pre-beta consolidation before the public beta. The
 database had grown to 80 migrations; several carried tables, columns and indexes
 that were retired during development but were still physically present, and the
@@ -5528,3 +5532,25 @@ historical migration and redundant credential-persistence baggage.
 **Complexity:** One schema package with a baseline, a small offline utility, and
 deletion of the historical runner and the retired tables. No new dependency,
 runtime service or infrastructure.
+
+## D136 — Retire the completed developer database transition
+
+**Requirement:** The operator confirms every existing installation has completed
+the public-baseline transition. The first public beta must not carry migration
+tooling for development databases that no longer need support.
+
+**Decision:** Remove `cmd/prerelease-rebaseline`, `internal/prerelease`, their
+Docker build/image target, the historical schema fixture and the active
+transition guide. Preserve fresh initialization, restart/data-integrity and mail
+workflow coverage under `tests/unit/dbschema`, plus unsupported-schema rejection
+and future public-migration rollback tests. Keep `internal/dbschema`, baseline
+`001`, lineage `1` and its schema fingerprint unchanged; this retirement does
+not migrate, rebuild or modify existing databases.
+
+**Recovery:** The retired converter and its operator instructions remain in Git
+at commit `6938358` for deliberate recovery of an old developer backup. They are
+not part of the supported public upgrade path. Normal `/data` and encryption-key
+backup/restore instructions remain in `docs/SELFHOSTING.md`.
+
+**Complexity:** Deletes completed maintenance code and packaging without adding
+dependencies, runtime options or services. Supersedes only D135's cutover tooling.

@@ -1,4 +1,4 @@
--- Public-release baseline. Frozen from the effective post-080 schema; see docs/PRERELEASE_TRANSITION.md.
+-- Public database baseline 001. Append versioned migrations; do not rewrite this schema.
 CREATE TABLE account_mx_receivers (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   receiver_url TEXT NOT NULL DEFAULT '',

@@ -205,8 +205,7 @@ type Inbox struct {
 	StorageQuotaBytes *int64 `json:"storage_quota_bytes,omitempty"`
 	// StorageUsedBytes is this inbox's maintained storage usage in bytes. It is
 	// 0 for a new inbox and is kept current by every write; the baseline schema
-	// holds it NOT NULL with DEFAULT 0 (a migration backfills any pre-existing
-	// inbox once from its stored bytes).
+	// holds it NOT NULL with DEFAULT 0.
 	StorageUsedBytes int64 `json:"storage_used_bytes"`
 	// AutoMarkReadOnDelivery, when set, marks a message read once a connector
 	// bound to this inbox has successfully delivered it. It is an agent/relay

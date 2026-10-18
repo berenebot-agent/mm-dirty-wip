@@ -1,7 +1,7 @@
 package dbschema
 
 // These tests need unexported runner injection to exercise a future migration
-// without adding production test hooks. Public cutover tests live in tests/unit/prerelease.
+// without adding production test hooks. Public schema tests live in tests/unit/dbschema.
 import (
 	"context"
 	"database/sql"

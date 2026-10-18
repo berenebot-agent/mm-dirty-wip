@@ -133,7 +133,6 @@ See the [agent connector guide](docs/CONNECTORS.md).
 | [Agent connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
 | [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
 | [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
-| [Pre-release transition](docs/PRERELEASE_TRANSITION.md) | Converting a pre-beta database before upgrading |
 | [API](docs/API.md) | Endpoints, permissions, drafts and events |
 
 ## Contributing
