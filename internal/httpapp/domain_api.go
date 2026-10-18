@@ -49,6 +49,11 @@ type domainConfigResponse struct {
 	// Instructions, so the dashboard's amber warning and the status dialog's
 	// warning are driven by the same single verdict.
 	UnexpectedMX []string `json:"unexpected_mx,omitempty"`
+	// DNSStale marks the published-record checks above as superseded: a re-check
+	// was queued as this response was built, so one more read carries the fresh
+	// verdict. The status dialog uses it to re-read instead of showing a stale
+	// "additional MX servers" warning until its next poll.
+	DNSStale bool `json:"dns_stale,omitempty"`
 	// AntlerManifest is where the domain's snapshotted Antler MX receiver set came
 	// from (Dial MX Antler only): github, cache or embedded, with the fetch time.
 	// The setup dialog states it so an operator can tell a live GitHub fetch from
@@ -403,6 +408,8 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 		if derr == nil {
 			view := s.dialMXLiveView(domain.Name, credential.KeyID, pub, cfg)
 			resp.Status = view.Statuses
+			// Read staleness before dialMXDNS, which is what queues the re-check.
+			resp.DNSStale = s.Service.DNS != nil && s.Service.DNS.Stale(domainID)
 			resp.DNS = s.dialMXDNS(domainID)
 			resp.Instructions = view.instructionView()
 			resp.UnexpectedMX = s.dialMXExtraMX(domainID)

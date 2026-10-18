@@ -6777,7 +6777,14 @@ function hideInboxSubview(dlg) {
       if (busy) { pendingRefresh = true; return; }
       busy = true;
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
-      api('GET').then(function (data) { render(data); fail(''); }).catch(function (err) { fail(err.message); }).finally(function () {
+      api('GET').then(function (data) {
+        render(data); fail('');
+        // A response whose record verdict was already stale carried a queued
+        // re-check, not its result. Read once more so the fresh verdict lands now
+        // rather than on the next poll — otherwise a warning for MX records the
+        // operator has already removed stays on screen for a poll interval.
+        if (data.dns_stale && dlg.open) { pendingRefresh = true; }
+      }).catch(function (err) { fail(err.message); }).finally(function () {
         busy = false;
         pendingRefresh = false;
         note.removeAttribute('aria-busy');

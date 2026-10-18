@@ -94,6 +94,11 @@ func watchDNS(svc *app.Service, res app.DNSResolver) {
 	svc.DNS.CheckOnce(context.Background())
 }
 
+// waitPastDemandFloor waits out the watcher's 10s demand floor so a following
+// read has to queue a re-check. shortcut: a 10s sleep per run, fold the floor
+// into a test hook if this becomes hot.
+func waitPastDemandFloor() { time.Sleep(10 * time.Second) }
+
 // dnsLights returns the kind→state map from a receiving response body.
 func dnsLights(t *testing.T, body map[string]any) map[string]string {
 	t.Helper()
@@ -411,8 +416,67 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
-// formAttr returns the value of one quoted attribute on the receiving form.
-// html/template escapes any inner quote as &#34;, so the next quote ends this
+// TestDialMXStaleVerdictSelfClears proves a removed rogue MX record clears the
+// "additional MX servers" warning without waiting for the next poll: the read
+// that serves a stale verdict queues a re-check and says so (dns_stale), so the
+// status dialog's own follow-up read carries the fresh, empty verdict.
+func TestDialMXStaleVerdictSelfClears(t *testing.T) {
+	// Serial: it ages the watcher's verdict past the demand floor.
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	res := &switchableResolver{}
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}}, nil)
+	watchDNS(svc, res)
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func() map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v body=%s", err, rr.Body.String())
+		}
+		return body
+	}
+	if got, _ := get()["unexpected_mx"].([]any); len(got) != 1 {
+		t.Fatalf("extra-MX before the fix = %v, want [old.example.test]", got)
+	}
+
+	// The operator removes the record; the cached verdict is now stale.
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	waitPastDemandFloor()
+	if !svc.DNS.Stale(domain.ID) {
+		t.Fatal("verdict must read as stale once it is past the demand floor")
+	}
+	first := get()
+	if first["dns_stale"] != true {
+		t.Fatalf("dns_stale = %v, want true so the dialog re-reads", first["dns_stale"])
+	}
+	svc.DNS.CheckDemandedOnce(ctx)
+	second := get()
+	if second["dns_stale"] == true {
+		t.Fatalf("dns_stale persisted after the re-check: %v", second["dns_stale"])
+	}
+	if got, _ := second["unexpected_mx"].([]any); len(got) != 0 {
+		t.Fatalf("extra-MX after the follow-up read = %v, want none", got)
+	}
+}
+
+// formAttr returns the value of one quoted attribute on the receiving form.// html/template escapes any inner quote as &#34;, so the next quote ends this
 // attribute's value — cutting at the tag's ">" instead would run into every
 // later attribute (including data-antler-dns, whose extra-MX verdict would then
 // satisfy an assertion meant for data-antler-unexpected alone).
