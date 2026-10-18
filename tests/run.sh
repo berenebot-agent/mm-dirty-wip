@@ -231,11 +231,14 @@ for t in "${SELECTED[@]}"; do
                 ./mailmoose-go.sh run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... >/dev/null 2>&1 || rc=$?
             ;;
         js)
+            node tests/connector-editor-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             # The dialog and copy interaction checks drive real app.js closures
             # against a DOM stand-in; they cover what the Go suite cannot (timers,
             # SSE listeners, clipboard writes, and feedback). Node is required on
             # the host.
-            node tests/antler-wizard-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                node tests/antler-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
             if [ "$rc" -eq 0 ]; then
                 node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
