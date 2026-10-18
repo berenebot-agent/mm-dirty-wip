@@ -420,8 +420,13 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 		return model.Folder{}, ErrFolderNameConflict
 	}
 	now := nowText()
+	// Only remote-owned rows count toward remote-metadata storage, so the
+	// subtree totals used for the counter delta are origin-scoped. The path
+	// rewrite itself stays origin-agnostic (a local rename can carry remote
+	// descendants); those remote rows appear in both the old- and new-prefix
+	// totals, so their bytes still net correctly.
 	var oldBytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND (id=? OR path LIKE ? ESCAPE '\')`,
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND origin='remote' AND (id=? OR path LIKE ? ESCAPE '\')`,
 		inboxID, folderID, escapeLike(oldPath)+"/%").Scan(&oldBytes); err != nil {
 		return model.Folder{}, err
 	}
@@ -439,7 +444,7 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 		return model.Folder{}, err
 	}
 	var newBytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND (id=? OR path LIKE ? ESCAPE '\')`,
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteFolderBytesSQL+`),0) FROM inbox_folders WHERE inbox_id=? AND origin='remote' AND (id=? OR path LIKE ? ESCAPE '\')`,
 		inboxID, folderID, escapeLike(newPath)+"/%").Scan(&newBytes); err != nil {
 		return model.Folder{}, err
 	}
