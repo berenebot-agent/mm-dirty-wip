@@ -983,11 +983,7 @@
   generateBtn.addEventListener('click', function () {
     errorBox.hidden = true;
     try {
-      var bytes = new Uint8Array(32);
-      window.crypto.getRandomValues(bytes);
-      var raw = '';
-      bytes.forEach(function (b) { raw += String.fromCharCode(b); });
-      bearerInput.value = window.btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      bearerInput.value = generateBearerSecret();
       bearerInput.type = 'text';
       bearerInput.focus();
     } catch (err) {
@@ -4107,14 +4103,13 @@ function clearUrlParams(names) {
       var isOpenClaw = c.Kind === 'openclaw';
       var label = isOpenClaw ? 'OpenClaw' : 'Hermes Relay';
       fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — ' + (isOpenClaw ? 'agent' : 'relay') + ' sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — ' + (isOpenClaw ? 'agent' : 'relay') + ' drafts and requests approval</option></select>';
-       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>';
-       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><button type="button" class="secondary danger open-delete-client" data-kind="' + (isOpenClaw ? 'openclaw' : 'hermes') + '" data-id="' + escapeConnector(c.ID) + '" data-name="' + escapeConnector(c.Name) + '" data-type="' + label + '" data-inbox="' + inbox + '">Remove connector</button>';
+      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '</form>';
     } else {
-      fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label>Bearer secret <span class="muted small">(leave blank to keep current)</span></label><input name="bearer_secret" type="password" autocomplete="new-password"></div>';
-       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '');
+      fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label for="inline-webhook-bearer">Bearer secret <span class="muted small">(leave blank to keep current)</span></label><div class="row"><input id="inline-webhook-bearer" name="bearer_secret" type="password" autocomplete="new-password"><button type="button" class="secondary btn-narrow" data-inline-generate-bearer>Generate</button></div><p class="muted small">Copy a generated replacement before saving. The secret changes only when you save.</p></div>';
+      actions = c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '';
       var toggleText = c.Enabled ? 'Pause webhook' : 'Enable webhook';
       var nextEnabled = c.Enabled ? '0' : '1';
-       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><button type="button" class="secondary danger open-delete-client" data-kind="webhooks" data-id="' + escapeConnector(c.ID) + '" data-name="' + escapeConnector(c.Name) + '" data-type="Webhook" data-inbox="' + inbox + '">Remove connector</button></div>';
+      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form></div>';
     }
     setConnectorEditorMode(true);
     var connectorEditForm = connectorEditor.querySelector('#inbox-connector-edit-form');
@@ -4125,7 +4120,7 @@ function clearUrlParams(names) {
     }
     var auth = connectorEditor.querySelector('[data-inline-webhook-auth]');
     if (auth) {
-      auth.addEventListener('change', function () {
+      function syncInlineBearer() {
         var bearer = connectorEditor.querySelector('[data-inline-bearer]');
         if (bearer) {
           bearer.hidden = auth.value !== 'bearer';
@@ -4133,6 +4128,19 @@ function clearUrlParams(names) {
           if (input) {
             input.disabled = auth.value !== 'bearer';
           }
+        }
+      }
+      auth.addEventListener('change', syncInlineBearer);
+      syncInlineBearer();
+      var generate = connectorEditor.querySelector('[data-inline-generate-bearer]');
+      generate.addEventListener('click', function () {
+        var input = connectorEditor.querySelector('[name=bearer_secret]');
+        try {
+          input.value = generateBearerSecret();
+          input.type = 'text';
+          input.focus();
+        } catch (err) {
+          window.alert('Could not generate a secret. Paste a secret from your other app.');
         }
       });
     }
@@ -4987,6 +4995,10 @@ function clearUrlParams(names) {
   var cancel = document.getElementById('inbox-edit-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {
+      if (dlg.querySelector('.inbox-subview.active[data-inbox-subview=connectors]')) {
+        hideInboxSubview(dlg);
+        return;
+      }
       dlg.close();
     });
   }
@@ -5482,6 +5494,10 @@ function hideInboxSubview(dlg) {
     return;
   }
   dlg.classList.remove('inbox-settings--subview');
+  var save = dlg.querySelector('#inbox-edit-save');
+  if (save) {
+    save.setAttribute('form', 'inbox-edit-form');
+  }
   dlg.querySelectorAll('.inbox-subview.active').forEach(function (v) {
     v.classList.remove('active');
   });
@@ -5490,6 +5506,14 @@ function hideInboxSubview(dlg) {
   if (editor) {
     editor.textContent = '';
   }
+}
+
+function generateBearerSecret() {
+  var bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  var raw = '';
+  bytes.forEach(function (b) { raw += String.fromCharCode(b); });
+  return window.btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 (function () {
