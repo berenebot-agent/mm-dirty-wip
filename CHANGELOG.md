@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The OpenClaw connector now says plainly that it is an early alpha. The
+  Add-connector dialog shows a short note between the Type and Name fields
+  whenever OpenClaw is selected, and the connector guide says the same: the
+  plugin and connector are still being tested, so expect rough edges.
+
 - The Antler MX receiving wizard now opens with a short plain-language
   explanation of the service: a free hosted SMTP receiver for the domain,
   included as a receiving option, needing no extra container, no inbound SMTP

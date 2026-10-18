@@ -71,6 +71,9 @@ Hermes Relay receives and replies to existing threads. It cannot start a new out
 
 ## OpenClaw
 
+The OpenClaw connector is an early alpha: the plugin and the connector are in
+the early stages of testing, so expect rough edges and please report what breaks.
+
 The OpenClaw channel plugin is included in this repository but is not yet published to npm or ClawHub. Install it on the OpenClaw host first:
 
 ```bash
