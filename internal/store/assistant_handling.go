@@ -493,8 +493,8 @@ func (s *Store) HandoffByHandoffID(ctx context.Context, accountID, handoffID str
 // retained. It is idempotent: a handoff whose draft is already gone is a no-op.
 //
 // Files are recorded in pending_file_cleanup inside the transaction and unlinked
-// by the startup sweep, so a rollback never leaves a live row pointing at a
-// missing file.
+// by maintenance and the startup sweep, so a rollback never leaves a live row
+// pointing at a missing file.
 func (s *Store) CleanupPublishedHandoffLocalDraft(ctx context.Context, accountID, requestID string) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {

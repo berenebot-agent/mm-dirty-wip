@@ -56,19 +56,17 @@ func Open(dataDir string) (*Store, error) {
 	}
 	// Retire raw files queued by committed operations, never inside a transaction
 	// whose rollback could leave a live row pointing at a missing file.
-	s.sweepPendingFileCleanup(context.Background())
+	_ = s.SweepPendingFileCleanup(context.Background())
 	return s, nil
 }
 
-// sweepPendingFileCleanup unlinks the files recorded in pending_file_cleanup and
-// clears the queue. It is best-effort: a file already gone is fine, and an
-// interrupted sweep simply retries on the next start. It runs after migrations
-// commit, never inside a transaction.
-func (s *Store) sweepPendingFileCleanup(ctx context.Context) {
+// SweepPendingFileCleanup retires committed files. Failed removals remain queued
+// for the next maintenance pass; it must never run inside a write transaction.
+func (s *Store) SweepPendingFileCleanup(ctx context.Context) error {
 	dir := filepath.Dir(s.path)
 	rows, err := s.read.QueryContext(ctx, `SELECT id,rel_path FROM pending_file_cleanup ORDER BY id`)
 	if err != nil {
-		return
+		return err
 	}
 	type item struct {
 		id   int64
@@ -77,21 +75,31 @@ func (s *Store) sweepPendingFileCleanup(ctx context.Context) {
 	var items []item
 	for rows.Next() {
 		var it item
-		if rows.Scan(&it.id, &it.path) != nil {
+		if err := rows.Scan(&it.id, &it.path); err != nil {
 			rows.Close()
-			return
+			return err
 		}
 		items = append(items, it)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var failures error
 	for _, it := range items {
-		if p, jerr := safepath.Join(dir, it.path); jerr == nil {
-			_ = os.Remove(p)
+		p, err := safepath.Join(dir, it.path)
+		if err == nil {
+			err = os.Remove(p)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			failures = errors.Join(failures, err)
+			continue
 		}
 		if _, derr := s.write.ExecContext(ctx, `DELETE FROM pending_file_cleanup WHERE id=?`, it.id); derr != nil {
-			return
+			return errors.Join(failures, derr)
 		}
 	}
+	return failures
 }
 func (s *Store) Close() error { _ = s.read.Close(); return s.write.Close() }
 func (s *Store) Path() string { return s.path }

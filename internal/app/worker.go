@@ -226,6 +226,7 @@ func (w *OutboxWorker) maintain() {
 		{"reconcileUncertainSends", func() { w.reconcileUncertainSends(false) }},
 		{"expireApprovals", w.expireApprovals},
 		{"sweepWorkflows", w.sweepWorkflows},
+		{"sweepPendingFileCleanup", w.sweepPendingFileCleanup},
 		{"sweepMXReceipts", w.sweepMXReceipts},
 		{"sweepClientDeliveryLog", w.sweepClientDeliveryLog},
 		{"trashDeliveredMail", w.trashDeliveredMail},
@@ -234,6 +235,14 @@ func (w *OutboxWorker) maintain() {
 		{"sweepOrphanedMIME", w.sweepOrphanedMIME},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+func (w *OutboxWorker) sweepPendingFileCleanup() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := w.svc.Store.SweepPendingFileCleanup(ctx); err != nil {
+		w.log.Warn("pending file cleanup", "error", err)
 	}
 }
 

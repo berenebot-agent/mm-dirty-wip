@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Wrap attachment Base64 at MIME line limits so normal attachments pass SMTP
+  receivers, including MailMoose's own. Multi-recipient webhook ingest now
+  preserves retryable failures even when an earlier unknown recipient failed
+  and no copy was stored.
+- Webhook preparation failures now use durable backoff without blocking other
+  clients. Confirmed remote deletions are skipped; ambiguous failures remain
+  retryable. The retry window is anchored to the first attempt rather than
+  extended on every failure. Remote arrival event-write failures likewise stay
+  pending with bounded backoff and retain the atomic event-creation guard.
+- Moving drafts now transfers attachment bytes between inbox quotas. Published
+  remote-draft files are removed by runtime maintenance, with failed removals
+  kept queued for retry instead of requiring a restart.
+- CI and both image-publication gates now compile and test the OpenClaw plugin
+  using its locked dependencies.
+- The default Compose file leaves SMTP port 25 commented out. **Existing
+  Included MX operators must retain their `25:2525` mapping when upgrading**;
+  uncomment it for new Included MX deployments.
+
 - **Two published images, and one edge image for both receiver modes.** The
   `Dockerfile.mx` edge image and the standalone-receiver image were the same
   program under two names, differing only in the in-container binary filename;

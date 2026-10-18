@@ -6,8 +6,11 @@ import (
 	"io"
 	"mime/quotedprintable"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/mailparse"
@@ -15,6 +18,56 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
 )
+
+func TestPublishedHandoffFilesRetiredByRunningWorker(t *testing.T) {
+	t.Parallel()
+	svc, u, _, _ := testService(t)
+	ctx := context.Background()
+	box := standaloneInbox(t, svc, u.AccountID, "cleanup@remote.example")
+	draft := standaloneDraft(t, svc, u.AccountID, box)
+	p := assistantPrincipal(u.AccountID, box.ID)
+	attachmentPath := filepath.Join(svc.Config.DataDir, "draft-attachment.bin")
+	if err := os.WriteFile(attachmentPath, []byte("attachment"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Store.AddDraftAttachment(ctx, p, draft.ID, model.DraftAttachment{Filename: "file.bin", RawPath: "draft-attachment.bin", Size: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RequestSend(ctx, p, draft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	handoff, err := svc.Store.LatestAssistantHandlingForDraft(ctx, u.AccountID, draft.ID)
+	if err != nil || handoff == nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	frozen := filepath.Join(svc.Config.DataDir, handoff.RawPath)
+	svc.SetHandoffPublisher(&fakeHandoff{confirmed: true, remoteUID: 42})
+	svc.PublishHandoffs(ctx)
+	// The store stays open; only the normal maintenance loop can retire the files.
+	worker := app.NewOutboxWorker(svc, nil)
+	worker.SetPeriod(5 * time.Millisecond)
+	worker.Start()
+	defer worker.Stop()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, attachmentErr := os.Stat(attachmentPath)
+		_, frozenErr := os.Stat(frozen)
+		if errors.Is(attachmentErr, os.ErrNotExist) && errors.Is(frozenErr, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("published files retained: attachment=%v frozen=%v", attachmentErr, frozenErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := svc.Store.GetDraft(ctx, p, draft.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("published draft not consumed: %v", err)
+	}
+	stored, err := svc.Store.GetAssistantHandlingInternal(ctx, u.AccountID, handoff.ID)
+	if err != nil || stored.Publication != model.HandoffPublished {
+		t.Fatalf("handoff history lost: %+v %v", stored, err)
+	}
+}
 
 // fakeHandoff is a deterministic HandoffPublisher. It records appends and can be
 // configured to report a confirmed append (APPENDUID), an unconfirmed append that

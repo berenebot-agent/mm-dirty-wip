@@ -40,6 +40,7 @@ services:
       # every recreate.
       - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
       # :25 = direct SMTP when using this as an Included MX receiver (the edge
-      # listens on :2525 inside the container). Published for Included; keep it
-      # published while an Included MX receiver is configured in the UI.
-      - "0.0.0.0:25:2525"
+      # listens on :2525 inside the container). Uncomment for Included MX.
+      # Upgrading an existing Included MX installation? Retain this mapping;
+      # removing it stops incoming SMTP mail even if Included remains enabled.
+      # - "0.0.0.0:25:2525"

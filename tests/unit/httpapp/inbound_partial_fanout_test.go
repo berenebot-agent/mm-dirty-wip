@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -17,6 +18,47 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
+
+// Serial: setResendRoundTripper replaces the process-global HTTP transport.
+func TestResendAllFailedFanoutRetriesValidRecipient(t *testing.T) {
+	svc, handler, p, box := partialFanoutFixture(t)
+	ctx := context.Background()
+	db, err := sql.Open("sqlite3", svc.Store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER fail_inbound BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL,'temporary write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	raw := "From: sender@outside.test\r\nTo: " + box.Address + "\r\nSubject: retry\r\nMessage-ID: <all-failed@test>\r\n\r\nbody"
+	setResendRoundTripper(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "resend-api.example.test" {
+			return resendFixtureResponse(r, 200, `{"raw":{"download_url":"https://resend-raw.example.test/message.eml"}}`), nil
+		}
+		return resendFixtureResponse(r, 200, raw), nil
+	})
+	body := `{"type":"email.received","data":{"email_id":"all-failed","from":"sender@outside.test","to":["missing@example.com","` + box.Address + `"]}}`
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, resendSignedRequest(t, body))
+	if rr.Code < 500 {
+		t.Fatalf("temporary failure hidden by unknown recipient: %d %s", rr.Code, rr.Body.String())
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_inbound`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		rr = httptest.NewRecorder()
+		handler.ServeHTTP(rr, resendSignedRequest(t, body))
+		if rr.Code != 200 {
+			t.Fatalf("recovery: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+	got, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("recovered messages=%d err=%v", len(got), err)
+	}
+}
 
 // partialFanoutFixture is a Resend-configured mailbox on the shared migrated
 // test template (testdb), so it adds no per-test migration cost. It mirrors

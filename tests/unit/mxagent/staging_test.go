@@ -14,9 +14,31 @@ import (
 
 	"github.com/emersion/go-smtp"
 
+	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/mxagent"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 )
+
+func TestBuiltAttachmentPassesSMTPReceiver(t *testing.T) {
+	t.Parallel()
+	d := &blockingDelivery{}
+	addr, stop := startStagingEdge(t, mxagent.Config{
+		Hostname: "mx.example.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20,
+		MaxRecipients: 10, MaxConnections: 10, ReadTimeout: 5 * time.Second,
+		WriteTimeout: 5 * time.Second, DataTimeout: 5 * time.Second, DNSTimeout: time.Second,
+	}, d)
+	defer stop()
+	raw, err := mailparse.BuildMessage(mailparse.Address{Address: "sender@outside.test"}, []string{"box@example.test"}, nil, nil, "attachment", "body", "", "<attachment@outside.test>", "", nil, time.Now(), []mailparse.Attachment{{Filename: "large.bin", Content: bytes.Repeat([]byte("x"), 10240)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sendOnce(t, addr, string(raw)); err != nil {
+		t.Fatalf("built attachment rejected by SMTP: %v", err)
+	}
+	if atomic.LoadInt64(&d.ingests) != 1 {
+		t.Fatal("attachment did not reach ingest")
+	}
+}
 
 // blockingDelivery is a fake Delivery whose first Ingest blocks until released,
 // so the test can observe that the staging reservation is held for the whole

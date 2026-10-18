@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,103 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/imap"
 	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 )
+
+func TestRemoteEventWriteFailureRetriesWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, worker := workerEnv(t)
+	ctx := context.Background()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.DetectInbox(ctx, inbox)
+	db, err := sql.Open("sqlite3", svc.Store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER fail_remote_event BEFORE INSERT ON events WHEN NEW.type='message.received' BEGIN SELECT RAISE(FAIL,'temporary event write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	fake.addMessage("INBOX", "From: sender@outside.test\r\nSubject: retry\r\nMessage-ID: <event-retry@test>\r\n\r\nbody", "<event-retry@test>", "retry")
+	worker.DetectInbox(ctx, inbox)
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil || len(arrivals) != 1 {
+		t.Fatalf("arrivals=%+v err=%v", arrivals, err)
+	}
+	a := arrivals[0]
+	if a.DeliveryState != store.RemoteArrivalPending || !a.NextAttemptAt.After(time.Now()) || a.NextAttemptAt.After(time.Now().Add(5*time.Minute)) {
+		t.Fatalf("recoverable arrival not backed off: %+v", a)
+	}
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("failed write published %d events", len(evs))
+	}
+	if _, ok, err := svc.Store.ClaimNextRemoteArrival(ctx, time.Now(), "probe", time.Minute); err != nil || ok {
+		t.Fatalf("arrival immediately reclaimable: %v %v", ok, err)
+	}
+	// Expire each backoff deterministically; persistence faults must not exhaust
+	// a terminal retry budget, even after more than eight attempts.
+	worker.SetPeriod(5 * time.Millisecond)
+	worker.Start()
+	defer worker.Stop()
+	for range 10 {
+		if _, err := db.Exec(`UPDATE inbox_remote_arrivals SET next_attempt_at='' WHERE id=?`, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			next, err := svc.Store.GetRemoteArrival(ctx, box.AccountID, a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next.Attempts > a.Attempts && next.ClaimOwner == "" {
+				a = next
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("retry did not back off: %+v", next)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if a.DeliveryState != store.RemoteArrivalPending {
+			t.Fatalf("recoverable failure became terminal: %+v", a)
+		}
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_remote_event; UPDATE inbox_remote_arrivals SET next_attempt_at='' WHERE id=?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a, err = svc.Store.GetRemoteArrival(ctx, box.AccountID, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.DeliveryState == store.RemoteArrivalDelivered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("arrival did not recover: %+v", a)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, emitted, err := svc.Store.RecordRemoteArrivalEvent(ctx, box.AccountID, box.ID, a); err != nil || emitted {
+		t.Fatalf("event guard allowed duplicate: %v %v", emitted, err)
+	}
+	count := 0
+	for _, ev := range drainEvents(ch) {
+		if ev.Type == store.EventRemoteMessageReceived && ev.EntityID == a.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("received %d notifications, want exactly one", count)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE entity_id=? AND type='message.received'`, a.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("durable events=%d err=%v", count, err)
+	}
+}
 
 // workerEnv builds a full app service, standalone inbox with a configured remote
 // binding, a fake session and a running worker. It returns the service, inbox,
