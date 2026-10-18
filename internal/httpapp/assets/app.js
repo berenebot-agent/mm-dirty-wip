@@ -1291,6 +1291,7 @@
     resultTitle.textContent = data.notice || 'Key created';
     resultLabel.textContent = data.label || '';
     resultSecret.textContent = data.secret || '';
+    document.getElementById('key-openclaw-guide').hidden = sel.value !== 'openclaw';
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
