@@ -388,6 +388,24 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
+// formAttr returns the value of one quoted attribute on the receiving form.
+// html/template escapes any inner quote as &#34;, so the next quote ends this
+// attribute's value — cutting at the tag's ">" instead would run into every
+// later attribute (including data-antler-dns, whose extra-MX verdict would then
+// satisfy an assertion meant for data-antler-unexpected alone).
+func formAttr(t *testing.T, body, attr string) string {
+	t.Helper()
+	i := strings.Index(body, attr)
+	if i < 0 {
+		t.Fatalf("receiving form missing %s attribute", attr)
+	}
+	rest := strings.TrimPrefix(body[i+len(attr):], `"`)
+	if end := strings.IndexByte(rest, '"'); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
 // TestDialMXStatusViewSeedsFixPrompts proves the receiving form embeds the
 // copy-ready instructions, the extra-MX verdict and the DNS checks so the saved
 // status view can paint its fix prompts and warning on open — rather than showing
@@ -428,17 +446,7 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
 
 	body := page.Body.String()
-	attrValue := func(attr string) string {
-		i := strings.Index(body, attr)
-		if i < 0 {
-			t.Fatalf("receiving form missing %s attribute", attr)
-		}
-		rest := body[i:]
-		if end := strings.IndexByte(rest, '>'); end >= 0 {
-			rest = rest[:end]
-		}
-		return rest
-	}
+	attrValue := func(attr string) string { return formAttr(t, body, attr) }
 	// The copy-ready instructions carry the MX record the operator must publish.
 	if got := attrValue(`data-antler-instructions=`); !strings.Contains(got, "antler1.example.test") {
 		t.Fatalf("seeded instructions missing the MX record: %q", got)
@@ -450,6 +458,47 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	// The DNS checks flag both the TXT mismatch and the rogue MX.
 	if got := attrValue(`data-antler-dns=`); !strings.Contains(got, "mismatch") || !strings.Contains(got, "old.example.test") {
 		t.Fatalf("seeded DNS checks missing the TXT mismatch or rogue host: %q", got)
+	}
+}
+
+// TestDialMXStatusViewSeedsExtraMXWithoutAReadyReceiver proves the status view
+// seeds the shared extra-MX warning even when nothing has authenticated yet. The
+// warning is a fix prompt ("remove these records"), so it must not wait for the
+// dialog's own fetch just because the domain is still red — and the dashboard
+// light must stay red, since the extra-MX verdict only turns a ready domain amber.
+func TestDialMXStatusViewSeedsExtraMXWithoutAReadyReceiver(t *testing.T) {
+	t.Parallel()
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	// No receiver status is injected and no dial manager is installed, so the
+	// domain is configured but nothing has authenticated: the light is red.
+	watchDNS(svc, fakeResolver{mx: []*net.MX{
+		{Host: "antler1.example.test.", Pref: 10},
+		{Host: "old.example.test.", Pref: 20},
+	}})
+
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
+	body := page.Body.String()
+
+	// The light is red, not amber: an extra MX record never turns an unready
+	// domain green or amber.
+	if !strings.Contains(body, `data-kind="receiving" data-receiving-button><span class="dns-light danger"`) {
+		t.Fatalf("receiving light should be danger with no ready receiver")
+	}
+	// The rogue host is seeded on the form, so the warning paints on open.
+	if got := formAttr(t, body, `data-antler-unexpected=`); !strings.Contains(got, "old.example.test") {
+		t.Fatalf("seeded extra-MX verdict missing the rogue host: %q", got)
 	}
 }
 
