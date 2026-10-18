@@ -49,6 +49,11 @@ type domainConfigResponse struct {
 	// Instructions, so the dashboard's amber warning and the status dialog's
 	// warning are driven by the same single verdict.
 	UnexpectedMX []string `json:"unexpected_mx,omitempty"`
+	// AntlerManifest is where the domain's snapshotted Antler MX receiver set came
+	// from (Dial MX Antler only): github, cache or embedded, with the fetch time.
+	// The setup dialog states it so an operator can tell a live GitHub fetch from
+	// the built-in defaults.
+	AntlerManifest *antlerManifestView `json:"antler_manifest,omitempty"`
 }
 
 // mxdialStatusView mirrors mxdial.Status for JSON without importing its shape
@@ -401,6 +406,7 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 			resp.DNS = s.dialMXDNS(domainID)
 			resp.Instructions = view.instructionView()
 			resp.UnexpectedMX = s.dialMXExtraMX(domainID)
+			resp.AntlerManifest = view.Manifest
 		}
 	}
 	return resp, nil

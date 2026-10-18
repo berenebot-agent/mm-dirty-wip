@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/httpapp"
@@ -17,11 +18,24 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// fixedAntler is a deterministic Antler endpoint resolver for HTTP tests.
-type fixedAntler struct{ receivers []mxdial.AntlerReceiver }
+// fixedAntler is a deterministic Antler endpoint resolver for HTTP tests. A
+// resolver with no source answers as the live GitHub manifest did, with a fixed
+// fetch time so the rendered manifest line is deterministic.
+type fixedAntler struct {
+	receivers []mxdial.AntlerReceiver
+	source    mxdial.AntlerSource
+	fetchedAt time.Time
+}
 
-func (f fixedAntler) Receivers(context.Context) ([]mxdial.AntlerReceiver, error) {
-	return f.receivers, nil
+func (f fixedAntler) Receivers(context.Context) (mxdial.AntlerEndpointSet, error) {
+	source, at := f.source, f.fetchedAt
+	if source == "" {
+		source = mxdial.AntlerSourceGitHub
+		if at.IsZero() {
+			at = time.Date(2026, 10, 18, 5, 12, 3, 0, time.UTC)
+		}
+	}
+	return mxdial.AntlerEndpointSet{Receivers: f.receivers, Source: source, FetchedAt: at}, nil
 }
 
 // fakeResolver serves deterministic MX/TXT answers to the watcher.
@@ -163,6 +177,15 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 	if instr["txt_name"] != "_mailmoose-mx."+domain.Name {
 		t.Fatalf("unexpected TXT name: %v", instr["txt_name"])
+	}
+	// The response says where the receiver set came from, so the wizard can state
+	// whether setup used the live GitHub manifest or the built-in defaults.
+	manifest, _ := body["antler_manifest"].(map[string]any)
+	if manifest == nil || manifest["source"] != string(mxdial.AntlerSourceGitHub) {
+		t.Fatalf("antler_manifest = %v, want the github source", body["antler_manifest"])
+	}
+	if manifest["at"] != "2026-10-18T05:12:03Z" {
+		t.Fatalf("antler_manifest fetch time = %v", manifest["at"])
 	}
 
 	lights := dnsLights(t, body)
@@ -459,6 +482,12 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	if got := attrValue(`data-antler-dns=`); !strings.Contains(got, "mismatch") || !strings.Contains(got, "old.example.test") {
 		t.Fatalf("seeded DNS checks missing the TXT mismatch or rogue host: %q", got)
 	}
+	// The manifest record seeds too, so the status view says where its receiver set
+	// came from the moment it opens. html/template escapes the inner quotes for the
+	// attribute context, so this reads the values rather than the JSON spelling.
+	if got := attrValue(`data-antler-manifest=`); !strings.Contains(got, "github") || !strings.Contains(got, "2026-10-18T05:12:03Z") {
+		t.Fatalf("seeded manifest record missing its source or fetch time: %q", got)
+	}
 }
 
 // TestDialMXStatusViewSeedsExtraMXWithoutAReadyReceiver proves the status view
@@ -636,7 +665,7 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 	if afterValues["enforcement"] != "hard" {
 		t.Fatalf("enforcement not saved in the same request: %v", afterValues["enforcement"])
 	}
-	for _, field := range []string{"receiver_urls", "antler_receivers", "setup_id"} {
+	for _, field := range []string{"receiver_urls", "antler_receivers", "setup_id", "antler_manifest_source", "antler_manifest_at"} {
 		if afterValues[field] != beforeValues[field] {
 			t.Fatalf("settings save changed %s", field)
 		}

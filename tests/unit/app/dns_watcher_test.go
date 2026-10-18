@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/dkimsign"
@@ -241,8 +242,12 @@ func TestDNSWatcherPublishesDNSChanges(t *testing.T) {
 // fixedAntlerReceivers is a deterministic Antler endpoint resolver for the watcher.
 type fixedAntlerReceivers []mxdial.AntlerReceiver
 
-func (f fixedAntlerReceivers) Receivers(context.Context) ([]mxdial.AntlerReceiver, error) {
-	return f, nil
+func (f fixedAntlerReceivers) Receivers(context.Context) (mxdial.AntlerEndpointSet, error) {
+	return mxdial.AntlerEndpointSet{
+		Receivers: f,
+		Source:    mxdial.AntlerSourceGitHub,
+		FetchedAt: time.Date(2026, 10, 18, 5, 12, 3, 0, time.UTC),
+	}, nil
 }
 
 // errResolver fails every lookup with a non-notfound error, modelling a resolver
