@@ -536,6 +536,30 @@ async function wizard(mode) {
 
 // --- key rotation ---------------------------------------------------------
 
+// --- intro copy -----------------------------------------------------------
+
+// A fresh setup opens on step 0 with a short Antler MX service intro and the
+// mail-flow diagram. It is about the hosted service, so it reads once: moving on
+// hides it, and neither custom-receiver mode nor the saved status view shows it.
+async function introCopy() {
+  const find = h => h.wizard.children.find(child => child.className === 'antler-intro');
+  const hosted = harness('hosted');
+  await hosted.settle();
+  const intro = find(hosted);
+  assert.ok(intro, 'the wizard builds the Antler MX intro');
+  assert.equal(intro.hidden, false, 'the intro shows on the first step');
+  await hosted.submit();
+  assert.equal(intro.hidden, true, 'advancing past the first step hides the intro');
+
+  const custom = harness('custom');
+  await custom.settle();
+  assert.equal(find(custom).hidden, true, 'custom receivers do not show the Antler MX intro');
+
+  const status = harness('status');
+  await status.settle();
+  assert.equal(find(status).hidden, true, 'the saved status view does not show the intro');
+}
+
 async function rotation() {
   const h = harness('status');
   await h.settle();
@@ -614,13 +638,14 @@ const SUITES = {
   wizardHosted: () => wizard('hosted'),
   wizardSubdomain: () => wizard('subdomain'),
   wizardCustom: () => wizard('custom'),
+  introCopy,
   rotation,
   liveUpdates
 };
 (async () => {
   // The suites that pass against the shipped behaviour. statusSettings is the S5
   // feature suite; run it by name to see what it is waiting on.
-  const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'rotation', 'liveUpdates'];
+  const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'introCopy', 'rotation', 'liveUpdates'];
   const names = process.argv.slice(2).length ? process.argv.slice(2) : defaultSuites;
   for (const name of names) {
     const fn = SUITES[name];

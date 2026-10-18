@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The Antler MX receiving wizard now opens with a short plain-language
+  explanation of the service: a free hosted SMTP receiver for the domain,
+  included as a receiving option, needing no extra container, no inbound SMTP
+  ports and no exposure of the web interface. The same step shows the
+  mail-flow diagram, which makes the key point that MailMoose only ever
+  connects outbound to it. It also states plainly that Antler MX is a
+  community service provided on a best-efforts basis, with no uptime
+  guarantee; the provider guide carries the same sentence.
+
 - A One / Gmail inbox no longer stays disconnected until someone saves its key
   again. The connection is marked unavailable only after three consecutive
   authorization failures, and the background sync keeps trying meanwhile — every
