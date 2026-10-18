@@ -265,6 +265,7 @@ func migrations(dataDir string) []migration {
 		)},
 		{version: "078", sql: migration078, detect: allOf(tableExists("empty_trash_operations"), tableExists("empty_trash_targets"))},
 		{version: "079", sql: `CREATE INDEX IF NOT EXISTS idx_send_requests_issued_token ON draft_send_requests(token_hash) WHERE token_hash<>'';`, detect: stateOf(indexExists("idx_send_requests_issued_token"))},
+		{version: "080", sql: migration080, detect: stateOf(columnAdded("inbox_one_bindings", "failure_count"))},
 	}
 }
 

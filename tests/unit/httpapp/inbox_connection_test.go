@@ -96,8 +96,10 @@ func TestOneStaleRequestCannotReplaceDisconnectDetail(t *testing.T) {
 	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", detail, b.Revision); err != nil {
 		t.Fatal(err)
 	}
-	for _, status := range []string{"active", "attention"} {
-		if err := svc.Store.SetOneRequestHealth(ctx, box.AccountID, box.ID, status, "stale request detail", b.Revision); err != nil {
+	// A late request rejection counts only while the binding is still active, so
+	// it cannot displace the authoritative verdict or its operator detail.
+	for _, message := range []string{"stale request detail", "One rejected access; test the key"} {
+		if err := svc.Store.RecordOneFailure(ctx, box.AccountID, box.ID, message, b.Revision); err != nil {
 			t.Fatal(err)
 		}
 	}

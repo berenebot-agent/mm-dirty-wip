@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
@@ -410,9 +411,6 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 	if err != nil {
 		return nil, "", err
 	}
-	if b.Status == "attention" {
-		return nil, "", oneError(model.ErrKindAuth, "One connection requires attention; save the key again for this inbox")
-	}
 	c, err := m.oneClient(ctx, b)
 	if err != nil {
 		return nil, "", err
@@ -423,48 +421,94 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 	}
 	selector := string(key)
 	clear(key)
-	if time.Since(b.LastCheckedAt) > 15*time.Minute {
-		rows, e := c.Connections(ctx)
-		if e != nil {
-			return nil, "", e
+	// Revalidate whenever a failure is pending or the binding is flagged, so the
+	// inbox keeps trying in the background: One either confirms the connection,
+	// which clears the count and resumes sync without an operator, or the
+	// failure is counted again. The periodic check still covers a binding that
+	// has never failed.
+	if b.FailureCount > 0 || b.Status == "attention" || time.Since(b.LastCheckedAt) > 15*time.Minute {
+		if err := m.revalidateOneBinding(ctx, account, inbox, b, c, selector); err != nil {
+			return nil, "", err
 		}
-		selected := findOne(rows, b.ConnectionID)
-		if selected == nil || selected.Key != selector {
-			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", "One connection revoked or expired; reconnect the original account in One, then save this inbox's key", b.Revision)
-			return nil, "", oneError(model.ErrKindAuth, "One connection requires attention")
-		}
-		profile, e := c.Gmail(selector, nil, nil).Profile(ctx, "")
-		if e != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", "One connection's account or permissions changed; reconnect the original account in One", b.Revision)
-			return nil, "", oneError(model.ErrKindAuth, "One connection's account or permissions changed")
-		}
-		_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "active", "", b.Revision)
-		m.refreshOneDisplayName(ctx, c, selector, account, inbox, b.GmailEmail)
 	}
+	// Only a removed or replaced binding stops an attempt; an unhealthy one does
+	// not, because every attempt is how the count is earned and cleared.
 	check := func(ctx context.Context) error {
 		current, e := m.Service.Store.OneBinding(ctx, account, inbox)
-		if e != nil || current.Status == "disconnected" || current.Status == "attention" || current.Revision != b.Revision {
+		if e != nil || current.Status == "disconnected" || current.Revision != b.Revision {
 			return oneError(model.ErrKindAuth, "One connection changed or deleted; refresh settings")
 		}
 		return nil
 	}
-	// status records only a confirmed authorization verdict. A retryable,
-	// unavailable, rate-limited or connector-level (ErrKindUnsupported) outcome
-	// is never evidence that the stored credential is invalid, so it must not
-	// mark the binding as needing attention. SetOneRequestHealth already stops
-	// request feedback from replacing an authoritative verdict, but treating a
-	// connector action-mapping problem as attention still stranded the inbox on
-	// a state only a manual reconnect could clear.
+	// A real operation One rejects on authorization is evidence the connection
+	// is unusable, so it counts. At most one failure is recorded per resolved
+	// client, so a single bad sync cannot mark the inbox unavailable on its own.
+	// Nothing else counts: a timeout, 5xx, rate limit or connector-action
+	// problem is not proof that the stored credential is invalid.
+	var counted sync.Once
 	status := func(ctx context.Context, e error) {
 		var mb *model.MailboxError
 		if !errors.As(e, &mb) {
 			return
 		}
-		if mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden {
-			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", mb.Message, b.Revision)
+		if mb.Kind != model.ErrKindAuth && mb.Kind != model.ErrKindForbidden {
+			return
 		}
+		counted.Do(func() {
+			_ = m.Service.Store.RecordOneFailure(ctx, account, inbox, mb.Message, b.Revision)
+		})
 	}
 	return c.Gmail(selector, check, status), "", nil
+}
+
+// revalidateOneBinding asks One for the authoritative verdict on a binding's
+// connection. One naming the saved connection as present, usable and bound to
+// the expected mailbox clears the failure count; anything else is counted
+// towards the threshold that marks the inbox unavailable. It returns an error
+// whenever the connection may not be used, so callers never proceed on an
+// unconfirmed connection.
+func (m *RemoteMailboxService) revalidateOneBinding(ctx context.Context, account, inbox string, b store.OneBinding, c *one.Client, selector string) error {
+	rows, err := c.Connections(ctx)
+	if err != nil {
+		return m.countOneAuthFailure(ctx, account, inbox, b, err)
+	}
+	selected := findOne(rows, b.ConnectionID)
+	if selected == nil || selected.Key != selector {
+		return m.oneFailure(ctx, account, inbox, b, "One connection revoked or expired; reconnect the original account in One, then save this inbox's key")
+	}
+	profile, err := c.Gmail(selector, nil, nil).Profile(ctx, "")
+	if err != nil {
+		return m.countOneAuthFailure(ctx, account, inbox, b, err)
+	}
+	if !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
+		return m.oneFailure(ctx, account, inbox, b, "One connection's account or permissions changed; reconnect the original account in One")
+	}
+	if err := m.Service.Store.ClearOneFailures(ctx, account, inbox, b.Revision); err != nil {
+		return err
+	}
+	m.refreshOneDisplayName(ctx, c, selector, account, inbox, b.GmailEmail)
+	return nil
+}
+
+// countOneAuthFailure counts an error only when it is an authorization verdict;
+// any other failure is passed through uncounted so a transient outage cannot
+// mark the connection unavailable.
+func (m *RemoteMailboxService) countOneAuthFailure(ctx context.Context, account, inbox string, b store.OneBinding, err error) error {
+	var mb *model.MailboxError
+	if errors.As(err, &mb) && (mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden) {
+		return m.oneFailure(ctx, account, inbox, b, mb.Message)
+	}
+	return err
+}
+
+// oneFailure records one authorization failure and reports the verdict the
+// caller should surface. The binding itself decides whether this failure was
+// the one that marks it unavailable.
+func (m *RemoteMailboxService) oneFailure(ctx context.Context, account, inbox string, b store.OneBinding, detail string) error {
+	if err := m.Service.Store.RecordOneFailure(ctx, account, inbox, detail, b.Revision); err != nil {
+		return err
+	}
+	return oneError(model.ErrKindAuth, detail)
 }
 
 func (m *RemoteMailboxService) SaveOneInboxKey(ctx context.Context, p model.Principal, inbox, key string) error {

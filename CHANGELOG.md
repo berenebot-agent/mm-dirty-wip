@@ -1,5 +1,15 @@
 # Changelog
 
+- A One / Gmail inbox no longer stays disconnected until someone saves its key
+  again. The connection is marked unavailable only after three consecutive
+  authorization failures, and the background sync keeps trying meanwhile — every
+  attempt revalidates against One, and one One accepts clears the failure count
+  and resumes syncing on its own. A single transient rejection can no longer
+  strand a working inbox on a reconnect prompt, and a connection repaired in One
+  recovers without touching MailMoose. Nothing but a removed or re-imported
+  connection stops an attempt, so an unhealthy binding keeps earning and clearing
+  its failures instead of being short-circuited.
+
 - A One / Gmail connection is flagged as needing the operator only for a
   confirmed authorization rejection. A connector-level problem — One no longer
   exposing a mandatory Gmail action — is no longer recorded as needing attention,

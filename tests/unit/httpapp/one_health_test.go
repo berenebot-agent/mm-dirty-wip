@@ -11,6 +11,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/one"
 	"github.com/dellarb/mailmoose/tests/support/onefixture"
 )
@@ -61,34 +62,103 @@ func (e *oneHealthEnv) remote(t *testing.T) *app.RemoteMailboxService {
 	return rm
 }
 
-type oneHealthRoundTrip func(*http.Request) (*http.Response, error)
-
-func (f oneHealthRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-// TestOneHealthFlagsRejectedAuthorization pins the positive case: a rejected
-// One/Gmail authorization still marks the binding as needing attention, which is
-// what renders the reconnect prompt.
-func TestOneHealthFlagsRejectedAuthorization(t *testing.T) {
+// TestOneHealthRequiresRepeatedRejection pins the threshold: one rejected
+// authorization must not mark the inbox unavailable, because a transient
+// rejection used to strand it on a state only a manual re-save could clear.
+// Consecutive failures are counted, and only the threshold renders the
+// reconnect prompt.
+func TestOneHealthRequiresRepeatedRejection(t *testing.T) {
 	t.Parallel()
 	env := newOneHealthEnv(t)
 	ctx := context.Background()
 	env.fixture.Change(func(f *onefixture.Fixture) {
 		f.Status["GET /v1/passthrough/gmail/v1/users/me/profile"] = 401
 	})
-	rm := env.remote(t)
-	client, token, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID)
-	if err != nil {
-		t.Fatal(err)
+	for attempt := 1; attempt <= store.OneFailureThreshold; attempt++ {
+		rm := env.remote(t)
+		client, token, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID)
+		if err == nil {
+			_, err = client.Profile(ctx, token)
+		}
+		if err == nil {
+			t.Fatalf("attempt %d: a rejected authorization must fail the operation", attempt)
+		}
+		b, berr := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
+		if berr != nil {
+			t.Fatal(berr)
+		}
+		wantStatus := "active"
+		if attempt >= store.OneFailureThreshold {
+			wantStatus = "attention"
+		}
+		if b.Status != wantStatus || b.FailureCount != attempt {
+			t.Fatalf("attempt %d: status=%q failures=%d, want status=%q failures=%d", attempt, b.Status, b.FailureCount, wantStatus, attempt)
+		}
 	}
-	if _, err := client.Profile(ctx, token); err == nil {
-		t.Fatal("a rejected authorization must fail the operation")
-	}
+}
+
+// TestOneHealthSelfHealsWhenOneConfirmsHealthy proves the flagged binding is not
+// a dead end: the next attempt revalidates against One, and a connection One
+// still accepts returns the inbox to service without an operator.
+func TestOneHealthSelfHealsWhenOneConfirmsHealthy(t *testing.T) {
+	t.Parallel()
+	env := newOneHealthEnv(t)
+	ctx := context.Background()
 	b, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Status != "attention" {
-		t.Fatalf("status = %q, want attention", b.Status)
+	if err := env.svc.Store.SetOneHealth(ctx, env.user.AccountID, env.box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	rm := env.remote(t)
+	client, token, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID)
+	if err != nil {
+		t.Fatalf("a connection One still accepts must not stay unavailable: %v", err)
+	}
+	if _, err := client.Profile(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	after, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "active" || after.FailureCount != 0 || after.LastError != "" {
+		t.Fatalf("binding did not recover: status=%q failures=%d error=%q", after.Status, after.FailureCount, after.LastError)
+	}
+}
+
+// TestOneHealthKeepsUnavailableWhenConnectionUnusable is the counterpoint: when
+// One no longer exposes the connection, revalidation must fail and the verdict
+// must stand, so the reconnect prompt is not cleared by wishful retrying.
+func TestOneHealthKeepsUnavailableWhenConnectionUnusable(t *testing.T) {
+	t.Parallel()
+	env := newOneHealthEnv(t)
+	ctx := context.Background()
+	b, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.fixture.Change(func(f *onefixture.Fixture) {
+		for i := range f.Connections {
+			if f.Connections[i]["id"] == onefixture.ConnectionID {
+				f.Connections[i]["state"] = "reconnect_required"
+			}
+		}
+	})
+	if err := env.svc.Store.SetOneHealth(ctx, env.user.AccountID, env.box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	rm := env.remote(t)
+	if _, _, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID); err == nil {
+		t.Fatal("an unusable connection must not resume")
+	}
+	after, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "attention" {
+		t.Fatalf("status = %q, want attention", after.Status)
 	}
 }
 
@@ -128,12 +198,11 @@ func TestOneHealthIgnoresConnectorActionFailure(t *testing.T) {
 	}
 }
 
-// TestOneHealthKeepsAttentionAcrossTransientFailure pins the invariant that a
-// transient outcome from a request that was already in flight cannot replace a
-// recorded authorization failure. Writing "active" for any provider error let a
-// late timeout erase a genuine auth verdict, which showed as a dashboard flag
-// with no matching in-mailbox reconnect banner.
-func TestOneHealthKeepsAttentionAcrossTransientFailure(t *testing.T) {
+// TestOneHealthKeepsVerdictAcrossTransientFailure pins the invariant that a
+// transient outcome cannot lift a recorded authorization failure, so a
+// rate-limited or timed-out attempt never reads as a healthy connection. Only a
+// revalidation One accepts may clear the verdict.
+func TestOneHealthKeepsVerdictAcrossTransientFailure(t *testing.T) {
 	t.Parallel()
 	env := newOneHealthEnv(t)
 	ctx := context.Background()
@@ -141,34 +210,24 @@ func TestOneHealthKeepsAttentionAcrossTransientFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := env.fixture.Client(t)
+	for i := 0; i < store.OneFailureThreshold; i++ {
+		if err := env.svc.Store.RecordOneFailure(ctx, env.user.AccountID, env.box.ID, "One connection revoked or expired", b.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
 	env.fixture.Change(func(f *onefixture.Fixture) {
 		f.Status["GET /v1/passthrough/gmail/v1/users/me/profile"] = 429
 	})
-	rm := app.NewRemoteMailboxService(env.svc)
-	t.Cleanup(rm.Stop)
-	rm.OneInterval = time.Nanosecond
-	rm.OneHTTP = &http.Client{Transport: oneHealthRoundTrip(func(r *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(r.URL.Path, "/profile") {
-			// A concurrent request records a genuine auth failure once this
-			// request's own binding check has already passed.
-			_ = env.svc.Store.SetOneRequestHealth(ctx, env.user.AccountID, env.box.ID, "attention", "One connection revoked or expired", b.Revision)
-		}
-		return base.Do(r)
-	})}
-	client, token, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Profile(ctx, token); err == nil {
-		t.Fatal("a rate-limited request must surface an error")
+	rm := env.remote(t)
+	if _, _, err := rm.GoogleMailboxClient(ctx, env.user.AccountID, env.box.ID); err == nil {
+		t.Fatal("a rate-limited attempt must surface an error, not a live client")
 	}
 	current, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Status != "attention" || !strings.Contains(current.LastError, "revoked or expired") {
-		t.Fatalf("a transient failure replaced the recorded auth verdict: status=%q error=%q", current.Status, current.LastError)
+	if current.Status != "attention" || current.FailureCount != store.OneFailureThreshold || !strings.Contains(current.LastError, "revoked or expired") {
+		t.Fatalf("a transient failure replaced the recorded auth verdict: status=%q failures=%d error=%q", current.Status, current.FailureCount, current.LastError)
 	}
 }
 
@@ -192,12 +251,23 @@ func TestRemoteMessageBodyFailureCarriesReconnectVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One stops exposing the connection, and repeated rejections mark the
+	// binding unavailable, so the live body fetch is the attempt that fails.
+	env.fixture.Change(func(f *onefixture.Fixture) {
+		for i := range f.Connections {
+			if f.Connections[i]["id"] == onefixture.ConnectionID {
+				f.Connections[i]["state"] = "reconnect_required"
+			}
+		}
+	})
 	b, err := env.svc.Store.OneBinding(ctx, env.user.AccountID, env.box.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := env.svc.Store.SetOneHealth(ctx, env.user.AccountID, env.box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
-		t.Fatal(err)
+	for i := 0; i < store.OneFailureThreshold; i++ {
+		if err := env.svc.Store.RecordOneFailure(ctx, env.user.AccountID, env.box.ID, "One connection revoked or expired", b.Revision); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rr := uiGet(t, h, env.cookie, "/ui/messages/"+id+"/body")
 	if rr.Code != http.StatusServiceUnavailable {
