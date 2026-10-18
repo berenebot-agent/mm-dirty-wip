@@ -62,7 +62,7 @@ func (s *Store) CompleteRemotePreview(ctx context.Context, account, inbox, id, p
 		return err
 	}
 	defer tx.Rollback()
-	before, err := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	before, _, err := remoteMessageBytesTx(ctx, tx, account, inbox, id)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,11 @@ func (s *Store) CompleteRemotePreview(ctx context.Context, account, inbox, id, p
 	if err != nil {
 		return err
 	}
-	if err := syncRemoteMetadataStorageTx(ctx, tx, account, inbox, before); err != nil {
+	after, _, err := remoteMessageBytesTx(ctx, tx, account, inbox, id)
+	if err != nil {
+		return err
+	}
+	if err := applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, after-before); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -753,7 +753,7 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		return RemoteMessage{}, err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	oldBytes, _, err := remoteMessageBytesByUIDTx(ctx, tx, inboxID, in.FolderPath, in.UIDValidity, in.UID)
 	if err != nil {
 		return RemoteMessage{}, err
 	}
@@ -789,10 +789,15 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		boolInt(in.Answered), boolInt(in.Draft), jsonString(in.Flags), nullStringPtr(in.ReceivedAt), nullStringPtr(in.SentAt), nullStringPtr(in.InternalDate), now, now, now); err != nil {
 		return RemoteMessage{}, err
 	}
-	if err = mergeRemoteThreadTx(ctx, tx, inboxID, in); err != nil {
+	mergeDelta, err := mergeRemoteThreadTx(ctx, tx, inboxID, in)
+	if err != nil {
 		return RemoteMessage{}, err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	newBytes, _, err := remoteMessageBytesByUIDTx(ctx, tx, inboxID, in.FolderPath, in.UIDValidity, in.UID)
+	if err != nil {
+		return RemoteMessage{}, err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, newBytes-oldBytes+mergeDelta); err != nil {
 		return RemoteMessage{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -871,14 +876,18 @@ func (s *Store) DeleteRemoteMessage(ctx context.Context, accountID, inboxID, id 
 		return err
 	}
 	defer tx.Rollback()
-	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	messageBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, id)
+	if err != nil {
+		return err
+	}
+	labelBytes, err := remoteLabelBytesTx(ctx, tx, accountID, inboxID, id)
 	if err != nil {
 		return err
 	}
 	if err = deleteRemoteMessageTx(ctx, tx, accountID, inboxID, id); err != nil {
 		return err
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, -(messageBytes + labelBytes)); err != nil {
 		return err
 	}
 	return tx.Commit()

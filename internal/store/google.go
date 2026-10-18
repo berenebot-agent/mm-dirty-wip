@@ -128,10 +128,6 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 		return RemoteMessage{}, e
 	}
 	defer tx.Rollback()
-	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
-	if e != nil {
-		return RemoteMessage{}, e
-	}
 	accountRoom, accountLimited, inboxRoom, inboxLimited, e := remoteMetadataHeadroomTx(ctx, tx, account, inbox)
 	if e != nil {
 		return RemoteMessage{}, e
@@ -141,7 +137,8 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 	if e != nil && e != sql.ErrNoRows {
 		return RemoteMessage{}, e
 	}
-	if e == sql.ErrNoRows {
+	isNew := e == sql.ErrNoRows
+	if isNew {
 		// A new Gmail message is a genuinely new metadata row: refuse it when a
 		// cap is set and there is no room, so indexing stops rather than growing
 		// past the cap. An existing message (e == nil) updates in place.
@@ -157,8 +154,19 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 			return RemoteMessage{}, e
 		}
 	}
+	var oldBytes int64
+	if !isNew {
+		oldBytes, _, e = remoteMessageBytesTx(ctx, tx, account, inbox, id)
+		if e != nil {
+			return RemoteMessage{}, e
+		}
+	}
 	now := nowText()
 	_, e = tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET rfc_message_id=?,in_reply_to=?,references_json=?,thread_key=?,from_name=?,from_address=?,to_json=?,cc_json=?,subject=?,snippet=?,size_bytes=?,has_attachments=?,is_read=?,is_flagged=?,is_draft=?,received_at=?,internal_date=?,indexed_at=?,created_at=CASE WHEN created_at='' THEN ? ELSE created_at END,updated_at=? WHERE id=? AND account_id=? AND inbox_id=?`, in.RFCMessageID, in.InReplyTo, jsonString(in.References), "gmail:"+inbox+":"+thread, in.FromName, in.FromAddress, jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, in.SizeBytes, in.HasAttach, in.Read, in.Flagged, in.Draft, nullStringPtr(in.ReceivedAt), nullStringPtr(in.InternalDate), now, now, now, id, account, inbox)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
+	newBytes, _, e := remoteMessageBytesTx(ctx, tx, account, inbox, id)
 	if e != nil {
 		return RemoteMessage{}, e
 	}
@@ -177,7 +185,7 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 			return RemoteMessage{}, e
 		}
 	}
-	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+	if e = applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, newBytes-oldBytes); e != nil {
 		return RemoteMessage{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -199,18 +207,25 @@ func (s *Store) PruneGoogleResync(ctx context.Context, account, inbox string) er
 		return e
 	}
 	defer tx.Rollback()
-	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
-	if e != nil {
+	var messageBytes, labelBytes int64
+	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (`+googlePruneIDs+`)`, account, inbox, inbox).Scan(&messageBytes); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT g.message_id FROM google_message_ids g JOIN inbox_gmail_sync c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation)`, account, inbox, inbox); e != nil {
+	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id IN (`+googlePruneIDs+`)`, account, inbox, inbox).Scan(&labelBytes); e != nil {
 		return e
 	}
-	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (`+googlePruneIDs+`)`, account, inbox, inbox); e != nil {
+		return e
+	}
+	if e = applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, -(messageBytes + labelBytes)); e != nil {
 		return e
 	}
 	return tx.Commit()
 }
+
+// googlePruneIDs selects the cached Gmail message ids a superseded resync left
+// behind.
+const googlePruneIDs = `SELECT g.message_id FROM google_message_ids g JOIN inbox_gmail_sync c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation`
 
 func (s *Store) RefreshGoogleLabelNames(ctx context.Context, account, inbox string) error {
 	tx, e := s.write.BeginTx(ctx, nil)
@@ -218,8 +233,8 @@ func (s *Store) RefreshGoogleLabelNames(ctx context.Context, account, inbox stri
 		return e
 	}
 	defer tx.Rollback()
-	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
-	if e != nil {
+	var oldLabels int64
+	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&oldLabels); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, account, inbox); e != nil {
@@ -229,7 +244,11 @@ func (s *Store) RefreshGoogleLabelNames(ctx context.Context, account, inbox stri
 	if e != nil {
 		return e
 	}
-	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+	var newLabels int64
+	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&newLabels); e != nil {
+		return e
+	}
+	if e = applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, newLabels-oldLabels); e != nil {
 		return e
 	}
 	return tx.Commit()

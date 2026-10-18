@@ -22,6 +22,24 @@ export type MailMooseRelayOptions = {
     info?: (message: string) => void;
     warn?: (message: string) => void;
   };
+  /** How often an in-flight event sends an inbound_processing heartbeat. */
+  heartbeatIntervalMs?: number;
+  /** How long a completed buffer id is remembered across reconnects. */
+  completedTtlMs?: number;
+  /** Upper bound on the completed buffer-id cache. */
+  maxCompleted?: number;
+  /** Initial reconnect delay; tests use a short value. */
+  reconnectDelayMs?: number;
+  /** Test seam: replace the WebSocket constructor. */
+  createSocket?: (url: string, init: { headers: Record<string, string> }) => RelaySocket;
+};
+
+/** The subset of the WebSocket surface this client uses. */
+export type RelaySocket = {
+  readonly readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: "open" | "message" | "close" | "error", listener: (...args: any[]) => void): unknown;
 };
 
 type PendingResult = {
@@ -33,6 +51,10 @@ type PendingResult = {
 const OUTBOUND_RESULT_TIMEOUT_MS = 60_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const COMPLETED_TTL_MS = 10 * 60_000;
+const MAX_COMPLETED = 1024;
+const WS_OPEN = 1;
 
 /** Builds the relay WebSocket URL for a MailMoose base URL. */
 export function websocketUrl(baseUrl: string): string {
@@ -56,13 +78,31 @@ export function relayBearer(gatewayId: string, secret: string, now = Date.now())
 }
 
 export class MailMooseRelay {
-  private socket?: WebSocket;
+  private socket?: RelaySocket;
   private stopped = false;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+  private readonly initialReconnectDelayMs: number;
   private pending = new Map<string, PendingResult>();
   private abort?: AbortSignal;
+  private readonly heartbeatIntervalMs: number;
+  private readonly completedTtlMs: number;
+  private readonly maxCompleted: number;
+  private readonly createSocket: NonNullable<MailMooseRelayOptions["createSocket"]>;
+  /** Events whose handler is still running, keyed by buffer id. */
+  private inFlight = new Map<string, Promise<void>>();
+  /** Recently completed buffer ids, so a post-disconnect replay is acked only. */
+  private completed = new Map<string, number>();
 
-  constructor(private readonly options: MailMooseRelayOptions) {}
+  constructor(private readonly options: MailMooseRelayOptions) {
+    this.initialReconnectDelayMs = options.reconnectDelayMs ?? INITIAL_RECONNECT_DELAY_MS;
+    this.reconnectDelayMs = this.initialReconnectDelayMs;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.completedTtlMs = options.completedTtlMs ?? COMPLETED_TTL_MS;
+    this.maxCompleted = options.maxCompleted ?? MAX_COMPLETED;
+    this.createSocket =
+      options.createSocket ??
+      ((url, init) => new WebSocket(url, init) as unknown as RelaySocket);
+  }
 
   async start(signal: AbortSignal): Promise<void> {
     this.stopped = false;
@@ -95,10 +135,15 @@ export class MailMooseRelay {
     }
   }
 
-  /** Sends a reply on a MailMoose thread and resolves with the sent message id. */
-  async sendText(threadId: string, text: string): Promise<string> {
+  /**
+   * Sends a reply on a MailMoose thread and resolves with the sent message id.
+   * replyTo, when supplied, is the exact inbound message/arrival that started
+   * the turn; MailMoose then replies to that email rather than guessing from
+   * the conversation id.
+   */
+  async sendText(threadId: string, text: string, replyTo?: string | null): Promise<string> {
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    if (!socket || socket.readyState !== WS_OPEN) {
       throw new Error("mailmoose: relay is not connected");
     }
     if (!threadId.trim() || !text.trim()) {
@@ -113,13 +158,11 @@ export class MailMooseRelay {
       timer.unref?.();
       this.pending.set(requestId, { resolve, reject, timer });
     });
-    socket.send(
-      JSON.stringify({
-        type: "outbound",
-        requestId,
-        action: { op: "send", chat_id: threadId, content: text },
-      }),
-    );
+    const action: Record<string, unknown> = { op: "send", chat_id: threadId, content: text };
+    if (replyTo?.trim()) {
+      action.reply_to_message_id = replyTo.trim();
+    }
+    socket.send(JSON.stringify({ type: "outbound", requestId, action }));
     return result;
   }
 
@@ -127,7 +170,7 @@ export class MailMooseRelay {
     while (!this.stopped && !signal.aborted) {
       try {
         await this.connectOnce(signal);
-        this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+        this.reconnectDelayMs = this.initialReconnectDelayMs;
       } catch (error) {
         if (this.stopped || signal.aborted) {
           return;
@@ -144,7 +187,7 @@ export class MailMooseRelay {
 
   private connectOnce(signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(websocketUrl(this.options.baseUrl), {
+      const socket = this.createSocket(websocketUrl(this.options.baseUrl), {
         headers: {
           Authorization: `Bearer ${relayBearer(this.options.gatewayId, this.options.secret)}`,
         },
@@ -193,7 +236,7 @@ export class MailMooseRelay {
     });
   }
 
-  private async handleFrame(socket: WebSocket, raw: string): Promise<void> {
+  private async handleFrame(socket: RelaySocket, raw: string): Promise<void> {
     const frame = JSON.parse(raw) as RelayFrame;
     if (frame.type === "ping") {
       socket.send(JSON.stringify({ type: "pong" }));
@@ -219,10 +262,84 @@ export class MailMooseRelay {
     if (frame.type !== "inbound" || !frame.event || !frame.bufferId) {
       return;
     }
+    const bufferId = String(frame.bufferId);
+    // A completion that happened while disconnected must not be dispatched
+    // again: acknowledge the replay on the replacement socket and stop.
+    if (this.isCompleted(bufferId)) {
+      this.sendFrame({ type: "inbound_ack", bufferId });
+      return;
+    }
+    // A replay while the original handler is still running joins that work
+    // instead of starting a second agent turn. The waiter that finishes on a
+    // replacement socket acks through the current socket.
+    let processing = this.inFlight.get(bufferId);
+    if (!processing) {
+      processing = this.processInbound(bufferId, frame.event);
+      this.inFlight.set(bufferId, processing);
+    }
+    await processing;
     // The ack is the durable-receipt signal: only send it after the inbound
     // handler has accepted the event for dispatch, so a crash replays it.
-    await this.options.onInbound(frame.event);
-    socket.send(JSON.stringify({ type: "inbound_ack", bufferId: String(frame.bufferId) }));
+    this.sendFrame({ type: "inbound_ack", bufferId });
+  }
+
+  /** Runs one agent turn with heartbeats while it is in flight. */
+  private async processInbound(bufferId: string, event: MailMooseInboundEvent): Promise<void> {
+    const heartbeat = setInterval(() => {
+      if (!this.isCompleted(bufferId)) {
+        this.sendFrame({ type: "inbound_processing", bufferId });
+      }
+    }, this.heartbeatIntervalMs);
+    heartbeat.unref?.();
+    try {
+      await this.options.onInbound(event);
+      this.markCompleted(bufferId);
+    } finally {
+      clearInterval(heartbeat);
+      this.inFlight.delete(bufferId);
+    }
+  }
+
+  private isCompleted(bufferId: string): boolean {
+    const expires = this.completed.get(bufferId);
+    if (expires === undefined) {
+      return false;
+    }
+    if (expires <= Date.now()) {
+      this.completed.delete(bufferId);
+      return false;
+    }
+    return true;
+  }
+
+  private markCompleted(bufferId: string): void {
+    const now = Date.now();
+    this.completed.set(bufferId, now + this.completedTtlMs);
+    for (const [id, expires] of this.completed) {
+      if (expires <= now) {
+        this.completed.delete(id);
+      }
+    }
+    while (this.completed.size > this.maxCompleted) {
+      const oldest = this.completed.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      this.completed.delete(oldest.value);
+    }
+  }
+
+  private sendFrame(frame: Record<string, unknown>): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WS_OPEN) {
+      return;
+    }
+    try {
+      socket.send(JSON.stringify(frame));
+    } catch {
+      // A socket that failed between the state check and the write is handled
+      // by its close/error event; the durable cursor keeps the event replayable.
+    }
   }
 }
 

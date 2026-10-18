@@ -140,6 +140,7 @@ export const mailMoosePlugin: ChannelPlugin<ResolvedMailMooseAccount> = createCh
           accountId: ctx.accountId,
           to: String(ctx.to ?? ""),
           text: String(ctx.text ?? ""),
+          replyTo: ctx.replyToId ?? undefined,
         });
         return { messageId: messageId ?? "" };
       },

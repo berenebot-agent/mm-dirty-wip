@@ -15,6 +15,8 @@ export async function sendMailMooseText(params: {
   accountId?: string | null;
   to: string;
   text: string;
+  /** Exact inbound mail this reply answers (local message or remote arrival id). */
+  replyTo?: string | null;
 }): Promise<string> {
   const account = resolveMailMooseAccount({
     cfg: params.cfg as CoreConfig,
@@ -25,5 +27,5 @@ export async function sendMailMooseText(params: {
     throw new Error("mailmoose: relay is not connected for this account");
   }
   const threadId = threadIdFromTarget(params.to);
-  return relay.sendText(threadId, params.text);
+  return relay.sendText(threadId, params.text, params.replyTo);
 }

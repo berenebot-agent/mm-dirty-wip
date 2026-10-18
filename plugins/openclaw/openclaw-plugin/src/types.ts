@@ -68,6 +68,7 @@ export type RelayFrame = {
     op?: string;
     chat_id?: string;
     thread_id?: string;
+    reply_to_message_id?: string;
     content?: string;
     text?: string;
   };
