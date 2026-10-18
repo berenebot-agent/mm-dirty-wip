@@ -37,10 +37,6 @@ type Delivery interface {
 
 type DeliveryFactory func() Delivery
 
-func NewServerWithHandoff(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
-	return NewServerWithDelivery(cfg, log, factory)
-}
-
 type Server struct {
 	cfg     Config
 	factory DeliveryFactory
@@ -59,10 +55,6 @@ type Server struct {
 }
 
 func NewServerWithDelivery(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
-	return newServer(cfg, log, factory)
-}
-
-func newServer(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
 	if log == nil {
 		log = slog.Default()
 	}

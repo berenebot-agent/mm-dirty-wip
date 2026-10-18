@@ -180,7 +180,7 @@ func dialMXWaitReconnect(t *testing.T, m *mxdial.Manager, domain string) {
 // receiver. Verification is disabled so no external DNS is consulted.
 func dialMXEdge(t *testing.T, r *receiver.Receiver) string {
 	t.Helper()
-	edge := mxagent.NewServerWithHandoff(mxagent.Config{
+	edge := mxagent.NewServerWithDelivery(mxagent.Config{
 		Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20,
 		MaxRecipients: 10, MaxConnections: 16, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second,
 	}, nil, func() mxagent.Delivery { return r.NewDelivery() })

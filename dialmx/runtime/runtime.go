@@ -171,7 +171,7 @@ func (rt *Runtime) Activate(ctx context.Context, cfg Config) (control.Status, er
 	}
 
 	r := receiver.New(receiver.Config{Mode: "single", CoreKey: cfg.Secret, SMTP: cfg.SMTP}, rt.log)
-	edge := mxagent.NewServerWithHandoff(cfg.SMTP, rt.log, func() mxagent.Delivery {
+	edge := mxagent.NewServerWithDelivery(cfg.SMTP, rt.log, func() mxagent.Delivery {
 		return r.NewDelivery()
 	})
 
