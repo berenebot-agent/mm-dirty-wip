@@ -45,7 +45,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D037: External sending aliases (migration 028)](#d037-external-sending-aliases-migration-028)
 - [D038: Embedded MX: single-container mode with a separate-uid child](#d038-embedded-mx-single-container-mode-with-a-separate-uid-child)
 - [D039: Minimal default Compose enables embedded MX; webhook-only is the opt-out](#d039-minimal-default-compose-enables-embedded-mx-webhook-only-is-the-opt-out)
-- [D040: Separate edge image for remote MX (Dockerfile.mx)](#d040-separate-edge-image-for-remote-mx-dockerfilemx)
+- [D040: Separate edge image for remote MX](#d040-separate-edge-image-for-remote-mx)
 - [D041: Workflow mail has its own outbound queue (migration 022)](#d041-workflow-mail-has-its-own-outbound-queue-migration-022)
 - [D042: In-process privilege drop (no gosu, bind-mounted ./data)](#d042-in-process-privilege-drop-no-gosu-bind-mounted-data)
 - [D043: Free-text message labels (migration 020)](#d043-free-text-message-labels-migration-020)
@@ -141,6 +141,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D134: A settled receiver refusal is an error state, not a retry](#d134-a-settled-receiver-refusal-is-an-error-state-not-a-retry)
 - [D135: The public database baseline replaces the pre-release migration lineage](#d135-the-public-database-baseline-replaces-the-pre-release-migration-lineage)
 - [D136: Retire the completed developer database transition](#d136-retire-the-completed-developer-database-transition)
+- [D137: Published image names, and one edge image for both modes](#d137-published-image-names-and-one-edge-image-for-both-modes)
 
 ---
 
@@ -1078,9 +1079,9 @@ memory. The single switch `MX_ENABLE` has three values: `false` (no MX), `true`
   two remedies (remove the hardening, or use `MX_ENABLE=remote` with the
   separate edge image). Silent same-uid degradation would defeat the isolation.
 - **Isolation is weaker than `remote`:** DAC + separate uid, no mount or
-  network namespaces. The remote mode (the `mailmoose-mx` image, see README.md)
-  remains the recommended mode when two containers are acceptable; the embedded
-  mode trades namespace isolation for a one-container deployment.
+  network namespaces. The remote mode (the `mailmoose-remote-mx` image, see
+  README.md) remains the recommended mode when two containers are acceptable;
+  the embedded mode trades namespace isolation for a one-container deployment.
 - **In-memory staging, capped:** the edge holds the original bytes in RAM for
   one transaction and releases them after the core ingest, bounded by
   `MX_STAGING_BYTES` (default 256 MiB) across concurrent transactions. A
@@ -1138,11 +1139,12 @@ compose files and the matching documentation; no Go code, no new dependency, no
 new runtime service. Changing the settled default was made under the
 change-discipline rule for a settled decision (this entry).
 
-## D040 — Separate edge image for remote MX (Dockerfile.mx)
+## D040 — Separate edge image for remote MX
 
-The remote edge runs from its own image, `mailmoose-mx` (`Dockerfile.mx`),
-not the app image with an entrypoint override. The app image still builds the
-edge binary for `MX_ENABLE=true`; the separate image is edge-only.
+The remote edge runs from its own image, `mailmoose-remote-mx`
+(`dialmx/Dockerfile`), not the app image with an entrypoint override. The app
+image still builds the edge binary for `MX_ENABLE=true`; the separate image is
+edge-only. One image serves both `DIALMX_MODE=shared` and `DIALMX_MODE=single`.
 
 - **Why:** "which container is this?" should be obvious. A standalone MX host or
   remote receiver previously ran the full app image (including `mailmoose` and
@@ -5554,3 +5556,38 @@ backup/restore instructions remain in `docs/SELFHOSTING.md`.
 
 **Complexity:** Deletes completed maintenance code and packaging without adding
 dependencies, runtime options or services. Supersedes only D135's cutover tooling.
+
+## D137 — Published image names, and one edge image for both modes
+
+**Requirement:** A dev image published from the fork for pre-merge UAT must be
+pullable and must never be mistakeable for a release. Two Dockerfiles built the
+same edge binary under two names, so "which image do I run?" had three answers
+for one program.
+
+**Decision:** Two published images.
+
+- `mailmoose` — the core, built from `Dockerfile`.
+- `mailmoose-remote-mx` — the edge, built from `dialmx/Dockerfile`. One image
+  serves both `DIALMX_MODE=shared` (DNS TXT domain proofs and TLS) and
+  `DIALMX_MODE=single` (a shared bearer key); the mode is a runtime setting, not
+  an image choice.
+
+The dev channel published from the fork carries a `dirty-wip-` prefix —
+`dirty-wip-mailmoose` and `dirty-wip-mailmoose-remote-mx` — so a dev image can
+never be mistaken for a release. Releases publish the unprefixed names.
+
+**Why:** `Dockerfile.mx` and `dialmx/Dockerfile` differed only in the
+in-container binary filename (`mailmoose-mx` vs `mailmoose-dialmx`) and their
+comments; every other line — base image, `CGO_ENABLED=0`, non-root uid,
+exposed ports — was identical. Publishing both meant two packages that install
+the same program. `Dockerfile.mx` and the third published image named after the
+standalone receiver are retired.
+
+**Unchanged:** the embedded `mailmoose-mx` binary name (`internal/launcher`),
+the `_mailmoose-mx.<domain>` TXT proof record, the `mailmoose-mx-v1` session
+transcript separator and the `mailmoose-mx/1` Authentication-Results evaluator
+are protocol, DNS and in-image names, not published image names.
+
+**Complexity:** Renames published artifacts, deletes one duplicate Dockerfile
+and collapses two registry packages into one. No Go behaviour change, no new
+dependency, no new service, no new runtime option.

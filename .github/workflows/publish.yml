@@ -2,15 +2,14 @@ name: publish
 
 # Publish runnable images to GitHub Container Registry without cutting a release.
 #
-# release.yml already publishes the same three images, but only for a
+# release.yml already publishes the same two images, but only for a
 # v…-alpha/beta/rc.N tag. This workflow is the "just give me something to pull
-# for testing" path: push to a branch, or run it by hand, and the image lands in
-# GHCR with a `dev` tag so it can never be mistaken for a release.
+# for testing" path: run it by hand and the image lands in GHCR with a `dev` tag
+# so it can never be mistaken for a release.
 #
-# Image names (note the `mailmoose-wip` repository prefix):
-#   ghcr.io/<owner>/mailmoose-wip-dialmx    the standalone Dial MX receiver
-#   ghcr.io/<owner>/mailmoose-wip-mx        the MX edge
-#   ghcr.io/<owner>/mailmoose-wip           the core
+# Image names (the `dirty-wip-` prefix is the dev channel):
+#   ghcr.io/<owner>/dirty-wip-mailmoose-remote-mx   the MX edge (shared or single)
+#   ghcr.io/<owner>/dirty-wip-mailmoose             the core
 #
 # Tags applied to each:
 #   dev                     always, a moving pointer at the newest build
@@ -18,9 +17,8 @@ name: publish
 #   dev-<branch>            a moving pointer per branch (slashes become dashes)
 #
 # Platforms: linux/arm64 and linux/amd64. arm64 costs QEMU emulation in the image
-# stage but the Go builds are cross-compiled, so it stays cheap for the receiver
-# and the edge (CGO_ENABLED=0). The core needs cgo (SQLite), so its arm64 build
-# is the slow one.
+# stage but the Go builds are cross-compiled, so it stays cheap for the edge
+# (CGO_ENABLED=0). The core needs cgo (SQLite), so its arm64 build is the slow one.
 #
 # The packages are **private** when first created. Either make the package
 # public in the repository's package settings, or authenticate on the host:
@@ -111,35 +109,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Dial MX receiver ---------------------------------------------------
-      # The image a remote host pulls to run a standalone receiver.
-      - name: Dial MX receiver — tags
-        id: dialmx_meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip-dialmx
-          tags: |
-            type=raw,value=dev
-            type=raw,value=dev-${{ steps.meta.outputs.short }}
-            type=raw,value=dev-${{ steps.meta.outputs.branch }}
-      - name: Dial MX receiver — build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: dialmx/Dockerfile
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
-          tags: ${{ steps.dialmx_meta.outputs.tags }}
-          labels: ${{ steps.dialmx_meta.outputs.labels }}
-          cache-from: type=gha,scope=dialmx
-          cache-to: type=gha,mode=max,scope=dialmx
-
-      # --- MX edge ------------------------------------------------------------
+      # --- MX edge (shared or single mode) ------------------------------------
+      # The image a remote host pulls to run a receiver. `DIALMX_MODE` picks the
+      # mode; both modes are the same binary.
       - name: MX edge — tags
         id: mx_meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip-mx
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose-remote-mx
           tags: |
             type=raw,value=dev
             type=raw,value=dev-${{ steps.meta.outputs.short }}
@@ -148,7 +125,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.mx
+          file: dialmx/Dockerfile
           platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
           push: true
           tags: ${{ steps.mx_meta.outputs.tags }}
@@ -161,7 +138,7 @@ jobs:
         id: core_meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose
           tags: |
             type=raw,value=dev
             type=raw,value=dev-${{ steps.meta.outputs.short }}
@@ -184,7 +161,6 @@ jobs:
             echo "### Published (dev channel)"
             echo
             echo '```'
-            echo "${{ steps.dialmx_meta.outputs.tags }}"
             echo "${{ steps.mx_meta.outputs.tags }}"
             echo "${{ steps.core_meta.outputs.tags }}"
             echo '```'
@@ -192,6 +168,6 @@ jobs:
             echo "Pull on the test host:"
             echo
             echo '```bash'
-            echo "docker pull ${REGISTRY}/${OWNER}/mailmoose-wip-dialmx:dev-\$${{ steps.meta.outputs.short }}"
+            echo "docker pull ${REGISTRY}/${OWNER}/dirty-wip-mailmoose:dev-\$${{ steps.meta.outputs.short }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

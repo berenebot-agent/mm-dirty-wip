@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose ./cmd/server
 # The optional included MX edge is managed through persisted receiver settings.
-# Remote receivers use the separate, minimal image in Dockerfile.mx.
+# Remote receivers use the separate, minimal image in dialmx/Dockerfile.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./dialmx/cmd/receiver
