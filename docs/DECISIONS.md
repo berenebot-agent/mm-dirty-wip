@@ -138,6 +138,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D128: The root encryption key is generated when the operator does not supply one](#d128-the-root-encryption-key-is-generated-when-the-operator-does-not-supply-one)
 - [D132: The first public MX session protocol is v1](#d132-the-first-public-mx-session-protocol-is-v1)
 - [D133: Strix remediation: delegated authority, destination-bound secrets and approval delivery](#d133-strix-remediation-delegated-authority-destination-bound-secrets-and-approval-delivery)
+- [D134: A settled receiver refusal is an error state, not a retry](#d134-a-settled-receiver-refusal-is-an-error-state-not-a-retry)
 
 ---
 
@@ -5388,3 +5389,49 @@ decision deliberately tightens that policy rather than calling it undocumented.
 connector; a small issued-token lookup and index; account/principal checks at the
 existing boundaries; deterministic regression tests. No new dependency, runtime
 service, destination-binding schema, token format or approval protocol.
+
+## D134 — A settled receiver refusal is an error state, not a retry
+
+**Requirement:** A receiver the core can reach but that will not take the session
+must read as a settled failure. An incompatible receiver build answers `404` for
+the session path this core posts (`D132` renumbered it to `/mx/v1/session`), and
+`failureState` collapsed every such answer into `disconnected`, which the Antler
+status dialog and the account Remote MX panel render as "Reconnecting" — forever,
+because the condition never clears on its own and the retry loop keeps running.
+The operator saw a session still in progress where the receiver had in fact
+answered and declined.
+
+**Decision:** Classify by what the receiver did, and report it:
+
+- A session the receiver answered and declined is **rejected**: refused
+  (`session_rejected`), answered HTTP/1.1 (`http2_required`), answered the other
+  mode (`mode_mismatch`), or answered a Ready this core cannot read
+  (`protocol_mismatch`). `failureState` maps the whole set to `rejected`
+  regardless of whether the receiver was reached before.
+- A receiver's own `5xx` is its transient error (`receiver_error`) and stays the
+  retrying `disconnected` state.
+- A destination the outbound policy refused before any dial
+  (`destination_not_allowed`) is **unavailable**, not a retry: it is a settled
+  local configuration fact.
+- Unchanged: a receiver that has never answered is `unreachable` (DNS, TLS, a
+  refused connection, and every timeout), and one that was reached and dropped is
+  `disconnected`.
+- All four status surfaces follow the state so they cannot disagree: the Antler
+  status dialog rows, the server-rendered setup panel, the account Remote MX pill
+  (previously "connecting" for every non-ready state), and the installation
+  Direct MX panel. Each refusal reason gets its own operator-facing phrase, and a
+  `ready` row whose authorization window has closed reads as expired rather than
+  as an authorization still in progress.
+
+**Reason:** "Reconnecting" is a claim that something is still in progress. A
+receiver that answers `404` is not reconnecting; it is incompatible, and only the
+operator can fix it. Retrying is still correct — a redeployed receiver recovers
+without a core restart — so the fix is the reported state, not the loop. One
+message covers every refused code because at this layer a `401` (a proxy in front
+of the receiver) and a `404` (an older build) are both "the receiver is not
+serving this core", not a credential the operator edits in MailMoose.
+
+**Complexity:** One classification function, one error type carrying the HTTP
+status, three reason tokens and the state mapping in `mxdial`; label and mapping
+updates on the four status surfaces. No new dependency, schema, migration, config
+or behaviour: nothing gates delivery, auth or the retry loop on these states.

@@ -6251,7 +6251,20 @@ function hideInboxSubview(dlg) {
         case 'dns_unavailable': return 'DNS unavailable';
         case 'domain_limit': return 'Domain limit';
         case 'domain_cooldown': return 'Waiting to retry';
+        // A settled refusal: the receiver answered but will not serve this
+        // session, so the row is an error rather than a retry in progress. One
+        // word covers every refused code, because at this layer a 401 and a 404
+        // are both a receiver or proxy that is not serving this core.
+        case 'session_rejected': return 'Receiver refused the session';
+        case 'http2_required': return 'Receiver speaks HTTP/1.1, not HTTP/2';
+        case 'mode_mismatch': return 'Wrong receiver mode';
+        case 'protocol_mismatch': return 'Receiver protocol mismatch';
+        case 'destination_not_allowed': return 'Blocked — receiver destination not allowed';
       }
+      // Ready when this page was rendered, but the authorization window has
+      // since closed and a renewal has not landed: not an authorization still
+      // in progress.
+      if (status.state === 'ready') { return 'Authorization expired'; }
       return {
         connecting: 'Authorizing',
         disconnected: 'Reconnecting',

@@ -958,9 +958,24 @@ func jitter(d time.Duration) time.Duration {
 const (
 	// ReasonDisconnected means an established session ended. Retrying.
 	ReasonDisconnected = "disconnected"
-	// ReasonRejected means the receiver answered and refused this core's bearer
-	// key. The receiver is reachable; the credential is the problem.
+	// ReasonRejected means the receiver answered and declined this session: a
+	// refused bearer, or a session endpoint it does not serve (an older receiver
+	// build answers 404 where this core posts). The receiver is reachable and the
+	// condition is settled, so the row is an error rather than a session still
+	// being authorized.
 	ReasonRejected = "session_rejected"
+	// ReasonReceiverError means the receiver answered with its own transient
+	// error (HTTP 5xx). The receiver is up and likely to recover, so the row
+	// stays a retrying session rather than a settled refusal.
+	ReasonReceiverError = "receiver_error"
+	// ReasonModeMismatch means the receiver answered as the other mode: a shared
+	// session where a private one was expected, or the reverse. Core and receiver
+	// are incompatible until one of them is reconfigured.
+	ReasonModeMismatch = "mode_mismatch"
+	// ReasonProtocolMismatch means the receiver's Ready frame could not be read
+	// as this protocol — a malformed frame, or a build speaking another version.
+	// The receiver answered, but not in a shape this core can use.
+	ReasonProtocolMismatch = "protocol_mismatch"
 	// ReasonDestinationNotAllowed means the outbound policy refused the receiver
 	// destination (a private or non-routable address without an opt-in).
 	ReasonDestinationNotAllowed = "destination_not_allowed"
@@ -1000,7 +1015,19 @@ func ConnectionFailureReason(err error) string {
 	case errors.Is(err, errIdle):
 		return ReasonIdleTimeout
 	case errors.Is(err, ErrSessionRejected):
+		// A receiver's own 5xx is its transient error, not a verdict on this
+		// core: keep retrying. Everything else it answered and declined is a
+		// settled refusal — including the 404 an older build returns for a
+		// session path it does not serve.
+		var refused sessionRejectedError
+		if errors.As(err, &refused) && refused.Code >= 500 {
+			return ReasonReceiverError
+		}
 		return ReasonRejected
+	case errors.Is(err, errModeMismatch):
+		return ReasonModeMismatch
+	case errors.Is(err, errInvalidReady):
+		return ReasonProtocolMismatch
 	}
 	return ReasonUnreachable
 }
@@ -1019,15 +1046,36 @@ func unreachableReason(reason string) bool {
 	return false
 }
 
-// failureState maps one failed connection attempt onto the state a receiver row
-// carries. A receiver that has never answered is unreachable; one that has been
-// reached before is disconnected and retrying; one that answered but refused is
-// disconnected, because the receiver itself is fine.
-func failureState(reason string, everConnected bool) string {
-	if !everConnected && unreachableReason(reason) {
-		return StatusUnreachable
+// refusalReason reports whether a failure token is a settled refusal: the
+// receiver answered and declined this core, so the condition needs an operator
+// to act on it. It is never an authorization still in progress and never a
+// retry, which is exactly how an incompatible receiver build (a 404 for the
+// session path, or a Ready frame in another protocol) must read.
+func refusalReason(reason string) bool {
+	switch reason {
+	case ReasonRejected, ReasonHTTP2Required, ReasonModeMismatch, ReasonProtocolMismatch:
+		return true
 	}
-	return StatusDisconnected
+	return false
+}
+
+// failureState maps one failed connection attempt onto the state a receiver row
+// carries. A receiver that answered and refused is rejected — a settled fact,
+// not a session being authorized or retried — and one the outbound policy
+// refused before any dial is unavailable for the same reason. A receiver that
+// has never answered is unreachable; one that has been reached before is
+// disconnected and retrying.
+func failureState(reason string, everConnected bool) string {
+	switch {
+	case refusalReason(reason):
+		return StatusRejected
+	case reason == ReasonDestinationNotAllowed:
+		return StatusUnavailable
+	case !everConnected && unreachableReason(reason):
+		return StatusUnreachable
+	default:
+		return StatusDisconnected
+	}
 }
 
 // backoffFor is the doubling backoff a repeatedly failing connection uses.
@@ -1125,10 +1173,26 @@ func (s *session) configuredDomains() []string {
 var (
 	errHTTP1 = errors.New("HTTP/2 required")
 	errIdle  = errors.New("session idle timeout")
+	// errModeMismatch is the receiver answering as the other mode.
+	errModeMismatch = errors.New("receiver mode mismatch")
+	// errInvalidReady is a Ready frame this core cannot accept: a malformed
+	// frame, a mismatched identity, or another protocol version.
+	errInvalidReady = errors.New("invalid ready")
 	// ErrSessionRejected is exported so callers can attribute a refusal (the
 	// receiver answered and said no) apart from a reachability failure.
 	ErrSessionRejected = errors.New("session rejected")
 )
+
+// sessionRejectedError is one refused session. It carries the HTTP status so a
+// 5xx — the receiver's own error, worth retrying — is told apart from a 4xx,
+// which is settled: a 404 means the receiver does not serve this session path at
+// all. It matches errors.Is(ErrSessionRejected) so existing callers are
+// unaffected.
+type sessionRejectedError struct{ Code int }
+
+func (e sessionRejectedError) Error() string { return fmt.Sprintf("session rejected: HTTP %d", e.Code) }
+
+func (e sessionRejectedError) Is(target error) bool { return target == ErrSessionRejected }
 
 // connect performs one logical session. The connection loop it runs owns all
 // auth and transaction state for the connection's lifetime; backend workers
@@ -1239,7 +1303,7 @@ func (s *session) connect() error {
 		return errHTTP1
 	}
 	if resp.StatusCode != http.StatusOK {
-		return ErrSessionRejected
+		return sessionRejectedError{Code: resp.StatusCode}
 	}
 	defer resp.Body.Close()
 
@@ -1263,7 +1327,7 @@ func (s *session) connect() error {
 	}
 	s.ready = ready
 	if s.single() && ready.Mode != "single" || !s.single() && ready.Mode == "single" {
-		return errors.New("receiver mode mismatch")
+		return errModeMismatch
 	}
 	// Bound this session's concurrent authentications by both the manager's
 	// global pacing budget and the receiver's advertised limit, whichever is
@@ -1376,14 +1440,14 @@ func (s *session) readReady(body io.Reader) (mxwire.Ready, error) {
 			return mxwire.Ready{}, r.err
 		}
 		if r.f.Type != mxwire.FrameReady || r.f.TxID != 0 || r.f.ChannelID != 0 {
-			return mxwire.Ready{}, errors.New("invalid ready")
+			return mxwire.Ready{}, errInvalidReady
 		}
 		var ready mxwire.Ready
 		if mxwire.DecodeFrame(r.f, &ready) != nil || ready.Version != mxwire.V1Protocol || ready.ReceiverID == "" || ready.ConnectionID == "" || ready.MaxMessageBytes <= 0 {
-			return mxwire.Ready{}, errors.New("invalid ready")
+			return mxwire.Ready{}, errInvalidReady
 		}
 		if len(ready.ReceiverID) > 128 || len(ready.ConnectionID) > 128 {
-			return mxwire.Ready{}, errors.New("invalid ready identity")
+			return mxwire.Ready{}, fmt.Errorf("%w: identity", errInvalidReady)
 		}
 		return ready, nil
 	}

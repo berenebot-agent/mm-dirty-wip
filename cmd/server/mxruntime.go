@@ -527,10 +527,11 @@ func (rt *mxRuntime) refreshIncluded(ctx context.Context, mgr *mxdial.Manager) {
 }
 
 // applyConnectionStatus maps the private dialer's real handshake state onto the
-// receiver status. Only a reported "ready" is active; a receiver that could not
-// be reached at all is unreachable — never connecting — because nothing about it
-// is in progress. A receiver that was reached and is being retried stays
-// connecting.
+// receiver status. Only a reported "ready" is active. A settled failure the
+// receiver itself decided — unreachable, refused (including a session path the
+// receiver does not serve), or blocked before the dial — is unavailable, never
+// connecting: nothing about it is still in progress. A receiver that was reached
+// and is being retried stays connecting.
 func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 	switch strings.ToLower(strings.TrimSpace(st.State)) {
 	case mxdial.StatusActive:
@@ -538,8 +539,8 @@ func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 		rt.smtpAddr = st.SMTPHostname
 		rt.mu.Unlock()
 		rt.setStatus(stateActive, "", st.SMTPHostname, "")
-	case mxdial.StatusUnreachable:
-		rt.setStatus(stateUnavailable, unreachableDetail(st.Reason), "", "")
+	case mxdial.StatusUnreachable, mxdial.StatusRejected, mxdial.StatusUnavailable:
+		rt.setStatus(stateUnavailable, receiverDetail(st.Reason), "", "")
 	default:
 		reason := st.Reason
 		if reason == "" {
@@ -549,9 +550,9 @@ func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 	}
 }
 
-// unreachableDetail renders an operator-facing reason for a receiver the core
-// cannot reach, from the dialer's stable failure token.
-func unreachableDetail(reason string) string {
+// receiverDetail renders an operator-facing reason for a receiver the core could
+// not use, from the dialer's stable failure token.
+func receiverDetail(reason string) string {
 	switch reason {
 	case mxdial.ReasonDNSFailure:
 		return "receiver hostname does not resolve"
@@ -561,6 +562,16 @@ func unreachableDetail(reason string) string {
 		return "receiver answered HTTP/1.1 where HTTP/2 is required"
 	case mxdial.ReasonIdleTimeout:
 		return "receiver session timed out repeatedly"
+	case mxdial.ReasonRejected:
+		return "receiver refused the session"
+	case mxdial.ReasonReceiverError:
+		return "receiver reported a server error"
+	case mxdial.ReasonModeMismatch:
+		return "receiver answered the wrong session mode"
+	case mxdial.ReasonProtocolMismatch:
+		return "receiver protocol mismatch"
+	case mxdial.ReasonDestinationNotAllowed:
+		return "receiver destination is not allowed"
 	}
 	return "receiver unreachable"
 }
