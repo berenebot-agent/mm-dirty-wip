@@ -51,12 +51,24 @@ jobs:
         run: |
           go run ./cmd/docsgen > /tmp/mailmoose-API.md
           diff -u docs/API.md /tmp/mailmoose-API.md
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
+      - name: OpenClaw build and tests
+        working-directory: plugins/openclaw/openclaw-plugin
+        run: |
+          npm ci
+          npm run build
+          npm test
       - name: js
         run: |
           set -o pipefail
           {
             node tests/antler-wizard-check.cjs
             node tests/empty-trash-check.cjs
+            node tests/release-config-check.cjs
           } 2>&1 | tee ci-logs/js.log
       # The default run skips the slow gated tests (see tests/support/smoke);
       # they are run explicitly in the smoke step so CI coverage is never

@@ -269,10 +269,8 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 		return model.Draft{}, err
 	}
 	status := model.DraftStatusDraft
-	// Body bytes are the only draft storage that moves with an edit. When the
-	// inbox is unchanged, adjust once so the account counter sees a single
-	// signed delta (matching its historical behaviour); when the draft moves,
-	// refund the old inbox and charge the new one so the counters never cross.
+	// Attachments follow the draft when its inbox changes; the account total
+	// changes only by the body edit.
 	oldBytes := draftBodyBytes(old)
 	newBytes := draftBodyBytes(d)
 	if d.InboxID == old.InboxID {
@@ -280,10 +278,14 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 			return model.Draft{}, err
 		}
 	} else {
-		if err := adjustStorageTx(ctx, tx, p.AccountID, old.InboxID, -oldBytes); err != nil {
+		_, attachmentBytes, err := draftAttachmentPathsTx(ctx, tx, d.ID)
+		if err != nil {
 			return model.Draft{}, err
 		}
-		if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, newBytes); err != nil {
+		if err := adjustStorageTx(ctx, tx, p.AccountID, old.InboxID, -oldBytes-attachmentBytes); err != nil {
+			return model.Draft{}, err
+		}
+		if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, newBytes+attachmentBytes); err != nil {
 			return model.Draft{}, err
 		}
 	}

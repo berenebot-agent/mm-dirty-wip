@@ -21,8 +21,10 @@ type WebhookClient struct {
 }
 
 type PendingWebhookDelivery struct {
-	Client  WebhookClient
-	EventID int64
+	Client         WebhookClient
+	EventID        int64
+	FirstAttemptAt time.Time
+	Attempts       int
 	// Type, EntityID and Cursor identify the event. EntityID is the message id
 	// for both delivered event types.
 	Type, EntityID, Cursor string
@@ -166,7 +168,7 @@ func (s *Store) NextWebhookDelivery(ctx context.Context, now time.Time) (Pending
 	var d PendingWebhookDelivery
 	var enabled int
 	var created, success sql.NullString
-	var payload string
+	var payload, firstAttempt string
 	err := s.read.QueryRowContext(ctx, `SELECT c.id,c.account_id,p.inbox_id,c.name,p.url,p.payload_mode,p.auth_mode,p.signing_secret_encrypted,p.enabled,p.last_ack_event_id,p.last_success_at,p.last_error,c.created_at,e.id,e.type,e.entity_id,e.payload_json FROM clients c JOIN client_push p ON p.client_id=c.id JOIN events e ON e.id=(SELECT e2.id FROM events e2 WHERE e2.inbox_id=p.inbox_id AND e2.id>p.last_ack_event_id AND e2.type IN ('message.received','message.spam_state_changed') AND NOT EXISTS (SELECT 1 FROM webhook_deliveries wd WHERE wd.client_id=c.id AND wd.event_id=e2.id AND wd.status IN ('delivered','failed','skipped')) ORDER BY e2.id LIMIT 1) WHERE c.type='webhook' AND c.revoked_at IS NULL AND p.enabled=1 AND NOT EXISTS (SELECT 1 FROM webhook_deliveries wd WHERE wd.client_id=c.id AND wd.event_id=e.id AND wd.status='pending' AND wd.next_attempt_at>?) ORDER BY e.id LIMIT 1`, retryTimeText(now)).Scan(&d.Client.ID, &d.Client.AccountID, &d.Client.InboxID, &d.Client.Name, &d.Client.URL, &d.Client.Mode, &d.Client.AuthMode, &d.Client.SecretEncrypted, &enabled, &d.Client.LastAckEventID, &success, &d.Client.LastError, &created, &d.EventID, &d.Type, &d.EntityID, &payload)
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
@@ -174,6 +176,10 @@ func (s *Store) NextWebhookDelivery(ctx context.Context, now time.Time) (Pending
 	if err != nil {
 		return d, err
 	}
+	if err = s.read.QueryRowContext(ctx, `SELECT COALESCE((SELECT created_at FROM webhook_deliveries WHERE client_id=? AND event_id=?),''), COALESCE((SELECT attempts FROM webhook_deliveries WHERE client_id=? AND event_id=?),0)`, d.Client.ID, d.EventID, d.Client.ID, d.EventID).Scan(&firstAttempt, &d.Attempts); err != nil {
+		return d, err
+	}
+	d.FirstAttemptAt = parseTime(firstAttempt)
 	d.Payload = []byte(payload)
 	d.Client.Enabled = enabled != 0
 	d.Client.CreatedAt = parseTime(created.String)

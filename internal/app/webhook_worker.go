@@ -48,15 +48,22 @@ func (w *WebhookWorker) RunOnce(ctx context.Context) error {
 		}
 		m, arrival, skip, err := w.deliverableMessage(ctx, d)
 		if err != nil {
-			return err
+			return w.recordOutcome(ctx, d, err)
+		}
+		if !skip {
+			err = w.dispatch(ctx, d, m, arrival)
+			skip = errors.Is(err, errWebhookMessageGone)
 		}
 		if skip {
-			if err := w.svc.Store.RecordWebhookSkipped(ctx, d.Client.ID, d.EventID); err != nil {
+			outcomeCtx, cancel := outcomeContext(ctx)
+			err := w.svc.Store.RecordWebhookSkipped(outcomeCtx, d.Client.ID, d.EventID)
+			cancel()
+			if err != nil {
 				return err
 			}
 			continue
 		}
-		return w.dispatch(ctx, d, m, arrival)
+		return w.recordOutcome(ctx, d, err)
 	}
 }
 
@@ -218,22 +225,32 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 	attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	resp, err := w.client.Do(req.WithContext(attemptCtx))
-	outcomeCtx, outcomeCancel := outcomeContext(ctx)
-	defer outcomeCancel()
-	now := time.Now().UTC()
-	deadline := now.Add(w.svc.Config.WebhookRetryWindow)
 	if err == nil {
 		defer resp.Body.Close()
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, true, "", now, deadline)
+			return nil
 		}
 		err = fmt.Errorf("webhook returned HTTP %d", resp.StatusCode)
 	}
-	var previous int
-	_ = w.svc.Store.WebhookAttemptCount(outcomeCtx, d.Client.ID, d.EventID, &previous)
-	delay := webhookBackoff(previous, d.Client.ID, d.EventID)
-	return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, false, truncateWebhookError(err.Error()), now.Add(delay), deadline)
+	return err
+}
+
+// recordOutcome covers preparation and network failures with the same durable retry policy.
+func (w *WebhookWorker) recordOutcome(ctx context.Context, d store.PendingWebhookDelivery, cause error) error {
+	outcomeCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	now := time.Now().UTC()
+	first := d.FirstAttemptAt
+	if first.IsZero() {
+		first = now
+	}
+	deadline := first.Add(w.svc.Config.WebhookRetryWindow)
+	if cause == nil {
+		return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, true, "", now, deadline)
+	}
+	delay := webhookBackoff(d.Attempts, d.Client.ID, d.EventID)
+	return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, false, truncateWebhookError(cause.Error()), now.Add(delay), deadline)
 }
 
 // webhookBackoff returns the retry delay for the next attempt. It is the
@@ -353,22 +370,31 @@ func remoteAwareJSON(d store.PendingWebhookDelivery, arrival *store.RemoteArriva
 	}
 }
 
+var errWebhookMessageGone = errors.New("webhook message no longer exists")
+
 // remoteArrivalRaw streams a remote arrival's raw MIME to a transient file, reads
 // it back bounded by the configured maximum, and removes the file. It is only
 // called for a forward-mode client, so no body is fetched on a metadata-only
 // delivery. The remote forwarder is installed once at startup; when it is absent
 // (a deployment with no remote bridge), a forward of a remote arrival is a
-// terminal error rather than a silent empty body.
+// retryable preparation error rather than a silent empty body.
 func (w *WebhookWorker) remoteArrivalRaw(ctx context.Context, inboxID string, arrival store.RemoteArrival) ([]byte, error) {
 	if w.svc.RemoteForwarder == nil {
 		return nil, fmt.Errorf("remote forwarder is not installed")
 	}
 	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, inboxID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, errWebhookMessageGone
+		}
 		return nil, err
 	}
 	path, size, err := w.svc.RemoteForwarder.FetchArrivalRaw(ctx, inbox, arrival)
 	if err != nil {
+		var mailboxErr *model.MailboxError
+		if errors.As(err, &mailboxErr) && mailboxErr.Kind == model.ErrKindNotFound {
+			return nil, errWebhookMessageGone
+		}
 		return nil, err
 	}
 	defer w.svc.RemoteForwarder.CleanupRemoteRaw(path)

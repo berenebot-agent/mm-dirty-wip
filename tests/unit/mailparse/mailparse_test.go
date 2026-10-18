@@ -2,6 +2,7 @@ package mailparse_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,46 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/mailparse"
 )
+
+func TestAttachmentBase64LinesAndRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, draft := range []bool{false, true} {
+		build := mailparse.BuildMessage
+		if draft {
+			build = mailparse.BuildDraftMessage
+		}
+		for _, size := range []int{0, 1, 57, 58, 10240} {
+			content := bytes.Repeat([]byte{0xff}, size)
+			raw, err := build(mailparse.Address{Address: "a@example.test"}, []string{"b@example.test"}, nil, nil, "attachment", "body", "", "<lines@example.test>", "", nil, time.Now(), []mailparse.Attachment{{Filename: "test.bin", ContentType: "application/octet-stream", Content: content}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded := base64.StdEncoding.EncodeToString(content)
+			for _, line := range strings.Split(string(raw), "\r\n") {
+				if len(line) > 998 {
+					t.Fatalf("draft=%v size=%d: SMTP line has %d bytes", draft, size, len(line))
+				}
+				if strings.HasPrefix(line, "/") && len(line) > 76 {
+					t.Fatalf("base64 line has %d bytes", len(line))
+				}
+			}
+			if size > 57 && strings.Contains(string(raw), encoded) {
+				t.Fatal("attachment base64 was not wrapped")
+			}
+			path := t.TempDir() + "/message.eml"
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			if err := mailparse.ExtractAttachment(path, 1, &got); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got.Bytes(), content) {
+				t.Fatalf("draft=%v size=%d: attachment changed", draft, size)
+			}
+		}
+	}
+}
 
 // Mirror internal/mailparse unexported limits (internal/mailparse/parse.go).
 const (

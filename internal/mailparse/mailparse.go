@@ -607,12 +607,17 @@ func buildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		if err != nil {
 			return nil, err
 		}
-		encoder := base64.NewEncoder(base64.StdEncoding, part)
-		if _, err = encoder.Write(attachment.Content); err != nil {
-			return nil, err
-		}
-		if err = encoder.Close(); err != nil {
-			return nil, err
+		// 57 input bytes encode to one MIME-safe 76-character line.
+		var line [78]byte
+		for content := attachment.Content; len(content) > 0; {
+			n := min(57, len(content))
+			size := base64.StdEncoding.EncodedLen(n)
+			base64.StdEncoding.Encode(line[:size], content[:n])
+			line[size], line[size+1] = '\r', '\n'
+			if _, err = part.Write(line[:size+2]); err != nil {
+				return nil, err
+			}
+			content = content[n:]
 		}
 	}
 	if err := outer.Close(); err != nil {

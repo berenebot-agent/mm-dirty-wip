@@ -356,6 +356,9 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 			if firstErr == nil {
 				firstErr = rerr
 			}
+			if retryableErr == nil && isRetryableInboundError(rerr) {
+				retryableErr = rerr
+			}
 			continue
 		}
 		// The resolved inbox must belong to the account that was authenticated.
@@ -380,9 +383,8 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 			// A terminal per-target outcome (unknown/unauthorized recipient,
 			// permanent parse/content failure) must not force a provider retry:
 			// the same recipient would fail identically forever. Only a
-			// *retryable* failure is recorded, and it changes the outcome only
-			// when another target succeeded (see below); when nothing was
-			// delivered the single firstErr path handles it as before.
+			// *retryable* failure takes priority over terminal errors for a
+			// multi-recipient delivery, including when every target failed.
 			if firstErr == nil {
 				firstErr = derr
 			}
@@ -400,6 +402,9 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 		delivered++
 	}
 	if delivered == 0 {
+		if retryableErr != nil && !single {
+			return model.Message{}, false, fmt.Errorf("%w: %v", ErrPartialIngest, retryableErr)
+		}
 		if firstErr != nil {
 			return model.Message{}, false, firstErr
 		}
@@ -417,8 +422,8 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	return first, anyDup, nil
 }
 
-// ErrPartialIngest marks a fan-out delivery that persisted at least one
-// recipient while another recipient failed retryably. The provider must retry
+// ErrPartialIngest marks a fan-out delivery with a retryable recipient failure,
+// whether or not another recipient was persisted. The provider must retry
 // the delivery: already-stored recipients deduplicate per
 // (provider, envelope_recipient, provider_delivery_id), so the retry delivers
 // only the missing inboxes. It is deliberately distinct from a terminal

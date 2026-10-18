@@ -42,7 +42,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `vet` | `go vet ./...` |
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
-| `js` | Antler dialog, DKIM toggle, copy-controls and empty-trash checks (`node tests/*.cjs`) |
+| `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash and release-config checks |
 | `smoke` | slow gated tests with `MAILMOOSE_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
@@ -137,6 +137,20 @@ CI (`.github/workflows/ci.yml`) runs on native Go, not the Docker runner, for
 speed. Each step tees its full output to `ci-logs/` and the folder is uploaded
 as the `ci-logs` artifact with `if: always()`, so a failed run's full log is
 downloadable without re-running.
+
+CI, release and development-image publish gates also install the locked
+OpenClaw plugin dependencies, compile the TypeScript and run its Node tests.
+Run the same checks from the repository root in Docker (Node 24):
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD:/src" -w /src/plugins/openclaw/openclaw-plugin \
+  node:24-bookworm sh -ec 'npm ci && npm run build && npm test'
+```
+
+These plugin checks are separate from `tests/run.sh`. Its `js` tier checks
+that all three workflows retain the plugin gate and that SMTP port 25 remains
+an explicit opt-in in the default Compose file.
 
 ## Fixtures
 

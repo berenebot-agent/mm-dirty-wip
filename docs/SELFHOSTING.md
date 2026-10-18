@@ -70,7 +70,10 @@ docker compose logs --tail 100 mailmoose
 Database schema is created from the public baseline on a new installation at
 startup. If startup reports a failed or partial schema step, restore from a
 consistent backup rather than deleting the database. If you use Direct MX, keep
-the host port 25 mapping across upgrades.
+the host port 25 mapping across upgrades. **The repository's default Compose
+file now leaves `25:2525` commented out. Existing Included MX operators must
+retain or uncomment that mapping when updating their Compose file; removing it
+stops incoming SMTP mail even though the receiver remains enabled in the UI.**
 
 ## Uncertain deliveries
 

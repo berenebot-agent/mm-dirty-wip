@@ -1017,7 +1017,7 @@ func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arri
 	ev, emitted, err := w.svc.Store.RecordRemoteArrivalEvent(ctx, inbox.AccountID, inbox.ID, arrival)
 	if err != nil {
 		w.log.Error("remote arrival event", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", err)
-		w.settle(ctx, inbox, arrival, store.RemoteArrivalFailed, "event persistence failed")
+		w.retryArrival(ctx, arrival, "event persistence failed")
 		return
 	}
 	if emitted {
@@ -1039,6 +1039,16 @@ func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arri
 	// Enqueue the durable auto-action (mark read on ACK + delayed trash) for an
 	// arrival that was accepted. The action state is independent of the fan-out.
 	w.ensureRemoteAction(ctx, arrival)
+}
+
+func (w *RemoteWorker) retryArrival(ctx context.Context, arrival store.RemoteArrival, reason string) {
+	// Never turn a recoverable store fault into a lost notification or a tight drain loop.
+	delay := time.Second * time.Duration(1<<min(max(arrival.Attempts, 0), 8))
+	outcomeCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	if err := w.svc.Store.RetryRemoteArrival(outcomeCtx, arrival.AccountID, arrival.ID, reason, time.Now().UTC().Add(delay)); err != nil && !errors.Is(err, store.ErrConflict) {
+		w.log.Warn("remote arrival retry", "arrival", arrival.ID, "error", err)
+	}
 }
 
 // settle marks a just-recorded arrival's proactive state. The arrival may have
@@ -1207,6 +1217,10 @@ func (w *RemoteWorker) drainRemoteArrivals() {
 func (w *RemoteWorker) recoverArrival(ctx context.Context, arrival store.RemoteArrival) {
 	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, arrival.InboxID)
 	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			w.retryArrival(ctx, arrival, "inbox lookup failed")
+			return
+		}
 		// The inbox is gone: nothing can be delivered. Settle terminally so the
 		// arrival does not pin the drain.
 		w.settle(ctx, model.Inbox{AccountID: arrival.AccountID, ID: arrival.InboxID}, arrival, store.RemoteArrivalFailed, "inbox unavailable")
