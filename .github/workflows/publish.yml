@@ -20,8 +20,9 @@ name: publish
 # stage but the Go builds are cross-compiled, so it stays cheap for the edge
 # (CGO_ENABLED=0). The core needs cgo (SQLite), so its arm64 build is the slow one.
 #
-# The packages are **private** when first created. Either make the package
-# public in the repository's package settings, or authenticate on the host:
+# Packages published from this public repository by the workflow come out
+# public. A package created out of band (an image pushed by hand) may default to
+# private; make it public in that package's settings, or authenticate on the host:
 #   echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin
 on:
   workflow_dispatch:
