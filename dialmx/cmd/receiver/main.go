@@ -149,7 +149,7 @@ func runStandalone(log *slog.Logger) {
 
 	// The SMTP edge hands each message to the in-process receiver's Delivery.
 	// The receiver owns domain registration, so the edge is policy-free.
-	edge := mxagent.NewServerWithHandoff(cfg.SMTP, log, func() mxagent.Delivery {
+	edge := mxagent.NewServerWithDelivery(cfg.SMTP, log, func() mxagent.Delivery {
 		return r.NewDelivery()
 	})
 

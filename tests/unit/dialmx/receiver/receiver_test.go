@@ -817,7 +817,7 @@ func startEdge(t *testing.T, maxConns int, baseURL string, _ *tls.Config) string
 func startEdgeWithLogger(t *testing.T, maxConns int, baseURL string, logger *slog.Logger) string {
 	t.Helper()
 	r := lookupReceiver(t, baseURL)
-	edge := mxagent.NewServerWithHandoff(mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: maxConns, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second}, logger, func() mxagent.Delivery {
+	edge := mxagent.NewServerWithDelivery(mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: maxConns, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second}, logger, func() mxagent.Delivery {
 		return r.NewDelivery()
 	})
 	ln, e := net.Listen("tcp", "127.0.0.1:0")
