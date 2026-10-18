@@ -6734,6 +6734,16 @@ function hideInboxSubview(dlg) {
       settings.hidden = !statusMode;
       save.hidden = statusMode ? (custom || inherited || !settingsDirty()) : false;
       save.textContent = busy ? 'Please wait…' : statusMode ? 'Save settings' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
+      // A receiving config this wizard stores must be removable from the wizard.
+      // The server draws the footer's danger block hidden for a domain that had no
+      // receiving config when the page was rendered, so the first save reveals the
+      // same Remove receiving the saved status view shows — otherwise an operator
+      // who starts a setup from nothing has no way back but closing the dialog and
+      // reopening it. It is only ever revealed: a config already stored keeps its
+      // control, and one this wizard has not stored yet leaves it hidden.
+      if (danger && danger.hidden && state && state.config && state.config.service) {
+        danger.hidden = false;
+      }
       if (state) { ready = (state.status || []).some(isReady); }
       // Only the receivers step requires a ready receiver to advance. Key
       // rotation and the enforcement-step Finish are never readiness-gated: the

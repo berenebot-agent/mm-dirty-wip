@@ -210,6 +210,11 @@ function harness(mode) {
   removeReceiving.nodes.button.className = 'secondary danger';
   const danger = new Element('DIV');
   danger.children = [workerRegenerate, rotate, removeReceiving];
+  // The server draws the danger block for every receiving dialog but hides it
+  // when the domain had no receiving config when the page was rendered: the
+  // wizard reveals it once it stores one of its own. The status modes render it
+  // visible, because there the config already exists.
+  danger.hidden = !(mode === 'status' || mode === 'status-two');
   dlg.nodes['.dialog-danger'] = danger;
 
   class Clock extends Date {
@@ -451,6 +456,9 @@ async function wizard(mode) {
   await h.settle();
   assert.equal(h.save.textContent, 'Next');
   assert.equal(h.back.hidden, true, 'Back is hidden before a step is entered');
+  // Nothing is stored yet, so the footer's danger block stays hidden: Remove
+  // receiving has nothing to remove.
+  assert.equal(h.danger.hidden, true, 'the danger block is hidden before the first save');
 
   if (mode === 'custom') {
     const step0 = h.wizard.panels[0];
@@ -468,6 +476,12 @@ async function wizard(mode) {
   } else {
     await h.submit(); // contact email -> DNS records
   }
+
+  // The wizard stores the receiving config as it goes, so the setup it has just
+  // saved must be removable from here: the danger block is revealed with the same
+  // Remove receiving the saved status view carries.
+  assert.equal(h.danger.hidden, false, 'storing the config reveals Remove receiving');
+  assert.equal(h.removeReceiving.hidden, false, 'Remove receiving is offered once something is stored');
 
   // Step 1 is the DNS record table with its own copy buttons.
   assert.equal(h.wizard.panels[1].hidden, false, 'the DNS step is shown');

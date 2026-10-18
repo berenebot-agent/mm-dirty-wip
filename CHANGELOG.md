@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The Antler MX setup wizard now offers Remove receiving as soon as it has
+  stored the domain's receiving configuration. The receiving dialog's footer
+  danger block is drawn (hidden) for every domain, so a setup started from
+  nothing can be undone from the wizard that started it, instead of only after
+  closing the dialog and reopening the domain's saved status view. A domain with
+  no stored receiving configuration still shows no Remove receiving.
+
 - A domain whose receiving setup was started and then cancelled no longer shows
   an amber "Add" beside its live receiver light. The Antler MX wizard stores the
   receiving provider on its first step (it has to, so the records and receivers
