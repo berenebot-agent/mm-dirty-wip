@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The no-allow-list acknowledgement in the Add Connector dialog is visible again.
+  A page-wide `[hidden]{display:none!important}` rule silently defeated the inline
+  `display:flex` the checkbox row carried, so the warning appeared with no way to
+  accept it and Create stayed disabled — for both Hermes and OpenClaw. The row now
+  toggles the `hidden` attribute instead, and the OpenClaw inbox picker recomputes
+  the warning when it changes, as the Hermes one already did.
 - Empty trash reads "Empty trash" in the queue, and the notice after clicking it
   is one short line ("Empty trash is running in the background") instead of a
   sentence about background batches. The parent operation also stops publishing
