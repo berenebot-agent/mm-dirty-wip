@@ -164,11 +164,9 @@ func main() {
 		svc.DNS.Run(dialCtx, 15*time.Minute)
 	}()
 
-	// Transition the legacy environment MX configuration into the store once,
-	// then start the process-owned receiver controller. The controller reads the
-	// persisted settings and reconciles the included child or the private dialer
+	// Start the process-owned receiver controller: it reads the persisted
+	// mx_settings row and reconciles the included child or the private dialer
 	// without ever crashing the core on a receiver failure.
-	importLegacyMXSettings(context.Background(), svc, cfg, log)
 	mxrt := startMXRuntime(svc, edge, log)
 	remoteMXrt := startRemoteMXRuntime(svc, log)
 	ensureSystemAdmin(svc, log)
@@ -366,20 +364,11 @@ func startStandbyEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
 	}
-	hostname := edgeHostname()
 	spec := launcher.Spec{
-		Binary:   launcher.ResolveBinary(),
-		UID:      cfg.MXUID,
-		GID:      cfg.MXGID,
-		Hostname: hostname,
-		Env:      launcher.StandbyEnv(3, 4),
+		Binary: launcher.ResolveBinary(),
+		UID:    cfg.MXUID,
+		GID:    cfg.MXGID,
+		Env:    launcher.StandbyEnv(3, 4),
 	}
 	return launcher.StartStandby(context.Background(), spec, log)
-}
-
-func edgeHostname() string {
-	if v := os.Getenv("MX_HOSTNAME"); v != "" {
-		return v
-	}
-	return "mailmoose-mx"
 }

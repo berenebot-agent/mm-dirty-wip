@@ -10,17 +10,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-const migration064 = `CREATE TABLE inbox_message_actions (
- id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- message_id TEXT NOT NULL, input_json TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
- attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
- next_attempt_at TEXT NOT NULL, claim_owner TEXT NOT NULL DEFAULT '',
- created_at TEXT NOT NULL, settled_at TEXT NOT NULL DEFAULT '', dismissed INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX idx_message_actions_due ON inbox_message_actions(state,next_attempt_at);
-CREATE INDEX idx_message_actions_order ON inbox_message_actions(account_id,inbox_id,message_id,created_at);`
-
 // MessageActionInput describes a single ordered message mutation. Pointer fields
 // distinguish omitted state from an explicit false or empty label list.
 type MessageActionInput struct {

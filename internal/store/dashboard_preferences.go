@@ -8,8 +8,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-const migration071 = `ALTER TABLE users ADD COLUMN dashboard_preferences TEXT NOT NULL DEFAULT '{}';`
-
 // DashboardPreferences are personal display preferences, never mailbox policy.
 type DashboardPreferences struct {
 	Groups     map[string]map[string]string `json:"groups"`

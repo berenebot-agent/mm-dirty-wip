@@ -67,7 +67,17 @@ docker compose up -d
 docker compose logs --tail 100 mailmoose
 ```
 
-Database migrations run at startup. If startup reports a failed or partial migration, restore from a consistent backup rather than deleting the database. If you use Direct MX, keep the host port 25 mapping across upgrades.
+Database schema is created from the public baseline on a new installation at
+startup. If startup reports a failed or partial schema step, restore from a
+consistent backup rather than deleting the database. If you use Direct MX, keep
+the host port 25 mapping across upgrades.
+
+> **Upgrading a pre-beta installation.** A database created before the public
+> beta predates the public baseline and cannot be upgraded by simply starting
+> the new server. It needs a one-time, offline conversion with the
+> `prerelease-rebaseline` utility while the app is stopped. Follow
+> [Pre-release database transition](PRERELEASE_TRANSITION.md) — including its
+> backup and rollback steps — before replacing the image.
 
 ## Uncertain deliveries
 

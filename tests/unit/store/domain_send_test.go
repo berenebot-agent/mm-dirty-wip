@@ -184,16 +184,6 @@ func TestSetBindingDomainSendRequiresCatchAll(t *testing.T) {
 	_ = d
 }
 
-// TestMigration074AddsDomainSendColumn proves the domain-wide sending flag
-// column is present after migration, so the feature is wired to real schema.
-func TestMigration074AddsDomainSendColumn(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	if !columnPresent(t, s, "client_inbox_bindings", "send_any_in_domain") {
-		t.Fatal("client_inbox_bindings.send_any_in_domain missing")
-	}
-}
-
 func findKey(t *testing.T, keys []model.APIKey, id string) model.APIKey {
 	t.Helper()
 	for _, k := range keys {

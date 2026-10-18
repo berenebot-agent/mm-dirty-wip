@@ -7,7 +7,10 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-func TestMetadataSyncMigration069AndDurableScope(t *testing.T) {
+// TestMetadataSyncDurableScope proves the per-inbox metadata-sync status is
+// durable across reopen, rejects states outside the durable set, and is scoped
+// to its own account and inbox.
+func TestMetadataSyncDurableScope(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -23,22 +26,6 @@ func TestMetadataSyncMigration069AndDurableScope(t *testing.T) {
 	box, err := s.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "sync-box@example.test", DisplayName: "Custom"})
 	if err != nil {
 		s.Close()
-		t.Fatal(err)
-	}
-	path := s.Path()
-	s.Close()
-	db := rawDB(t, path)
-	if _, err := db.ExecContext(ctx, `DROP TABLE inbox_metadata_sync`); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version='069'`); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	db.Close()
-	s, err = store.Open(dir)
-	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveMetadataSyncState(ctx, u.AccountID, box.ID, "paused", "initial", "Metadata storage limit reached"); err != nil {
@@ -72,6 +59,6 @@ func TestMetadataSyncMigration069AndDurableScope(t *testing.T) {
 	}
 	got, err := s.GetInboxInternal(ctx, u.AccountID, box.ID)
 	if err != nil || got.DisplayName != "Custom" {
-		t.Fatalf("migration changed inbox: %+v %v", got, err)
+		t.Fatalf("sync state changed inbox: %+v %v", got, err)
 	}
 }

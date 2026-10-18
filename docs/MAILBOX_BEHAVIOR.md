@@ -2,14 +2,14 @@
 
 This guide describes how MailMoose presents a consistent API for domain inboxes and connected Gmail, Microsoft, One and IMAP mailboxes. It covers which operations are supported, which data is stored locally and which is retrieved from the provider.
 
-It is a **maintainer reference**, not a setup guide. For configuration, see [Email providers](EMAIL_PROVIDERS.md). Database migrations define the schema; the current code defines the implementation.
+It is a **maintainer reference**, not a setup guide. For configuration, see [Email providers](EMAIL_PROVIDERS.md). The public database baseline (`internal/dbschema/baseline.sql`) defines the schema; the current code defines the implementation.
 
 ### Google extension (D098)
 
 Standalone Google inboxes use the same `RemoteMailboxService` and canonical
 HTTP/UI surface. The IMAP-specific descriptions below apply to IMAP bindings;
 Google uses `internal/transport/gmail`, encrypted per-inbox OAuth grants and
-opaque provider message/thread IDs. Migration 059 adds the binding, OAuth-attempt,
+opaque provider message/thread IDs. The baseline includes binding, OAuth-attempt,
 ID mapping, native label-membership and independent detection-cursor tables.
 Google messages have one cache row and multiple label memberships; `folder_path`
 is an internal `gmail:<provider-id>` storage locator, while public folder views
@@ -108,9 +108,10 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
 
 ## 2. Persistence (`internal/store`)
 
-The schema is defined by migrations `052` (additive standalone foundation and
-the shared `inbox_folders` table) through `058`. Later migrations are additive
-and never rewrite a historical migration's SQL. Key tables:
+The schema is the public baseline `001` in `internal/dbschema/baseline.sql`,
+applied as one versioned migration and validated by `internal/dbschema`.
+A pre-beta database is converted offline once (see
+[Pre-release database transition](PRERELEASE_TRANSITION.md)). Key tables:
 
 - `inboxes` — `kind`, `address`, `namespace`, `remote_*`, `smtp_*`,
   `remote_configured`, `remote_sent_copy_enabled`, `remote_sent_copy_folder`,
@@ -431,8 +432,8 @@ transient scope/`LIST` shortfall or a generation flip.
   `message_transport` names local delivery transport or equals `provider` for a
   connected inbox. Public IMAP UIDs are removed, including event/webhook/relay
   metadata. `snippet` is always a bounded string, with `"-"` for unavailable
-  previews. Migration 072 caches new local previews and queues new ordinary
-  IMAP arrivals for bounded background prefix reads in the existing worker;
+  previews. New local previews are cached, and new ordinary
+  IMAP arrivals are queued for bounded background prefix reads in the existing worker;
   existing mail is not back-generated. `created_at` is never replaced
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
 - **Account-wide listings merge into one globally ordered stream.**

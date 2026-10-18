@@ -481,9 +481,6 @@ func (s *Store) RevokeAPIKeysForAccount(ctx context.Context, accountID string) (
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	if _, err = tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, now, accountID); err != nil {
-		return 0, err
-	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -704,11 +701,6 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 	if _, err = tx.ExecContext(ctx, `INSERT INTO client_api_keys(client_id,key_prefix,key_hash,is_admin) VALUES(?,?,?,?)`, id, prefix, auth.HashToken(plain), boolInt(admin)); err != nil {
 		return model.APIKey{}, "", err
 	}
-	// Mirror into the legacy table before the role rows, which carry a
-	// foreign key to it, so the dual-write keeps both schemas valid.
-	if err = s.syncLegacyAPIKey(ctx, tx, id); err != nil {
-		return model.APIKey{}, "", err
-	}
 	if err = s.replaceBindings(ctx, tx, accountID, id, admin, roles, domainSend, nil); err != nil {
 		return model.APIKey{}, "", err
 	}
@@ -845,9 +837,6 @@ func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error
 	if n == 0 {
 		return ErrNotFound
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND account_id=?`, nowText(), keyID, accountID); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
@@ -869,10 +858,6 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return "", ErrNotFound
-	}
-	_, err = s.write.ExecContext(ctx, `UPDATE api_keys SET key_hash=?,key_prefix=?,last_used_at=NULL WHERE id=? AND account_id=?`, auth.HashToken(plain), prefix, keyID, accountID)
-	if err != nil {
-		return "", err
 	}
 	return plain, nil
 }
@@ -925,22 +910,16 @@ func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string,
 	if err = s.replaceBindings(ctx, tx, accountID, keyID, admin, roles, domainSend, existing); err != nil {
 		return err
 	}
-	if err = s.syncLegacyAPIKey(ctx, tx, keyID); err != nil {
-		return err
-	}
 	return tx.Commit()
 }
 
-// replaceBindings deletes and re-inserts a key's unified and legacy binding rows,
+// replaceBindings deletes and re-inserts a key's unified binding rows,
 // applying the domain-wide sending grant. Setting the grant forces the binding's
 // role to owner; clearing it leaves the role as supplied. existing names the
 // grants carried over from the previous rows, used when the caller named no
 // domainSend for an inbox.
 func (s *Store) replaceBindings(ctx context.Context, tx *sql.Tx, accountID, keyID string, admin bool, roles map[string]string, domainSend map[string]bool, existing map[string]bool) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM client_inbox_bindings WHERE client_id=?`, keyID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE api_key_id=?`, keyID); err != nil {
 		return err
 	}
 	if admin {
@@ -981,9 +960,6 @@ func (s *Store) replaceBindings(ctx context.Context, tx *sql.Tx, accountID, keyI
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role,send_any_in_domain) VALUES(?,?,?,?)`, keyID, inboxID, role, boolInt(granted)); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
 			return err
 		}
 	}

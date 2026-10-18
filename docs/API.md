@@ -1002,27 +1002,17 @@ it is a deferred UI-only placeholder and is rejected here.
   ready. Without an attached runtime (e.g. `included` in a rootless deployment)
   the state is `unknown`/`unavailable` rather than `active`, and
   `included_supported` is false.
-- `DELETE` clears the configured receiver and preserves the initialized marker,
-  so the one-time environment import never re-fires. It requires the current
-  `revision`.
+- `DELETE` clears the configured receiver and leaves the settings
+  unconfigured; nothing is re-seeded from the environment. It requires the
+  current `revision`.
 
-The legacy `MX_ENABLE`, `MX_RECEIVER_URL` and `DIALMX_CORE_KEY` environment
-values, together with the legacy `MX_*` SMTP settings (hostname, limits,
-verification, DNS resolver, timeouts and the `MX_TLS_CERT`/`MX_TLS_KEY` files),
-are imported once on first start when no row exists; thereafter the persisted
-settings are authoritative and the environment is ignored. The only MX
-environment that still belongs to the core deployment is the standalone receiver
-container's own configuration (see [Remote SMTP receiving](REMOTE_MX.md)); the
-core itself is configured here.
-
-> **Legacy STARTTLS files.** The one-time import reads `MX_TLS_CERT` and
-> `MX_TLS_KEY` from disk. If only one path is set, or a file cannot be read, the
-> import currently continues **without** TLS and logs a warning rather than
-> failing closed. This is a known weakness during the transition: a deployment
-> that intended to require STARTTLS can come up offering plaintext. Until the
-> importer fails closed, verify after upgrading that `smtp_tls_key_configured`
-> is `true` (or set the pair here), and do not rely on the environment to
-> enforce TLS.
+The persisted settings are the **only** source of the core's receiver
+configuration. The legacy `MX_ENABLE`, `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and
+`MX_*` SMTP tunables are no longer imported or validated, and a stale or partial
+value in the environment does not change the configured receiver. The only MX
+environment that belongs to a deployment is the **standalone receiver's own
+configuration**, given to the receiver container (see
+[Remote SMTP receiving](REMOTE_MX.md)); the core itself is configured here.
 
 Sending and receiving are configured per domain. A domain owns at most one
 optional sending configuration and at most one optional receiving

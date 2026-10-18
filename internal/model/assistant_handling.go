@@ -97,14 +97,14 @@ const (
 	EventDraftHandoffFailed = "draft.handoff_failed"
 )
 
-// AssistantHandlingRequest is the durable record of a RemoteDraft handoff. It is
-// deliberately separate from DraftSendRequest so publication state, remote
-// correlation and notification state are tracked independently of the approval
-// request model, and so the existing approval request row is never widened.
+// AssistantHandlingRequest is the durable record of a RemoteDraft handoff. It
+// is deliberately separate from DraftSendRequest so publication state and
+// remote correlation are tracked independently of the approval request model,
+// and so the existing approval request row is never widened.
 //
 // A handling record is immutable in its frozen facts (mode, content hash, inbox,
-// draft, handoff id, message id, remote folder): only the publication and
-// notification state machines advance.
+// draft, handoff id, message id, remote folder): only the publication state
+// machine advances.
 type AssistantHandlingRequest struct {
 	ID      string `json:"id"`
 	InboxID string `json:"inbox_id"`
@@ -133,16 +133,11 @@ type AssistantHandlingRequest struct {
 	Publication string `json:"publication"`
 	// RemoteUID is the appended message's UID when the server reported one, else
 	// zero.
-	RemoteUID uint32 `json:"-"`
-	// NotificationStatus and NotificationMessageID are retained only so a
-	// pre-existing row still scans; a handoff no longer queues a notification
-	// email, so nothing writes them and they are never exposed.
-	NotificationStatus    string     `json:"-"`
-	NotificationMessageID string     `json:"-"`
-	Attempts              int        `json:"attempts,omitempty"`
-	LastError             string     `json:"last_error,omitempty"`
-	RequestedAt           time.Time  `json:"requested_at"`
-	PublishedAt           *time.Time `json:"published_at,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	RemoteUID   uint32     `json:"-"`
+	Attempts    int        `json:"attempts,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
+	RequestedAt time.Time  `json:"requested_at"`
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }

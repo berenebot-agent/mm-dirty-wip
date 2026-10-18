@@ -122,24 +122,3 @@ func TestSessionPrincipalResolvesTimezone(t *testing.T) {
 		t.Fatalf("session tz = %q, want UTC", p.Timezone)
 	}
 }
-
-// TestMigration040AddsTimezoneColumns verifies both columns exist with an empty
-// default after the migration chain runs on a fresh store.
-func TestMigration040AddsTimezoneColumns(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s, u, _, _ := testStore(t)
-	if !columnPresent(t, s, "accounts", "timezone") {
-		t.Fatal("accounts.timezone missing")
-	}
-	if !columnPresent(t, s, "users", "timezone") {
-		t.Fatal("users.timezone missing")
-	}
-	if n := queryInt(t, s, `SELECT count(*) FROM accounts WHERE id=? AND timezone=''`, u.AccountID); n != 1 {
-		t.Fatalf("account timezone default not empty (n=%d)", n)
-	}
-	if n := queryInt(t, s, `SELECT count(*) FROM users WHERE id=? AND timezone=''`, u.ID); n != 1 {
-		t.Fatalf("user timezone default not empty (n=%d)", n)
-	}
-	_ = ctx
-}

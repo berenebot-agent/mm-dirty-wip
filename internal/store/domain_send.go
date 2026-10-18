@@ -7,19 +7,6 @@ import (
 	"strings"
 )
 
-// migration074 adds the per-key "domain-wide sending" grant. The grant lives on
-// a key's binding row for a domain's catch-all inbox: when the flag is set the
-// key may put ANY local part on that domain in the From address, not only the
-// inbox primary or a managed alias. The inbox is the anchor because the
-// catch-all is what makes an arbitrary address reployable — the check is
-// evaluated against the domain's current, enabled catch-all at send time, so the
-// flag goes dormant (not deleted) if the catch-all is cleared or moved.
-//
-// The flag is additive and defaults to 0, so every existing binding is unchanged.
-const migration074 = `
-ALTER TABLE client_inbox_bindings ADD COLUMN send_any_in_domain INTEGER NOT NULL DEFAULT 0;
-`
-
 // ErrNoCatchAll reports that a domain has no enabled catch-all inbox, so a
 // domain-wide send grant cannot apply.
 var ErrNoCatchAll = errors.New("domain has no enabled catch-all")

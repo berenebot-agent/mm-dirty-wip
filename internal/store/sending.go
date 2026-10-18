@@ -80,7 +80,7 @@ func (s *Store) SendingConfigForMessage(ctx context.Context, accountID, messageI
 			return s.SendingConfigForTarget(ctx, accountID, inboxID, SendingTarget{InboxID: inboxID})
 		}
 		// A domain message that has not frozen a sending domain resolves against
-		// the inbox's own domain (legacy rows).
+		// the inbox's own domain.
 		var inboxDomain string
 		if derr := s.read.QueryRowContext(ctx, `SELECT COALESCE(domain_id,'') FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&inboxDomain); derr != nil {
 			return DomainSendingConfig{}, derr

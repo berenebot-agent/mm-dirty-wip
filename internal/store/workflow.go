@@ -47,7 +47,6 @@ type Workflow struct {
 	// SendAttemptState is the durable pre-send marker: empty means no provider
 	// send is in flight (or the last one reached a definitive outcome), and a
 	// non-empty value is the claim token of the attempt that started the send.
-	// See migration077.
 	SendAttemptState string
 }
 
@@ -374,7 +373,7 @@ func (s *Store) MarkWorkflowUncertain(ctx context.Context, accountID, id, reason
 }
 
 // BeginWorkflowSend durably records that this attempt is about to hand the
-// workflow job to the provider, mirroring BeginMessageSend. See migration077.
+// workflow job to the provider, mirroring BeginMessageSend.
 func (s *Store) BeginWorkflowSend(ctx context.Context, accountID, id, claim string) error {
 	if claim == "" {
 		return nil

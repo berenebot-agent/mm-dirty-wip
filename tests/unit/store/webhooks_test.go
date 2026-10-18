@@ -3,61 +3,11 @@ package store_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/store"
 )
-
-// TestMigration032MigratesLegacyClients upgrades a pre-032 database and proves
-// existing API keys and Hermes connections keep working through the unified
-// client tables.
-func TestMigration032MigratesLegacyClients(t *testing.T) {
-	t.Parallel()
-	dir := newV012(t)
-	seedV012(t, dir)
-	db := rawDB(t, filepath.Join(dir, "inbox.db"))
-	legacy := []string{
-		`INSERT INTO api_keys(id,account_id,name,key_prefix,key_hash,is_admin,created_at) VALUES('keyOld','acc1','Legacy','mmm_legacy',?,0,'2026-01-01T00:00:00Z')`,
-		`INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES('keyOld','inbA','owner')`,
-		`INSERT INTO hermes_connections(id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at) VALUES('hrmOld','acc1','inbA','H','gw-old','sec','del',3,'2026-01-01T00:00:00Z')`,
-	}
-	if _, err := db.ExecContext(context.Background(), legacy[0], auth.HashToken("mmm_legacy")); err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range legacy[1:] {
-		if _, err := db.ExecContext(context.Background(), s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatalf("upgrade open: %v", err)
-	}
-	defer st.Close()
-
-	p, err := st.APIKeyPrincipal(context.Background(), "mmm_legacy")
-	if err != nil {
-		t.Fatalf("legacy key auth after upgrade: %v", err)
-	}
-	if p.APIKeyID != "keyOld" || p.AccountID != "acc1" || p.MailboxRoles["inbA"] != "owner" {
-		t.Fatalf("migrated key principal %#v", p)
-	}
-
-	h, err := st.GetHermesConnectionByGateway(context.Background(), "gw-old")
-	if err != nil {
-		t.Fatalf("legacy hermes after upgrade: %v", err)
-	}
-	if h.ID != "hrmOld" || h.InboxID != "inbA" || h.SecretEncrypted != "sec" || h.LastAckEventID != 3 {
-		t.Fatalf("migrated hermes %#v", h)
-	}
-}
 
 func TestWebhookClientLifecycle(t *testing.T) {
 	t.Parallel()

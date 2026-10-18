@@ -40,6 +40,7 @@ internal/apispec/           API route definitions and documentation
 internal/app/               Mailbox operations, workflows and background jobs
 internal/model/             Shared data types
 internal/store/             SQLite persistence
+internal/dbschema/          Public database baseline and validation
 internal/transport/         Email providers, IMAP, SMTP and MX integration
 internal/hermesrelay/       Agent relay
 internal/auth/              Authentication and authorization
@@ -160,46 +161,51 @@ Use one serialized writer connection (`SetMaxOpenConns(1)`) plus a small bounded
 
 Keep write transactions short.
 
-Core tables should include:
+The schema is the **public baseline** in `internal/dbschema/baseline.sql`, one
+versioned migration (`001`) applied in a single transaction and recorded in
+`schema_migrations`, with the lineage marked by `PRAGMA user_version=1`. The
+`internal/dbschema` package owns the DDL and validates that a database still
+matches it. Pre-beta growth was a chain of 80 pre-release migrations; that
+lineage is retired and converted offline once (see
+[Pre-release database transition](PRERELEASE_TRANSITION.md)).
+
+The main tables, grouped:
 
 ```text
-accounts
-users
-sessions
-domains
-inboxes
-inbox_aliases
-inbox_folders
-inbox_remote_credentials
-inbox_remote_messages
-inbox_remote_labels
-inbox_remote_cursors
-inbox_remote_arrivals
-inbox_remote_notifications
-inbox_remote_actions
-remote_sent_copies
-assistant_handling_requests
-messages
-message_recipients
-threads
-thread_messages
-attachments
-message_tags
-api_keys
-api_key_inboxes
-api_key_mailbox_roles
-user_mailbox_roles
-invites
-events
-domain_sending_configs
-domain_receiving_configs
-outbound_delivery_log
-hermes_connections
-audit_log
-settings
-system_settings
-pending_file_cleanup
+Accounts and auth        accounts, users, webauthn_credentials, sessions,
+                         key_sessions, invites, user_mailbox_roles, audit_log
+Domains and mailboxes    domains, inboxes, inbox_aliases, inbox_folders,
+                         inbox_defined_labels
+Messages and search      messages, message_deliveries, message_labels,
+                         attachments, threads, blocked_messages, message_fts
+Clients and connectors   clients, client_api_keys, client_inbox_bindings,
+                         client_push, client_delivery_log, hermes_enroll_tokens,
+                         webhook_deliveries, outbound_workflow,
+                         inbound_delivery_log, inbound_control_messages
+Connected mailboxes      inbox_remote_credentials, inbox_remote_messages,
+                         inbox_remote_labels, inbox_remote_cursors,
+                         inbox_remote_arrivals, inbox_remote_notifications,
+                         inbox_remote_actions, remote_sent_copies,
+                         assistant_handling_requests, inbox_metadata_sync,
+                         inbox_message_actions, inbox_google_connections,
+                         inbox_microsoft_connections, inbox_one_bindings,
+                         google_detection, google_label_memberships,
+                         google_message_ids, google_oauth_attempts,
+                         gmail_history_pages, microsoft_delta,
+                         microsoft_message_ids, microsoft_oauth_attempts,
+                         microsoft_push, inbox_gmail_sync, one_import_setups
+Configuration            domain_sending_configs, domain_receiving_configs,
+                         mx_settings, mx_receipts, account_mx_receivers,
+                         dialmx_domain_credentials
+Outbox and housekeeping  drafts, draft_attachments, draft_send_requests,
+                         outbound_delivery_log, outbound_idempotency, events,
+                         empty_trash_operations, empty_trash_targets,
+                         pending_file_cleanup, schema_migrations
 ```
+
+API credentials and connectors were once held in separate `api_keys`,
+`api_key_mailbox_roles` and `hermes_connections` tables; those are retired in
+the public baseline in favour of the `clients` family above.
 
 `inbox_folders` is the single folder tree for **both** inbox kinds; a message's
 folder membership is `messages.mailbox_id` (`NULL` = the implicit system Inbox).
@@ -282,7 +288,7 @@ Responsibilities:
 - Hermes response/action → canonical mailbox send/reply operation
 - durable/replay behaviour consistent with the Relay contract
 
-Relay-specific protocol structures remain isolated in `/internal/integrations/hermesrelay`.
+Relay-specific protocol structures remain isolated in `/internal/hermesrelay`.
 
 ## 8. Outbound
 

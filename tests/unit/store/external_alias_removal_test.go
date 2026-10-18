@@ -8,54 +8,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// TestMigration053RemovesExternalAliases proves that on a genuinely fresh
-// database (store.Open on a real temp dir, not the shared template) migration
-// 053 leaves no trace of the removed external-alias feature: the table, the
-// three attribution columns and their indexes are all gone, and the marker is
-// recorded exactly once.
-func TestMigration053RemovesExternalAliases(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "053"); n != 1 {
-		t.Fatalf("migration 053 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='external_aliases'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatal("external_aliases table must not exist after migration 053")
-	}
-	for _, col := range []struct{ table, column string }{
-		{"messages", "sending_external_alias_id"},
-		{"drafts", "from_external_alias_id"},
-		{"outbound_delivery_log", "external_alias_id"},
-	} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, col.table, col.column).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 0 {
-			t.Fatalf("%s.%s must not exist after migration 053", col.table, col.column)
-		}
-	}
-	for _, idx := range []string{"idx_messages_external_alias", "idx_outbound_log_external_alias"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 0 {
-			t.Fatalf("index %s must not exist after migration 053", idx)
-		}
-	}
-}
-
 // TestManagedAliasesSurviveExternalAliasRemoval proves the removal migration
 // leaves managed-domain aliases (inbox_aliases) and ordinary mail intact, since
 // only the external sending-alias feature is removed.

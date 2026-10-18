@@ -7,39 +7,6 @@ import (
 	"time"
 )
 
-const migration061 = `
-CREATE TABLE inbox_microsoft_connections (
- inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- client_id TEXT NOT NULL, tenant TEXT NOT NULL, identity_id TEXT NOT NULL,
- mailbox TEXT NOT NULL, shared INTEGER NOT NULL, encrypted_token TEXT NOT NULL, expires_at TEXT NOT NULL
-);
-CREATE TABLE microsoft_message_ids (
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- message_id TEXT NOT NULL REFERENCES inbox_remote_messages(id) ON DELETE CASCADE,
- provider_id TEXT NOT NULL, folder_id TEXT NOT NULL, generation TEXT NOT NULL DEFAULT '', detected INTEGER NOT NULL DEFAULT 0,
- PRIMARY KEY(inbox_id,provider_id), UNIQUE(message_id)
-);
-CREATE TABLE microsoft_delta (
- inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
- folder_id TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '', initialized INTEGER NOT NULL DEFAULT 0, generation TEXT NOT NULL DEFAULT '',
- PRIMARY KEY(inbox_id,folder_id)
-);
-CREATE TABLE microsoft_oauth_attempts (
- state_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- user_id TEXT NOT NULL, inbox_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL,
- client_id TEXT NOT NULL, tenant TEXT NOT NULL, mailbox TEXT NOT NULL, shared INTEGER NOT NULL,
- encrypted_pending TEXT NOT NULL, expires_at TEXT NOT NULL
-);`
-
-// migration063 adds the encrypted exchanged token a shared-mailbox selection
-// phase holds between sign-in and mailbox choice. Presence of the column is the
-// applied marker: SQLite appends it after expires_at on both fresh and upgraded
-// databases, so every query names its columns explicitly.
-const migration063 = `
-ALTER TABLE microsoft_oauth_attempts ADD COLUMN encrypted_token TEXT NOT NULL DEFAULT '';
-`
-
 func (s *Store) MicrosoftMessageFolder(ctx context.Context, account, inbox, id string) (string, error) {
 	var folder string
 	e := s.read.QueryRowContext(ctx, `SELECT g.folder_id FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND g.inbox_id=? AND g.message_id=?`, account, inbox, id).Scan(&folder)

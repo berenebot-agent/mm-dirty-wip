@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/dbschema"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/safepath"
 	_ "github.com/dellarb/mailmoose/internal/sqlite3driver"
@@ -53,8 +54,8 @@ func Open(dataDir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	// Retire any raw files a migration queued for post-commit unlink. This runs
-	// outside the migration transaction, so a rollback never orphans a live row.
+	// Retire raw files queued by committed operations, never inside a transaction
+	// whose rollback could leave a live row pointing at a missing file.
 	s.sweepPendingFileCleanup(context.Background())
 	return s, nil
 }
@@ -111,69 +112,13 @@ func (s *Store) VacuumInto(dest string) error {
 	return err
 }
 func (s *Store) migrate(ctx context.Context) error {
-	// Pin the single writer connection so the foreign_keys pragma and the
-	// migration transaction run on the same connection.
 	conn, err := s.write.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	// The 001 baseline creates the schema_migrations table the rest of the
-	// runner depends on. It must only run on a genuinely fresh (or pre-runner
-	// legacy) database: it is all CREATE TABLE IF NOT EXISTS, so running it on
-	// an already-migrated database would resurrect tables that a later
-	// migration dropped (e.g. the retired credential tables).
-	if err := bootstrapBaseline(ctx, conn); err != nil {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	for _, m := range migrations(filepath.Dir(s.path)) {
-		applied, err := migrationMarker(ctx, conn, m.version)
-		if err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
-		if m.detect != nil {
-			state, err := m.detect(ctx, conn)
-			if err != nil {
-				return fmt.Errorf("migrate %s: inspect schema: %w", m.version, err)
-			}
-			switch state {
-			case stateApplied:
-				// The schema work committed but its marker was lost (an
-				// interrupted upgrade under the old runner). Record it.
-				if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(?,?)`, m.version, nowText()); err != nil {
-					return err
-				}
-				continue
-			case statePartial:
-				return fmt.Errorf("migrate %s: schema is partially applied; restore the database from backup or repair it manually before starting", m.version)
-			}
-		}
-		if err := runMigration(ctx, conn, m); err != nil {
-			return fmt.Errorf("migrate %s: %w", m.version, err)
-		}
-	}
-	return nil
-}
-
-// bootstrapBaseline applies the 001 baseline only when the database has no
-// schema_migrations table yet. A database that already carries the runner's
-// marker table has completed the baseline at some point in its life, so
-// re-running the idempotent baseline would recreate dropped tables (the
-// migration-013 baseline-resurrection hazard). A fresh database and a
-// pre-runner legacy database both lack the marker table and are bootstrapped.
-func bootstrapBaseline(ctx context.Context, conn *sql.Conn) error {
-	hasMarkerTable, err := tableExists("schema_migrations")(ctx, conn)
-	if err != nil {
-		return err
-	}
-	if hasMarkerTable {
-		return nil
-	}
-	return runMigration(ctx, conn, migration{version: "001", sql: migration001})
+	return dbschema.Migrate(ctx, conn)
 }
 
 func nowText() string              { return time.Now().UTC().Format(time.RFC3339Nano) }

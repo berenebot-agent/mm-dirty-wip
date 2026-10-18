@@ -6,24 +6,6 @@ import (
 	"errors"
 )
 
-// migration073 gives every domain its own Direct MX DKIM signing material, stored
-// on the domain row rather than inside a sending configuration. A key is minted
-// for every domain when it is created, so the DKIM record to publish is known the
-// moment an operator selects Direct MX — with no prior save. The signing flag
-// stays on the sending configuration; these columns only hold the key.
-//
-// dkim_private_key is the encrypted PKCS#8/PKCS#1 PEM (encrypted at the app layer
-// with APP_ENCRYPTION_KEY, like other recoverable secrets); dkim_public_key is the
-// derived SPKI PEM; dkim_selector and dkim_domain are the fixed selector and the
-// signing domain. All default to ” so an existing domain is backfilled by the
-// startup pass rather than by the migration.
-const migration073 = `
-ALTER TABLE domains ADD COLUMN dkim_private_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE domains ADD COLUMN dkim_public_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE domains ADD COLUMN dkim_selector TEXT NOT NULL DEFAULT '';
-ALTER TABLE domains ADD COLUMN dkim_domain TEXT NOT NULL DEFAULT '';
-`
-
 // DomainDKIM is the per-domain DKIM signing material. PrivateKey is the encrypted
 // PEM exactly as stored; the app layer decrypts it.
 type DomainDKIM struct {

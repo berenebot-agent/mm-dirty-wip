@@ -20,49 +20,6 @@ func localFolderStore(t *testing.T) (*store.Store, model.Principal, model.Inbox)
 	return s, p, b[0]
 }
 
-// TestMigration054FolderModel proves migration 054 adds the local/domain folder
-// model on a genuinely fresh database: messages.mailbox_id, the folder
-// system/origin/metadata columns and the folder indexes. It uses store.Open on a
-// real temp dir because it asserts migration behaviour.
-func TestMigration054FolderModel(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "054"); n != 1 {
-		t.Fatalf("migration 054 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('messages') WHERE name='mailbox_id'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("messages.mailbox_id missing after migration 054")
-	}
-	for _, col := range []string{"is_system", "origin", "remote_metadata_json"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inbox_folders') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inbox_folders.%s missing after migration 054", col)
-		}
-	}
-	for _, idx := range []string{"idx_messages_mailbox", "idx_inbox_folders_role"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("index %s missing after migration 054", idx)
-		}
-	}
-}
-
 // TestLocalFolderCRUDAndProtectedRoles proves a custom folder can be created,
 // renamed and deleted (when empty) on a domain inbox, that the protected system
 // roles cannot be renamed or deleted, and that a non-empty custom folder refuses

@@ -9,54 +9,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// TestMigration052Foundation proves migration 052 adds the standalone-mailbox
-// foundation on a genuinely fresh database: the inbox kind/address/remote
-// columns, the three new tables, and the partial standalone-address index. It
-// uses store.Open on a real temp dir, not the shared testdb template, because it
-// asserts migration behaviour.
-func TestMigration052Foundation(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if n := markerCount(t, st, "052"); n != 1 {
-		t.Fatalf("migration 052 marker count %d", n)
-	}
-	db := rawDB(t, st.Path())
-	defer db.Close()
-	ctx := context.Background()
-	var n int
-	for _, col := range []string{"kind", "address", "namespace", "remote_host", "remote_port", "remote_username", "remote_security", "smtp_host", "smtp_port", "smtp_username", "smtp_security", "remote_configured"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name=?`, col).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("inboxes.%s missing after migration 052", col)
-		}
-	}
-	for _, table := range []string{"inbox_remote_credentials", "inbox_folders", "inbox_remote_messages"} {
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if n != 1 {
-			t.Fatalf("table %s missing after migration 052", table)
-		}
-	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_inboxes_standalone_address'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("idx_inboxes_standalone_address missing")
-	}
-	// Existing domain inboxes keep kind='domain' by the column default.
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name='kind' AND dflt_value="'domain'"`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // seedStandaloneAccount creates an account admin and returns the store plus the
 // account id, using the shared migrated template.
 func seedStandaloneAccount(t *testing.T) (*store.Store, string) {
