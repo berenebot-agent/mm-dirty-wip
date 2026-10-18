@@ -198,6 +198,9 @@ func main() {
 	svc.RemoteDetection = remoteWorker
 	h := httpapp.New(svc, log)
 	h.SetRemoteMailbox(remoteMailbox)
+	// A relayed connected-mailbox event carries a short body preview, so the
+	// gateway records and displays real text instead of an empty placeholder.
+	h.Relay.SetRemoteBody(remoteMailbox.ArrivalBodyPreview)
 
 	type listener struct {
 		name string
