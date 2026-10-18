@@ -302,9 +302,9 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 		s.Service.ActionWaker.Wake()
 	}
 	if ui {
-		notice := "Empty Trash queued. Finding messages, then deleting them in background batches; check Queue for progress."
+		notice := "Empty trash is running in the background."
 		if a.State == "failed" || a.State == "ambiguous" {
-			notice = "Empty Trash needs attention. Check Queue before retrying or starting another operation."
+			notice = "Empty trash needs attention — open Queue."
 		}
 		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape(notice), 303)
 		return

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Empty trash reads "Empty trash" in the queue, and the notice after clicking it
+  is one short line ("Empty trash is running in the background") instead of a
+  sentence about background batches. The parent operation also stops publishing
+  a queue-changed event on the coordination turns it makes while its purge
+  children are still running, which removes the repeated whole-page refresh (and
+  header spinner) during and just after an Empty Trash.
 - Wrap attachment Base64 at MIME line limits so normal attachments pass SMTP
   receivers, including MailMoose's own. Multi-recipient webhook ingest now
   preserves retryable failures even when an earlier unknown recipient failed

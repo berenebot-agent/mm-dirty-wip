@@ -193,3 +193,50 @@ func TestAPIAccountSettingsTrashRetention(t *testing.T) {
 		t.Fatalf("settings not updated: %s", rr.Body.String())
 	}
 }
+
+// TestEmptyTrashParentPublishesNoEventWhilePending pins the queue-event budget of
+// an Empty Trash: one event per purged message, plus one when the parent
+// finishes. The parent re-runs a coordination turn every emptyTrashTurnDelay
+// while its children are in flight, and a still-pending turn changes nothing the
+// queue shows, so publishing there would make every open page refetch and
+// re-render several times a second for the whole operation.
+func TestEmptyTrashParentPublishesNoEventWhilePending(t *testing.T) {
+	t.Parallel()
+	svc, _, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	const targets = 3
+	for i := 0; i < targets; i++ {
+		m := seedInbound(t, svc, box, fmt.Sprintf("empty-events-%d", i), fmt.Sprintf("<empty-events-%d@test>", i), "Trash me", "body")
+		if _, _, err := svc.Store.TrashMessage(ctx, p, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, events, unsubscribe := svc.Hub.Subscribe(64)
+	defer unsubscribe()
+	a, err := svc.Store.EnqueueEmptyTrash(ctx, p, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// httpFixture already runs the action worker; it drains on its one-second tick.
+	got, err := svc.WaitForInboxAction(ctx, p, a.ID, 10*time.Second)
+	if err != nil || got.State != "done" || got.EmptyTrash == nil || got.EmptyTrash.Purged != targets {
+		t.Fatalf("empty trash: %+v %v", got, err)
+	}
+	// The parent settles before it publishes, so collect for a moment after the
+	// state was observed rather than stopping at the first completion.
+	queueEvents := 0
+	for deadline := time.Now().Add(500 * time.Millisecond); time.Now().Before(deadline); {
+		select {
+		case ev := <-events:
+			if ev.Type == "actions.changed" && ev.InboxID == box.ID {
+				queueEvents++
+			}
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if queueEvents > targets+1 {
+		t.Fatalf("queue events = %d, want at most %d (one per purge plus completion): a pending coordination turn published", queueEvents, targets+1)
+	}
+}
