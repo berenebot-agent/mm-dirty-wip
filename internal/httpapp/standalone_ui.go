@@ -163,7 +163,7 @@ func (s *Server) uiCreateStandalone(w http.ResponseWriter, r *http.Request) {
 }
 
 // remoteUpdateFromForm builds a standalone remote update from an inbox settings
-// form. A blank secret keeps the stored value; a blank SMTP host disables
+// form. A blank secret keeps it only for an unchanged endpoint; a blank SMTP host disables
 // outbound. The field names match the edit dialog's Identity-tab controls.
 func remoteUpdateFromForm(r *http.Request) store.StandaloneRemoteUpdate {
 	port, _ := parseIntForm(r.Form.Get("remote_port"))
@@ -1105,7 +1105,7 @@ const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.I
 <label>Host</label><input name="host" value="{{.RemoteConfig.Host}}" placeholder="imap.example.com">
 <label>Port</label><input name="port" type="number" min="1" max="65535" value="{{if .RemoteConfig.Port}}{{.RemoteConfig.Port}}{{end}}" placeholder="993">
 <label>Username</label><input name="username" value="{{.RemoteConfig.Username}}" placeholder="agent@example.com">
-<label>Password or app password{{if .RemoteConfig.IMAPPasswordSet}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input name="imap_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.IMAPPasswordSet}}unchanged{{else}}app password{{end}}">
+<label>Password or app password{{if .RemoteConfig.IMAPPasswordSet}} <span class="muted small">(leave blank only if host, port, username and security are unchanged)</span>{{end}}</label><input name="imap_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.IMAPPasswordSet}}unchanged{{else}}app password{{end}}">
 <label>Security</label><select name="security"><option value="tls"{{if eq .RemoteConfig.Security "tls"}} selected{{end}}>TLS (implicit, default)</option><option value="starttls"{{if eq .RemoteConfig.Security "starttls"}} selected{{end}}>STARTTLS</option><option value="plain"{{if eq .RemoteConfig.Security "plain"}} selected{{end}}>Plain (no transport security)</option></select>
 <label>Sync root folder</label><input name="namespace" value="{{.RemoteConfig.Namespace}}" placeholder="INBOX">
 <h3 class="section-head">Outbound SMTP (optional)</h3>
@@ -1113,7 +1113,7 @@ const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.I
 <label>SMTP host</label><input name="smtp_host" value="{{.RemoteConfig.SMTPHost}}" placeholder="smtp.example.com">
 <label>SMTP port</label><input name="smtp_port" type="number" min="1" max="65535" value="{{if .RemoteConfig.SMTPPort}}{{.RemoteConfig.SMTPPort}}{{end}}" placeholder="465">
 <label>SMTP username</label><input name="smtp_username" value="{{.RemoteConfig.SMTPUsername}}" placeholder="agent@example.com">
-<label>SMTP password{{if .RemoteConfig.SMTPPasswordSet}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input name="smtp_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.SMTPPasswordSet}}unchanged{{else}}app password{{end}}">
+<label>SMTP password{{if .RemoteConfig.SMTPPasswordSet}} <span class="muted small">(leave blank only if host, port, username and security are unchanged)</span>{{end}}</label><input name="smtp_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.SMTPPasswordSet}}unchanged{{else}}app password{{end}}">
 <label>SMTP security</label><select name="smtp_security"><option value="tls"{{if eq .RemoteConfig.SMTPSecurity "tls"}} selected{{end}}>TLS (implicit, default)</option><option value="starttls"{{if eq .RemoteConfig.SMTPSecurity "starttls"}} selected{{end}}>STARTTLS</option><option value="plain"{{if eq .RemoteConfig.SMTPSecurity "plain"}} selected{{end}}>Plain (no transport security)</option></select>
 <h3 class="section-head">Sent copy</h3>
 <p class="muted small">When enabled, a message sent from this inbox is copied into the remote Sent folder. The destination is resolved from the Sent role unless a folder is set here.</p>

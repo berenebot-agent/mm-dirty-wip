@@ -291,9 +291,14 @@ const RemoteMXProvider = "remotemx"
 // registration: Domains returns nil, exactly like the installation Remote
 // backend. Resolve/Ingest route through the remotemx provider so the core keeps
 // per-recipient account/domain authorization.
-type remoteMXBackend struct{ service *Service }
+type remoteMXBackend struct {
+	service   *Service
+	accountID string
+}
 
-func (s *Service) RemoteMXBackend() mxdial.Backend { return remoteMXBackend{service: s} }
+func (s *Service) RemoteMXBackend(accountID string) mxdial.Backend {
+	return remoteMXBackend{service: s, accountID: accountID}
+}
 
 func (b remoteMXBackend) Domains(context.Context) ([]mxdial.Domain, error) { return nil, nil }
 
@@ -305,6 +310,12 @@ func (b remoteMXBackend) Resolve(ctx context.Context, domain string, recipients 
 	for _, recipient := range recipients {
 		if !strings.EqualFold(domain, domainOf(recipient)) {
 			return mxwire.ResolveResponse{MachineCode: mxwire.CodeUnauthorized}, nil
+		}
+		if err := b.authorizeRecipient(ctx, recipient); err != nil {
+			if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+				return mxwire.ResolveResponse{MachineCode: mxwire.CodeUnauthorized}, nil
+			}
+			return mxwire.ResolveResponse{}, err
 		}
 	}
 	results := b.service.resolveMXRecipients(ctx, RemoteMXProvider, recipients)
@@ -322,8 +333,14 @@ func (b remoteMXBackend) Ingest(ctx context.Context, domains []string, meta mxwi
 		if !containsFold(domains, domainOf(recipient)) {
 			return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 		}
+		if err := b.authorizeRecipient(ctx, recipient); err != nil {
+			if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+				return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
+			}
+			return mxwire.IngestResponse{}, err
+		}
 	}
-	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID, ReceiverURL: receiverURL}
+	input := MXIngestInput{AccountID: b.accountID, Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID, ReceiverURL: receiverURL}
 	result, err := b.service.IngestRemoteMX(ctx, input)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
@@ -335,6 +352,17 @@ func (b remoteMXBackend) Ingest(ctx context.Context, domains []string, meta mxwi
 		}
 	}
 	return response, nil
+}
+
+func (b remoteMXBackend) authorizeRecipient(ctx context.Context, recipient string) error {
+	binding, err := b.service.resolveInboundBindingForProvider(ctx, RemoteMXProvider, recipient)
+	if err != nil {
+		return err
+	}
+	if b.accountID == "" || binding.AccountID != b.accountID {
+		return store.ErrForbidden
+	}
+	return nil
 }
 
 // IngestRemoteMX persists a Remote MX message for the whole accepted recipient

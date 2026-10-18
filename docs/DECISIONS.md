@@ -137,6 +137,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D127: `attention` is an authorization verdict, not any provider error](#d127-attention-is-an-authorization-verdict-not-any-provider-error)
 - [D128: The root encryption key is generated when the operator does not supply one](#d128-the-root-encryption-key-is-generated-when-the-operator-does-not-supply-one)
 - [D132: The first public MX session protocol is v1](#d132-the-first-public-mx-session-protocol-is-v1)
+- [D133: Strix remediation: delegated authority, destination-bound secrets and approval delivery](#d133-strix-remediation-delegated-authority-destination-bound-secrets-and-approval-delivery)
 
 ---
 
@@ -523,7 +524,7 @@ in the outbox worker, an approval-email builder, API/UI approver settings, and
 the `draft.approval_expired` event. No new dependency or runtime service; it
 reuses the outbound, event, storage and SQLite subsystems.
 
-**Sender binding:** the decision is bound to the provider-attested envelope
+**Sender binding:** the decision is bound to the transport-reported envelope
 sender (`transport.InboundMessage.EnvelopeFrom`) rather than the attacker-
 controlled MIME `From:` header; both must equal the stored approver and a
 missing envelope is rejected (see D029). Full SPF/DKIM/DMARC evidence capture
@@ -584,7 +585,7 @@ Direct MX, and the per-account Remote MX receiver) can be held to a
 public-routable destination policy. The operator controls this globally with
 `ALLOW_PRIVATE_OUTBOUND`; because self-hosting is the primary model the guard is
 **off by default** (`ALLOW_PRIVATE_OUTBOUND=true`), so private gateways, local
-relays and LAN receivers work out of the box. A hosted operator sets
+relays and LAN receivers work out of the box. An operator who wants public-only outbound sets
 `ALLOW_PRIVATE_OUTBOUND=false` to confine every outbound connection to the public
 internet, and that global policy also governs the per-account Remote MX receiver
 so a tenant cannot re-enable private destinations on their own. When enforcement
@@ -594,14 +595,11 @@ private or link-local IP literal. The shared `netutil` client validates inside
 redirects, and bypasses the proxy environment while enforcement is active;
 enforcement off restores the default transport and proxy behaviour.
 
-**Reason:** The original default was public-only, on the grounds that a hosted
-multi-tenant service must not let an account point a provider `api_base` at
-loopback, RFC1918 or the cloud metadata address and read the response through the
-delivery log. That control is still available and must be used in hosted mode;
-but for the self-hosted deployment that is the project's primary model, blocking
-private destinations by default broke legitimate private gateways, local relays
-and LAN receivers while offering no protection against the operator's own
-network. The guard therefore becomes an explicit operator choice, and the
+**Reason:** MailMoose is self-hosted (D064). Blocking private destinations by
+default breaks legitimate private gateways, local relays and LAN receivers.
+An operator may still restrict outbound reachability, including provider bases
+that would otherwise reach local services or cloud metadata endpoints. The guard
+is an explicit operator choice, and the
 per-account Remote MX `allow_private` flag is effective only when the operator
 permits private outbound. See D086 (superseding the default) for the change
 record.
@@ -611,17 +609,18 @@ new dependency or runtime service.
 
 ## D029 — Approval sender bound to the provider envelope sender
 
-**Decision:** An email approval is accepted only when the provider-attested
+**Decision:** An email approval is accepted only when the transport-reported
 envelope sender presented in the inbound webhook equals the stored approver
 address, and the message's MIME `From:` header equals it too. A missing or
 mismatched envelope is consumed and recorded as invalid, never as a decision.
 
-**Reason:** The MIME `From:` header is attacker-controlled, so binding a
-one-time-token decision to it let a token holder spoof the approver. The
-envelope sender is what the receiving provider observed and what SPF covers.
-The token is additionally hidden from the mailbox read surface (the workflow-mail
-`internal` flag); this decision keeps the human-in-the-loop boundary intact even
-if a token leaks by another channel.
+**Reason:** Comparing both reported sender values fails closed on a missing or
+mismatched envelope, but does not guarantee independent sender authentication.
+The original assumption that it protected against a leaked token on every
+provider was incorrect (D058/D059/D133). Tokens remain hidden from requesting-inbox
+read surfaces; a separate nominated approver inbox may read its notification.
+Possession of a live token plus spoofable matching addresses remains an accepted
+Low risk, not a proven human-in-the-loop boundary after token compromise.
 
 **Boundary:** The envelope sender is already normalized across the Mailgun,
 Cloudflare and Resend adapters (`transport.InboundMessage.EnvelopeFrom`).
@@ -630,7 +629,8 @@ sends it. Full SPF/DKIM/DMARC evidence capture remains a future extension.
 
 Normalization is **not** the same as attestation, and the difference matters for
 the approval decision (`D058`, `D027`): the value is normalized on every adapter
-but only *attested* on Resend, whose envelope sender comes from the Svix-signed
+but a provider signature is not evidence of original sender authentication.
+Resend's reported `data.from` comes from the Svix-signed
 payload. Mailgun passes an unsigned form field and Cloudflare passes an unsigned
 request header (`X-MailMoose-Envelope-From`), so on both the transport is
 authenticated while the sender **content** is caller-controlled. A consumer that
@@ -830,9 +830,10 @@ an alias (the API still accepts an empty name and falls back, for compatibility
 with older clients and imports). A draft records the resolved name
 (`drafts.from_name`), it is part of the draft's frozen approval fingerprint, and
 the approval-request body shows the intended `Name <address>`. Names are
-operator-controlled: alias management is already Owner/Admin-only (the inbox
-`PATCH` requires Owner or Admin, the UI is Admin), so an agent cannot set a
-display name. Names may not contain commas, newlines or control characters and
+operator-controlled: alias management requires account Admin in both the store
+and HTTP callers (D133 supersedes the former Owner/Admin API permission), so an
+inbox-scoped Owner cannot mint an identity or set its alias display name.
+Names may not contain commas, newlines or control characters and
 are length-capped at 128. The API adds a `alias_names` object map (address →
 name) alongside the existing `aliases` array, so older clients that send only
 `aliases` are unaffected.
@@ -1508,7 +1509,9 @@ MIME) before revisiting this.
 claim that the Cloudflare adapter carried a genuinely attested envelope sender and
 was therefore unaffected. **That claim was false** — Cloudflare reads the envelope
 sender from an unsigned request header, so it is a second unattested entry point to
-the same decision (finding A, `LOW`). Resend remains genuinely attested. The
+the same decision (finding A, `LOW`). The later claim that Resend was unaffected
+was also incorrect: its signature authenticates the reported From, not an
+independent SMTP envelope or the original sender (D133). The
 "failing closed breaks Mailgun" argument is correspondingly weaker: a single
 provenance flag on `transport.InboundMessage` closes Mailgun and Cloudflare together.
 
@@ -1528,8 +1531,9 @@ attested" envelope sender and was therefore unaffected by the envelope-sender
 risk. It does not: `internal/transport/cloudflare/inbound.go` reads the envelope
 sender from the `X-MailMoose-Envelope-From` request header, and the shared
 per-domain bearer authenticates the caller without attesting the value. Cloudflare
-is therefore a second unattested entry to the approval decision. Resend **is**
-attested (its envelope sender comes from the Svix-signed payload).
+is therefore a second unattested entry to the approval decision. Resend's
+Svix-signed `data.from` is also not proof of SMTP-envelope or sender identity;
+the former claim that it was unaffected is corrected by D133.
 
 **Decision:** Accept the Cloudflare exposure under the same reasoning as `D058`
 rather than changing approval behaviour at this time. The maintainer's judgement:
@@ -1714,8 +1718,10 @@ enabled). `webhook_deliveries` is the durable per-event delivery queue.
   cannot block a mailbox forever. `enabled` pauses delivery without losing the
   cursor.
 - The destination is validated as HTTPS at save and dialled with the existing
-  `netutil` public-routable guard, so a webhook cannot be pointed at a private
-  or loopback address.
+  `netutil` public-routable guard when the operator enables it with
+  `ALLOW_PRIVATE_OUTBOUND=false`. Private, loopback and link-local destinations
+  are allowed by the self-hosted default (`true`, D086/D133); redirects are not
+  followed and response bodies are discarded in either mode.
 - `/v1/admin/clients` is the canonical listing; `/v1/admin/clients/webhooks*`
   manages webhook clients; the existing `/v1/admin/keys` and
   `/v1/admin/hermes` routes remain as compatibility aliases.
@@ -2843,7 +2849,7 @@ tenant-controlled bypass defeats the operator's SSRF control.
 **Decision:** Self-hosting is the primary deployment model, so the public-routable
 guard is **off by default**: `ALLOW_PRIVATE_OUTBOUND` defaults to `true`, and
 private gateways, local relays and LAN receivers work without configuration. The
-guard remains a single global operator switch. A hosted operator sets
+guard remains a single global operator switch. An operator requiring public-only traffic sets
 `ALLOW_PRIVATE_OUTBOUND=false`, which confines every outbound transport to
 public-routable destinations **and** governs the per-account Remote MX receiver:
 the `allow_private` flag is honoured only when the operator allows private
@@ -2854,8 +2860,8 @@ No per-tenant flag can re-enable private destinations.
 
 **Reason:** The public-only default protected the operator's own network from the
 operator's own configuration while breaking legitimate self-hosted topologies;
-that is the wrong default for a self-host-first project. Hosted deployments still
-need the guard and can enable it with one variable, and the SSRF-relevant fix —
+that is the wrong default for a self-hosted-only project (D064). Operators who
+need the guard can enable it with one variable, and the SSRF-relevant fix —
 that the operator's policy, not a tenant checkbox, decides private reachability —
 is enforced in both the save path and the dialer.
 
@@ -5321,3 +5327,64 @@ migration is required, and existing domain keys need not be rotated.
 **Complexity:** Rename protocol identifiers, session types and source/test files;
 update wire fixtures, handshake consumers and receiver startup logging. No new
 dependency, runtime service or compatibility layer.
+
+## D133 — Strix remediation: delegated authority, destination-bound secrets and approval delivery
+
+**Requirement:** Address the 2026-10-18 Strix findings without removing legitimate
+Admin-created aliases, local approval delivery or self-hosted private networking.
+The API's former Owner alias permission was explicitly recorded in D034; this
+decision deliberately tightens that policy rather than calling it undocumented.
+
+**Decision:**
+
+- **Aliases are account-Admin-managed.** Enforce the permission at the store write
+  boundary and reject forbidden alias fields before any PATCH side effects.
+  Existing cross-domain aliases remain valid delegated receiving/sending
+  identities; inbox Owners need no new domain-administration grant to use them.
+  Existing aliases are not deleted because their rows do not record the creator.
+- **Retained standalone passwords stay with their endpoint.** Test and save share
+  the normalized host, effective port, username and transport-security comparison.
+  A changed endpoint requires its password again before dialing or saving. SMTP
+  never inherits the IMAP password. Settings and encrypted credentials commit
+  atomically with revision checking; readers use a consistent snapshot. Internal
+  description-only changes clear a moved endpoint's old ciphertext.
+- **Control classification requires an issued token.** Random or quoted fake
+  markers are ordinary mail even during a pending approval. Issued tokens,
+  including expired/decided tokens whose request rows remain, are consumed instead
+  of becoming ordinary requesting-inbox content. Lookup failures are retryable.
+  A global token-hash index (migration 079) supports recognition without a scan of
+  historical requests; only hashes are queried and persisted.
+- **The separate nominated approver inbox receives its notification.** Its readers
+  may see the token just as they could at an external mail provider. This is
+  intentional delegation to everyone who can read that inbox, including agents
+  and forwarding connectors. The requesting agent must not have read access to
+  that inbox if approval is intended as an independent human boundary. The
+  requesting inbox itself remains excluded from readable token delivery.
+- **Read and outbound authority are current and consistent.** Transient events
+  require account and inbox readability and obey an explicit inbox filter;
+  inbox-less transient events are Admin-only. Public inbox reads redact the
+  approver for Read-only principals, while internal reads retain it. Relay
+  operations use the connection's freshly loaded authority, including a demotion
+  applied after the socket opened.
+- **An account Remote MX backend is bound to that account.** Both resolution and
+  ingestion check recipient ownership. The shared ingest path also carries the
+  account restriction before receipt lookup/persistence. Receiver-provided
+  authentication evidence does not grant cross-account authority.
+- **Resend sender provenance remains an accepted Low risk.** Svix authenticates
+  Resend's report, not an independent SMTP envelope or original sender identity.
+  The address comparisons can use the same asserted From twice. An attacker still
+  needs the correct live, single-use token for a specific pending request; content
+  binding, expiry and sender comparisons remain unchanged. The demonstrated
+  exposure is a decision on that send request, not account takeover or general
+  mailbox access. An unauthorized approval may nevertheless disclose the draft's
+  existing content/attachments to its existing recipients. No provenance flag or
+  changed acceptance behavior is introduced in this work.
+- **Private outbound stays enabled by default.** MailMoose is self-hosted-only
+  (D064), and `ALLOW_PRIVATE_OUTBOUND=true` remains intentional. D062's blanket
+  private-webhook prohibition is corrected to describe the existing conditional
+  guard. No network-policy change or extra webhook switch is introduced.
+
+**Complexity:** Shared validation and atomic storage for the existing standalone
+connector; a small issued-token lookup and index; account/principal checks at the
+existing boundaries; deterministic regression tests. No new dependency, runtime
+service, destination-binding schema, token format or approval protocol.

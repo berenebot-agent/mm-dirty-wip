@@ -2928,7 +2928,7 @@ func TestStandaloneEditDialogRemoteFields(t *testing.T) {
 }
 
 // TestStandaloneEditRemoteSave proves the Identity tab's single Save updates the
-// connector (blank password keeps the stored secret) through the inbox edit
+// connector with an explicitly re-entered password through the inbox edit
 // endpoint and closes the settings dialog.
 func TestStandaloneEditRemoteSave(t *testing.T) {
 	t.Parallel()
@@ -2942,7 +2942,7 @@ func TestStandaloneEditRemoteSave(t *testing.T) {
 		"remote_username": {standalone.Remote.Username},
 		"remote_security": {standalone.Remote.Security},
 		"namespace":       {standalone.Namespace},
-		"imap_password":   {""},
+		"imap_password":   {"replacement-password"},
 		"smtp_host":       {""},
 	}
 	rr := uiPost(t, h, cookie, "/ui/inboxes/"+standalone.ID+"/edit", form.Encode())
@@ -2961,13 +2961,13 @@ func TestStandaloneEditRemoteSave(t *testing.T) {
 	if box.Remote == nil || box.Remote.Host != "imap.changed.test" {
 		t.Fatalf("host not updated: %+v", box.Remote)
 	}
-	// The blank password kept the stored secret.
+	// The changed destination has an explicitly supplied password.
 	creds, err := svc.Store.GetRemoteCredentials(context.Background(), p.AccountID, standalone.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if creds.EncryptedIMAP == "" {
-		t.Fatal("stored IMAP secret was dropped by a blank-password save")
+		t.Fatal("replacement IMAP secret was not saved")
 	}
 }
 

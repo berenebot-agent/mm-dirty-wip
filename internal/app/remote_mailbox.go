@@ -206,7 +206,7 @@ func (m *RemoteMailboxService) SetRemoteDialer(d RemoteDialer) {
 // returns ErrRemoteNotBound when no credentials are configured so callers can
 // report a connector that has not been set up rather than a connection failure.
 func (m *RemoteMailboxService) ResolveRemote(ctx context.Context, accountID, inboxID string) (RemoteResolved, error) {
-	inbox, err := m.Service.Store.GetInboxInternal(ctx, accountID, inboxID)
+	inbox, creds, err := m.Service.Store.GetStandaloneRemoteState(ctx, accountID, inboxID)
 	if err != nil {
 		return RemoteResolved{}, mapStoreError(err)
 	}
@@ -215,10 +215,6 @@ func (m *RemoteMailboxService) ResolveRemote(ctx context.Context, accountID, inb
 	}
 	if inbox.Remote == nil || !inbox.RemoteConfigured {
 		return RemoteResolved{}, model.NewMailboxError(model.ErrKindUnavailable, "remote connector is not configured", false, ErrRemoteNotBound)
-	}
-	creds, err := m.Service.Store.GetRemoteCredentials(ctx, accountID, inboxID)
-	if err != nil {
-		return RemoteResolved{}, mapStoreError(err)
 	}
 	secrets := RemoteSecrets{}
 	if strings.TrimSpace(creds.EncryptedIMAP) != "" {
@@ -273,9 +269,8 @@ func (m *RemoteMailboxService) open(ctx context.Context, accountID, inboxID stri
 
 // ConfigureStandaloneRemote validates and persists a standalone inbox's remote
 // binding: the non-secret description on the inbox row, and the encrypted secrets
-// bound to the account/inbox AAD. A blank secret field retains its stored value so
-// an operator can change only the host or username; a non-secret field is a whole
-// value (never merged). It requires Owner on the inbox (or an account admin).
+// bound to the account/inbox AAD. Blank passwords retain secrets only for an
+// unchanged endpoint. It requires Owner on the inbox (or an account admin).
 func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p model.Principal, inboxID string, in store.StandaloneRemoteUpdate) (model.Inbox, error) {
 	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
 		return model.Inbox{}, model.NewMailboxError(model.ErrKindUnsupported, "Use Microsoft reconnection to update this connector", false, nil)
@@ -286,7 +281,7 @@ func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p 
 	if !p.CanOwn(inboxID) && !p.Admin {
 		return model.Inbox{}, model.NewMailboxError(model.ErrKindForbidden, "not permitted", false, store.ErrForbidden)
 	}
-	inbox, err := m.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID)
+	inbox, existing, err := m.Service.Store.GetStandaloneRemoteState(ctx, p.AccountID, inboxID)
 	if err != nil {
 		return model.Inbox{}, mapStoreError(err)
 	}
@@ -301,16 +296,11 @@ func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p 
 		oldHost = inbox.Remote.Host
 		oldUser = inbox.Remote.Username
 	}
-	if hasRemoteNonSecretFields(in) {
-		if _, err := m.Service.Store.UpdateStandaloneRemote(ctx, p.AccountID, inboxID, in); err != nil {
-			return model.Inbox{}, mapStoreError(err)
-		}
+	updated, err := remoteUpdateCandidate(inbox, in)
+	if err != nil {
+		return model.Inbox{}, err
 	}
-	// Encrypt the supplied secrets (blank retains the stored ciphertext).
-	existing, cerr := m.Service.Store.GetRemoteCredentials(ctx, p.AccountID, inboxID)
-	if cerr != nil {
-		return model.Inbox{}, mapStoreError(cerr)
-	}
+	// Encrypt only after validating both destination bindings.
 	encIMAP := existing.EncryptedIMAP
 	if strings.TrimSpace(in.IMAPPassword) != "" {
 		encIMAP, err = m.Service.EncryptSecretAAD(RemoteCredentialAAD(p.AccountID, inboxID), []byte(in.IMAPPassword))
@@ -319,19 +309,19 @@ func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p 
 		}
 	}
 	encSMTP := existing.EncryptedSMTP
+	if in.ClearSMTP {
+		encSMTP = ""
+	}
 	if strings.TrimSpace(in.SMTPPassword) != "" {
 		encSMTP, err = m.Service.EncryptSecretAAD(RemoteCredentialAAD(p.AccountID, inboxID), []byte(in.SMTPPassword))
 		if err != nil {
 			return model.Inbox{}, model.NewMailboxError(model.ErrKindInternal, "", false, err)
 		}
 	}
-	if err := m.Service.Store.SaveRemoteCredentials(ctx, p.AccountID, inboxID, encIMAP, encSMTP, store.ConfigVersion{Revision: existing.Revision}); err != nil {
+	if err := m.Service.Store.SaveStandaloneRemote(ctx, updated, encIMAP, encSMTP, store.ConfigVersion{Revision: existing.Revision}); err != nil {
 		return model.Inbox{}, mapStoreError(err)
 	}
-	updated, err := m.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID)
-	if err != nil {
-		return model.Inbox{}, mapStoreError(err)
-	}
+	updated.RemoteConfigured = encIMAP != ""
 	// A rebind to a different mailbox (host, login, or sync root) invalidates every
 	// cached remote locator: a UID from the old mailbox may coincide with an
 	// unrelated message in the new one. Drop the cached index, cursors, arrivals
@@ -360,10 +350,28 @@ func hasRemoteNonSecretFields(in store.StandaloneRemoteUpdate) bool {
 		in.ClearSMTP || strings.TrimSpace(in.Namespace) != ""
 }
 
+func remoteUpdateCandidate(inbox model.Inbox, in store.StandaloneRemoteUpdate) (model.Inbox, error) {
+	candidate := inbox
+	if hasRemoteNonSecretFields(in) {
+		var err error
+		candidate, err = store.ResolveStandaloneRemoteUpdate(inbox, in)
+		if err != nil {
+			return model.Inbox{}, model.NewMailboxError(model.ErrKindInvalid, err.Error(), false, err)
+		}
+	}
+	if !store.SameIMAPBinding(inbox.Remote, candidate.Remote) && strings.TrimSpace(in.IMAPPassword) == "" {
+		return model.Inbox{}, model.NewMailboxError(model.ErrKindInvalid, "re-enter the IMAP password when changing its host, port, username or security", false, nil)
+	}
+	if candidate.Remote != nil && candidate.Remote.SMTP != nil && !store.SameSMTPBinding(inbox.Remote, candidate.Remote) && strings.TrimSpace(in.SMTPPassword) == "" {
+		return model.Inbox{}, model.NewMailboxError(model.ErrKindInvalid, "re-enter the SMTP password when changing its host, port, username or security", false, nil)
+	}
+	return candidate, nil
+}
+
 // TestStandaloneRemote verifies that the supplied (or stored) remote binding can
 // authenticate and that the selected root resolves a folder scope, without
-// mutating any mailbox state. A blank secret field uses the stored value, so an
-// operator can test a configuration before saving it. It is the "test service
+// mutating any mailbox state. A blank secret uses the stored value only for an
+// unchanged endpoint. It is the "test service
 // method" the configure flow calls.
 func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model.Principal, inboxID string, in store.StandaloneRemoteUpdate) (imap.RootScope, error) {
 	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
@@ -388,36 +396,21 @@ func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model
 		_, e = client.Profile(ctx, t)
 		return imap.RootScope{}, e
 	}
-	if !p.CanRead(inboxID) && !p.Admin {
+	if !p.CanOwn(inboxID) && !p.Admin {
 		return imap.RootScope{}, model.NewMailboxError(model.ErrKindForbidden, "not permitted", false, store.ErrForbidden)
 	}
-	inbox, err := m.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID)
+	inbox, existing, err := m.Service.Store.GetStandaloneRemoteState(ctx, p.AccountID, inboxID)
 	if err != nil {
 		return imap.RootScope{}, mapStoreError(err)
 	}
 	if inbox.Kind != model.InboxKindStandalone {
 		return imap.RootScope{}, model.NewMailboxError(model.ErrKindUnsupported, "not a standalone inbox", false, ErrRemoteNotBound)
 	}
-	resolved := RemoteResolved{Inbox: inbox}
-	if in.Host != "" {
-		rc := &model.RemoteConnection{
-			Host:     in.Host,
-			Port:     in.Port,
-			Username: in.Username,
-			Security: in.Security,
-		}
-		if in.SMTPHost != "" || in.SMTPUsername != "" || in.SMTPPort != 0 {
-			rc.SMTP = &model.RemoteSMTP{Host: in.SMTPHost, Port: in.SMTPPort, Username: in.SMTPUsername, Security: in.SMTPSecurity}
-		}
-		resolved.Inbox.Remote = rc
+	candidate, err := remoteUpdateCandidate(inbox, in)
+	if err != nil {
+		return imap.RootScope{}, err
 	}
-	if in.Username != "" && resolved.Inbox.Remote != nil {
-		resolved.Inbox.Remote.Username = in.Username
-	}
-	existing, cerr := m.Service.Store.GetRemoteCredentials(ctx, p.AccountID, inboxID)
-	if cerr != nil {
-		return imap.RootScope{}, mapStoreError(cerr)
-	}
+	resolved := RemoteResolved{Inbox: candidate}
 	if strings.TrimSpace(in.IMAPPassword) != "" {
 		resolved.Secrets.IMAPPassword = in.IMAPPassword
 	} else if existing.EncryptedIMAP != "" {
@@ -440,14 +433,14 @@ func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model
 		return imap.RootScope{}, normalizeRemoteError(err)
 	}
 	defer sess.Close()
-	_, scope, err := sess.DiscoverFolders(dialCtx, inbox.Namespace)
+	_, scope, err := sess.DiscoverFolders(dialCtx, candidate.Namespace)
 	if err != nil {
 		return imap.RootScope{}, normalizeRemoteError(err)
 	}
 	// Validate the optional SMTP binding too, without sending any test mail: a
 	// connection + AUTH check only. A failure is reported so the operator learns
 	// the outbound side is unusable before saving.
-	if err := m.verifyStandaloneSMTP(ctx, inbox, in, existing); err != nil {
+	if err := m.verifyStandaloneSMTP(ctx, candidate, in, existing); err != nil {
 		return imap.RootScope{}, err
 	}
 	return scope, nil
@@ -458,39 +451,21 @@ func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model
 // (outbound simply is not configured). A blank password uses the supplied or
 // stored SMTP secret, so a configuration can be tested before saving.
 func (m *RemoteMailboxService) verifyStandaloneSMTP(ctx context.Context, inbox model.Inbox, in store.StandaloneRemoteUpdate, existing store.RemoteCredentials) error {
-	smtpConn := inbox.Remote
-	if smtpConn == nil || smtpConn.SMTP == nil {
-		// The caller may be testing an SMTP block not yet saved; use the input.
-		if in.SMTPHost == "" {
-			return nil
-		}
-	}
-	host := strings.TrimSpace(in.SMTPHost)
-	port := in.SMTPPort
-	username := strings.TrimSpace(in.SMTPUsername)
-	security := strings.TrimSpace(in.SMTPSecurity)
-	if host == "" && smtpConn != nil && smtpConn.SMTP != nil {
-		host, port, username, security = smtpConn.SMTP.Host, smtpConn.SMTP.Port, smtpConn.SMTP.Username, smtpConn.SMTP.Security
-	}
-	if host == "" {
+	if inbox.Remote == nil || inbox.Remote.SMTP == nil {
 		return nil
 	}
-	password := strings.TrimSpace(in.SMTPPassword)
-	if password == "" {
-		// Prefer a stored SMTP secret; fall back to the IMAP secret, which many
-		// providers share for both protocols.
+	conn := inbox.Remote.SMTP
+	password := in.SMTPPassword
+	if strings.TrimSpace(password) == "" {
 		if strings.TrimSpace(existing.EncryptedSMTP) != "" {
-			if plain, derr := m.Service.DecryptSecretAAD(RemoteCredentialAAD(inbox.AccountID, inbox.ID), existing.EncryptedSMTP); derr == nil {
-				password = string(plain)
+			plain, derr := m.Service.DecryptSecretAAD(RemoteCredentialAAD(inbox.AccountID, inbox.ID), existing.EncryptedSMTP)
+			if derr != nil {
+				return model.NewMailboxError(model.ErrKindInternal, "stored SMTP credentials could not be decrypted", false, derr)
 			}
-		} else if strings.TrimSpace(existing.EncryptedIMAP) != "" {
-			if plain, derr := m.Service.DecryptSecretAAD(RemoteCredentialAAD(inbox.AccountID, inbox.ID), existing.EncryptedIMAP); derr == nil {
-				password = string(plain)
-			}
+			password = string(plain)
 		}
 	}
-	sec := strings.TrimSpace(security)
-	cfg := smtp.Config{Host: host, Port: port, Username: username, Password: password, Security: sec}
+	cfg := smtp.Config{Host: conn.Host, Port: conn.Port, Username: conn.Username, Password: password, Security: conn.Security}
 	testCtx, cancel := context.WithTimeout(ctx, remoteDialTimeout)
 	defer cancel()
 	if err := smtp.Verify(testCtx, cfg, m.Service.Config.RequirePublicOutbound()); err != nil {
@@ -604,12 +579,12 @@ func (r *RemoteStandaloneSender) ResolveInboxSendingConfig(ctx context.Context, 
 		}
 		return store.DomainSendingConfig{ID: "remote:" + inboxID, AccountID: accountID, DomainID: inboxID, Provider: "gmail", EncryptedConfig: enc}, nil
 	}
-	if inbox.Remote == nil || inbox.Remote.SMTP == nil || strings.TrimSpace(inbox.Remote.SMTP.Host) == "" {
-		return store.DomainSendingConfig{}, store.ErrNoProvider
-	}
-	creds, cerr := r.Service.Store.GetRemoteCredentials(ctx, accountID, inboxID)
+	inbox, creds, cerr := r.Service.Store.GetStandaloneRemoteState(ctx, accountID, inboxID)
 	if cerr != nil {
 		return store.DomainSendingConfig{}, mapStoreError(cerr)
+	}
+	if inbox.Remote == nil || inbox.Remote.SMTP == nil || strings.TrimSpace(inbox.Remote.SMTP.Host) == "" {
+		return store.DomainSendingConfig{}, store.ErrNoProvider
 	}
 	password := ""
 	if strings.TrimSpace(creds.EncryptedSMTP) != "" {

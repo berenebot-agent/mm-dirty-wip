@@ -299,6 +299,9 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &in) {
 			return
 		}
+		if (in.Aliases != nil || in.AliasNames != nil) && !adminOnly(w, p) {
+			return
+		}
 		if in.ApproverEmail != nil {
 			normalized, err := normalizeApproverEmail(*in.ApproverEmail)
 			if err != nil {
@@ -405,7 +408,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if err := s.applyInboxAliases(r.Context(), p.AccountID, id, forms); err != nil {
+			if err := s.applyInboxAliases(r.Context(), p, id, forms); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -2207,7 +2210,9 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, 
 			// A transient event is delivered directly, but only on the UI
 			// stream; a durable one just wakes the loop so it is read from the
 			// store in id order, which keeps replay and live delivery consistent.
-			if withTransient && e.Transient && e.AccountID == p.AccountID {
+			if withTransient && e.Transient && e.AccountID == p.AccountID &&
+				(e.InboxID != "" && p.CanRead(e.InboxID) || e.InboxID == "" && p.Admin) &&
+				(inbox == "" || e.InboxID == inbox) {
 				if send(e) != nil {
 					return
 				}

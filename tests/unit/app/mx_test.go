@@ -261,7 +261,7 @@ func TestMXAliasFanOutDeduplicatesByInbox(t *testing.T) {
 	t.Parallel()
 	svc, u, dom, box := mxService(t)
 	ctx := context.Background()
-	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
+	if err := svc.Store.SetInboxAliases(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
 	raw := strings.Replace(goodRaw, "hermes@example.com", "sales@example.com", 1)

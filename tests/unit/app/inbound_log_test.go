@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
@@ -65,11 +66,24 @@ func TestBlockedInboundIsLogged(t *testing.T) {
 // whose outcome is the recorded control outcome.
 func TestControlMailIsLogged(t *testing.T) {
 	t.Parallel()
-	svc, _, _, box := mxService(t)
+	svc, u, _, box := mxService(t)
+	ctx := context.Background()
+	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	p := assistantPrincipal(u.AccountID, box.ID)
+	draft, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"recipient@outside.test"}, Subject: "Review", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RequestSend(ctx, p, draft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	token := approvalToken(t, svc, u.AccountID, box.ID)
 	sink := newLogSink()
 	svc.Log = slog.New(sink)
 
-	raw := mxControlRaw("stranger@outside.test", box.Address, "[GH-APPROVE:abcdefghijklmnop]", "approve")
+	raw := mxControlRaw("stranger@outside.test", box.Address, "[GH-APPROVE:"+token+"]", "approve")
 	if _, err := svc.IngestMX(context.Background(), mxControlInput(t, svc, box.Address, "stranger@outside.test", raw, mxwire.AuthResults{})); err != nil {
 		t.Fatal(err)
 	}

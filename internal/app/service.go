@@ -510,16 +510,16 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if msg.Source == "" {
 		msg.Source = providerSourceLabel(provider)
 	}
-	// A strict approval control subject, or a reply quoting the approval email's
-	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
-	// ordinary delivery, so the token never becomes mailbox content. It is
-	// handed to the control handler regardless of the sender allow-list because
-	// the handler validates the live token and the exact stored approver, and
-	// because an inbox's approver setting may have changed after the request was
-	// created. Invalid control mail is consumed too; only its outcome is
-	// recorded.
+	// Consume issued workflow tokens, not arbitrary marker-shaped email. The
+	// nominated approver's separate inbox may read its notification.
 	if looksLikeControl(parsed.Subject) || looksLikeControlReply(parsed) {
-		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed, mx.authenticated())
+		control, err := s.isApprovalControl(ctx, inbox, msg.Recipient, parsed)
+		if err != nil {
+			return model.Message{}, false, fmt.Errorf("classify approval mail: %w", err)
+		}
+		if control {
+			return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed, mx.authenticated())
+		}
 	}
 	// The allow-list matches the spoofable RFC5322.From address. When the inbox
 	// additionally requires an authenticated sender, MX mail whose edge evidence

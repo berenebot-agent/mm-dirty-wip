@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -769,6 +770,21 @@ func (s *Store) FindPendingSendRequestByToken(ctx context.Context, accountID, in
 		return r, ErrNotFound
 	}
 	return r, err
+}
+
+// IsApprovalControl recognizes issued tokens, including expired/decided ones.
+// Only the nominated approver's other inbox may receive a readable token copy.
+func (s *Store) IsApprovalControl(ctx context.Context, inboxID, recipient string, tokenHashes []string) (bool, error) {
+	if len(tokenHashes) == 0 {
+		return false, nil
+	}
+	encoded, err := json.Marshal(tokenHashes)
+	if err != nil {
+		return false, err
+	}
+	var consume bool
+	err = s.read.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM draft_send_requests WHERE token_hash<>'' AND token_hash IN (SELECT value FROM json_each(?)) AND (inbox_id=? OR lower(approver_email)<>?))`, string(encoded), inboxID, strings.ToLower(strings.TrimSpace(recipient))).Scan(&consume)
+	return consume, err
 }
 
 // RejectSendRequestInternal records a rejection without a principal. It is used

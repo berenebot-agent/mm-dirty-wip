@@ -576,10 +576,12 @@ func outboundResult(requestID string, success bool, errText, messageID string) m
 func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.HermesConnection, requestID string, a outboundAction) {
 	// The connection may have been deleted since this socket was accepted;
 	// revalidate before performing any outbound operation.
-	if _, err := s.Store.GetHermesConnectionByGateway(ctx, h.GatewayID); err != nil {
+	current, err := s.Store.GetHermesConnectionByGateway(ctx, h.GatewayID)
+	if err != nil {
 		_ = wr.JSON(outboundResult(requestID, false, "relay connection is no longer active", ""))
 		return
 	}
+	h = current
 	switch a.Op {
 	case "typing":
 		_ = wr.JSON(outboundResult(requestID, true, "", ""))

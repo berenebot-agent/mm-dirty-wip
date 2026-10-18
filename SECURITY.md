@@ -55,15 +55,12 @@ Accepted risks are design decisions that are deliberately retained. They are
 **not** vulnerabilities to report — a finding matching one of these will be
 closed as accepted, so please check here before spending effort on one.
 
-### The Mailgun, Cloudflare and Postmark inbound envelope senders are not provider-attested
+### Webhook sender identity is not authenticated by the approval address checks
 
-**Status:** accepted risk — decision `D058` in `docs/DECISIONS.md`.
+**Status:** accepted Low risk — decisions `D058`, `D059` and `D133` in `docs/DECISIONS.md`.
 
-Three inbound providers pass an envelope sender that the request's authentication
-does not cover, and the approval workflow uses that value as the message's
-envelope sender. The approval decision requires the envelope sender to equal the
-nominated approver, so on these providers a caller who holds the transport
-credential can assert the approver address:
+The approval workflow compares the reported envelope sender and MIME `From:`
+with the nominated approver. These comparisons are not proof of sender identity:
 
 - **Mailgun** — the webhook HMAC covers only `timestamp + token`
   (`internal/transport/mailgun/inbound.go`), so the `sender` form field is not
@@ -76,16 +73,20 @@ credential can assert the approver address:
   (`internal/transport/postmark/inbound.go`); HTTP Basic authentication
   authenticates the caller holding the generated credentials, not the value it
   asserts. Postmark does not sign inbound webhooks.
+- **Resend** — the adapter assigns Svix-signed webhook `data.from` to
+  `EnvelopeFrom`. Signing a reported `From:` value authenticates Resend's report,
+  not the original sender or an independent SMTP envelope. The two address checks
+  may therefore compare the same attacker-asserted identity twice. An attacker
+  does not need Resend's signing secret if Resend delivers their spoofed message.
 
-The consequence on these providers is that a caller holding valid transport
-credentials — Mailgun signing material, the domain's Cloudflare receiving
-secret, or the domain's Postmark Basic-auth credentials — can set the approver
-address and obtain an approval. Exploitation also requires the 128-bit single-use
-approval token, so the practical bar is high.
-
-**Not affected:** the **Resend** adapter takes its envelope sender from its
-Svix-signed webhook payload. The verified signature covers the reported
-envelope sender, so the value is attested.
+**Exposure:** an attacker who can deliver a message satisfying the sender checks
+still needs the **correct, live, 128-bit single-use approval token**. The token
+permits a decision only on its associated pending request, whose reviewed content
+is bound to the request. This is not demonstrated account takeover, general
+mailbox access, or arbitrary editing of an approved message. Unauthorized approval
+can nevertheless send the draft's existing content and attachments to its existing
+recipients; unauthorized rejection can stop that request. It is not a guarantee
+against data disclosure through the approved email.
 
 **Why it is retained:** failing closed on an unattested envelope sender breaks
 email-based draft approvals for the providers that pass one through, which are
@@ -106,8 +107,8 @@ An outbound **forward** webhook carries the original transport envelope sender
 and recipient in the `X-MailMoose-Envelope-From` / `X-MailMoose-Envelope-To`
 headers alongside the unchanged raw MIME. The values are exactly what the
 inbound transport reported, so their trustworthiness is the inbound transport's:
-Cloudflare and Mailgun envelope senders are caller-asserted (see above), while
-Resend's is Svix-attested. A receiver must treat these headers as **relay
+Cloudflare and Mailgun envelope senders are caller-asserted, and Resend's signed
+reported From is not an authenticated SMTP-envelope identity. A receiver must treat these headers as **relay
 metadata to record, not authority to act on**, unless it independently
 establishes provenance. The headers are bounded and bounded-decoded, and a
 missing sender is sent as an empty value so a receiver that requires one fails
@@ -117,7 +118,36 @@ closed rather than falling back to the spoofable MIME `From:` header.
 signature covers*, never of a provider's name. A shared secret or bearer token
 authenticates the caller; it says nothing about whether a value the caller
 asserts is true. A new provider is attested only if its verified signature or
-secret covers the sender value the adapter reports.
+secret covers the sender value the adapter reports. Even a signed observation of
+an address is not proof that the original sender controls that address.
+
+### A managed approver inbox delegates token access to its readers
+
+**Status:** intentional approval delivery — decision `D133`.
+
+An approval notification addressed to a separate MailMoose-managed approver inbox
+is ordinary incoming mail there. Its authorized readers can see the token, just
+as readers could if that inbox were hosted by another provider. The requesting
+inbox still consumes mail carrying an issued token rather than exposing it to its
+readers. Random marker-shaped text is not a reason to discard ordinary mail.
+
+Use a separate, restricted approver inbox. If the requesting agent can also read
+the approver inbox, this is not an independent human-approval boundary. A shared
+approver inbox delegates access to its approval requests to every authorized
+reader, including its connected agents and forwarding connectors.
+
+### Private outbound destinations are allowed by default for self-hosting
+
+**Status:** intentional operator policy — decisions `D086` and `D133`.
+
+`ALLOW_PRIVATE_OUTBOUND=true` is the default. Webhooks may therefore reach local,
+private-network and link-local HTTP destinations, just as other outbound clients
+may use private gateways. The operator accepts that reachability when allowing
+users to configure destinations. Set `ALLOW_PRIVATE_OUTBOUND=false` to enable the
+existing public-routable destination guard. This is not a webhook-specific
+restriction, and it does not change the default. Webhooks do not follow redirects
+and discard response bodies, but sending a request can still affect an internal
+service even without reading its response.
 
 ### Standalone-inbox approval relies on the token plus the message From address
 

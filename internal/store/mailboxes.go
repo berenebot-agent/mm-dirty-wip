@@ -693,6 +693,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		}
 	}
 	for n := range out {
+		redactInbox(p, &out[n])
 		if out[n].Kind == model.InboxKindStandalone {
 			caps := s.MailboxCapabilities(ctx, out[n])
 			out[n].Capabilities = &caps
@@ -729,7 +730,15 @@ func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (mod
 	if !p.CanRead(id) {
 		return model.Inbox{}, ErrForbidden
 	}
-	return s.GetInboxInternal(ctx, p.AccountID, id)
+	i, err := s.GetInboxInternal(ctx, p.AccountID, id)
+	redactInbox(p, &i)
+	return i, err
+}
+
+func redactInbox(p model.Principal, i *model.Inbox) {
+	if !p.Admin && !p.CanAssist(i.ID) {
+		i.ApproverEmail = ""
+	}
 }
 func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (model.Inbox, error) {
 	i, storageKnown, err := scanFullInbox(s.read.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID))
@@ -1087,7 +1096,11 @@ func (s *Store) ListInboxAliases(ctx context.Context, accountID string) (map[str
 // domain must belong to the account, every local part must be valid and must
 // not shadow an existing mailbox on the same domain, and no two aliases may
 // share an address. A missing or foreign inbox is ErrNotFound.
-func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, aliases []AliasInput) error {
+func (s *Store) SetInboxAliases(ctx context.Context, p model.Principal, inboxID string, aliases []AliasInput) error {
+	if !p.Admin {
+		return ErrForbidden
+	}
+	accountID := p.AccountID
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -936,8 +936,7 @@ func (s *Server) apiInboxRemoteGet(w http.ResponseWriter, r *http.Request) {
 // remote update and returns an error when it cannot connect. It is the gate that
 // stops a bad or empty connector from being persisted and then shown as active.
 // A no-op update (no non-secret field and no new secret) is not tested. A blank
-// secret uses the stored value, so changing only the host still proves the new
-// host authenticates with the existing password.
+// secret uses the stored value only for the unchanged endpoint.
 func (s *Server) verifyRemoteUpdate(ctx context.Context, p model.Principal, inboxID string, in store.StandaloneRemoteUpdate) error {
 	if !hasRemoteNonSecretFields(in) && strings.TrimSpace(in.IMAPPassword) == "" {
 		return nil
@@ -1062,6 +1061,8 @@ func (s *Server) apiInboxRemoteTest(w http.ResponseWriter, r *http.Request) {
 		SMTPSecurity string `json:"smtp_security"`
 		Namespace    string `json:"namespace"`
 		IMAPPassword string `json:"imap_password"`
+		SMTPPassword string `json:"smtp_password"`
+		ClearSMTP    bool   `json:"clear_smtp"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -1069,7 +1070,7 @@ func (s *Server) apiInboxRemoteTest(w http.ResponseWriter, r *http.Request) {
 	scope, err := s.remoteMailbox().TestStandaloneRemote(r.Context(), p, inboxID, store.StandaloneRemoteUpdate{
 		Host: in.Host, Port: in.Port, Username: in.Username, Security: in.Security,
 		SMTPHost: in.SMTPHost, SMTPPort: in.SMTPPort, SMTPUsername: in.SMTPUsername, SMTPSecurity: in.SMTPSecurity,
-		Namespace: in.Namespace, IMAPPassword: in.IMAPPassword,
+		Namespace: in.Namespace, IMAPPassword: in.IMAPPassword, SMTPPassword: in.SMTPPassword, ClearSMTP: in.ClearSMTP,
 	})
 	if err != nil {
 		mapMailboxError(w, err)

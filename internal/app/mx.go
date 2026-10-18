@@ -146,6 +146,8 @@ func recipientAuthorizedForBinding(inbox model.Inbox, route store.RecipientRoute
 // plus metadata received on an authorized session. Recipients is the whole
 // accepted envelope recipient set for this one message.
 type MXIngestInput struct {
+	// AccountID confines a tenant-owned receiver; installation receivers leave it empty.
+	AccountID  string
 	Recipients []string
 	// Recipient is a single-recipient convenience; when Recipients is empty it
 	// is used as the recipient set.
@@ -323,6 +325,9 @@ func (s *Service) ingestMXRecipient(ctx context.Context, routingProvider string,
 			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
 		}
 		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
+	}
+	if in.AccountID != "" && binding.AccountID != in.AccountID {
+		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnauthorized}
 	}
 	fingerprint := mxwire.DeliveryFingerprint(in.EnvelopeFrom, recipient, in.ContentDigest)
 	// Duplicate check happens before touching MIME: a recorded receipt is the

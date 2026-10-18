@@ -88,6 +88,28 @@ func looksLikeControlReply(parsed mailparse.Parsed) bool {
 	return false
 }
 
+// Marker syntax is not authority to discard mail; match a token we actually issued.
+func (s *Service) isApprovalControl(ctx context.Context, inbox model.Inbox, recipient string, parsed mailparse.Parsed) (bool, error) {
+	hashes := []string{}
+	seen := map[string]bool{}
+	add := func(token string) {
+		token = strings.ReplaceAll(token, " ", "_")
+		if !seen[token] {
+			seen[token] = true
+			hashes = append(hashes, hashApprovalToken(token))
+		}
+	}
+	for _, m := range controlSubjectRe.FindAllStringSubmatch(parsed.Subject, -1) {
+		add(m[2])
+	}
+	for _, body := range []string{parsed.Text, stripTags(parsed.HTML)} {
+		for _, m := range controlRequestRe.FindAllStringSubmatch(body, -1) {
+			add(m[1])
+		}
+	}
+	return s.Store.IsApprovalControl(ctx, inbox.ID, recipient, hashes)
+}
+
 // controlReplyToken returns the single control-request token in a reply body.
 // Repeated occurrences of the same token (nested quoting) collapse to one; two
 // different tokens are ambiguous and rejected.
@@ -251,7 +273,7 @@ func stripTags(s string) string {
 }
 
 // canonicalSender normalizes an address for comparison, stripping any display
-// name and lowercasing it. It is applied to both the provider-attested envelope
+// name and lowercasing it. It is applied to both the transport-supplied envelope
 // sender and the message header sender.
 func canonicalSender(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -314,17 +336,15 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	}
 	// The MX edge supplies trusted SPF/DKIM/DMARC evidence for the From domain;
 	// require it before an approval acts on the sender's identity. Webhook
-	// providers carry no such evidence, so the provider's authenticated
-	// envelope assertion (not this flag) is their sender authority.
+	// identity relies on the token and reported sender checks under the
+	// explicitly accepted provenance risk (D058/D059/D133).
 	if provider == mxProvider && !authenticated {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval sender not authenticated")
 		record(r.ID, action, "invalid", "sender not authenticated")
 		return transport.ErrInboundIgnored
 	}
-	// The provider-attested envelope sender is authoritative: the MIME From
-	// header is attacker-controlled, while the envelope is what the receiving
-	// MTA observed and what SPF covers. Both must match the nominated approver,
-	// and a missing envelope fails closed.
+	// Both reported sender values must match; webhook sender provenance is an
+	// accepted risk (D058/D059/D133), not proof of sender authentication.
 	approver := strings.ToLower(strings.TrimSpace(r.ApproverEmail))
 	envelopeFrom := canonicalSender(msg.EnvelopeFrom)
 	mimeFrom := canonicalSender(parsed.From.Address)
