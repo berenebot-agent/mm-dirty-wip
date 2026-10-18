@@ -2210,10 +2210,15 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		setup.DNS = s.dialMXDNS(d.ID)
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
 		setup.StatusesJSON = dialMXStatusesJSON(setup.Statuses)
-		// The aggregate light folds in the shared "extra MX" verdict. It is only
-		// relevant for a domain with an active receiver (a red domain stays red).
+		// The aggregate light folds in the shared "extra MX" verdict, and the same
+		// value seeds the status dialog's "additional MX servers" warning so it
+		// paints on open rather than waiting for the dialog's own fetch to return.
+		// The verdict is read for every configured domain, not only one with a
+		// ready receiver: it is a fix prompt, and a red domain still needs to name
+		// the records to remove. dialMXHealth ignores it with nothing ready, so a
+		// red domain stays red.
 		var unexpected []string
-		if haveCfg && anyReady(setup.Statuses) {
+		if haveCfg {
 			unexpected = s.dialMXExtraMX(d.ID)
 		}
 		// A light means "here is how mail delivery for this domain stands", so it
