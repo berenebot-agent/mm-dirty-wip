@@ -72,13 +72,6 @@ startup. If startup reports a failed or partial schema step, restore from a
 consistent backup rather than deleting the database. If you use Direct MX, keep
 the host port 25 mapping across upgrades.
 
-> **Upgrading a pre-beta installation.** A database created before the public
-> beta predates the public baseline and cannot be upgraded by simply starting
-> the new server. It needs a one-time, offline conversion with the
-> `prerelease-rebaseline` utility while the app is stopped. Follow
-> [Pre-release database transition](PRERELEASE_TRANSITION.md) — including its
-> backup and rollback steps — before replacing the image.
-
 ## Uncertain deliveries
 
 When an outbound provider may have accepted an email but MailMoose cannot confirm the result, the message is shown as **Delivery uncertain**. It is not automatically sent again, avoiding duplicate email.

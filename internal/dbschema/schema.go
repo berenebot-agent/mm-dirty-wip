@@ -17,7 +17,7 @@ import (
 //go:embed baseline.sql
 var Baseline string
 
-// Format distinguishes public migration 001 from pre-release migration 001.
+// Format identifies the supported public database lineage.
 const Format = 1
 
 // BaselineHash pins all application DDL, including FTS5 shadow structures.
@@ -68,7 +68,7 @@ func migrate(ctx context.Context, conn *sql.Conn, migrations []migration) error 
 	applied := 0
 	if objects != 0 || format != 0 {
 		if format != Format {
-			return fmt.Errorf("unsupported database lineage %d: pre-release databases must be fully upgraded to 080 and explicitly rebaselined; see docs/PRERELEASE_TRANSITION.md", format)
+			return fmt.Errorf("unsupported database lineage %d: use a matching application release and a consistent backup; no automatic conversion is supported", format)
 		}
 		applied, err = checkMarkers(ctx, tx, migrations)
 		if err != nil {

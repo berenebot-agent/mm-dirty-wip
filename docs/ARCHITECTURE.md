@@ -165,9 +165,8 @@ The schema is the **public baseline** in `internal/dbschema/baseline.sql`, one
 versioned migration (`001`) applied in a single transaction and recorded in
 `schema_migrations`, with the lineage marked by `PRAGMA user_version=1`. The
 `internal/dbschema` package owns the DDL and validates that a database still
-matches it. Pre-beta growth was a chain of 80 pre-release migrations; that
-lineage is retired and converted offline once (see
-[Pre-release database transition](PRERELEASE_TRANSITION.md)).
+matches it. Future public migrations extend this baseline; unsupported lineages,
+unknown migration markers and schema drift are refused rather than repaired.
 
 The main tables, grouped:
 

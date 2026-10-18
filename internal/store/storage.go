@@ -62,8 +62,8 @@ func adjustInboxStorageTx(ctx context.Context, tx *sql.Tx, accountID, inboxID st
 }
 
 // inboxUsedTx returns the inbox's maintained storage counter. The baseline
-// schema keeps storage_used_bytes NOT NULL DEFAULT 0: creation and migration
-// both start every inbox at a real value, so there is no lazy initialization.
+// schema keeps storage_used_bytes NOT NULL DEFAULT 0, so no lazy initialization
+// is needed.
 func inboxUsedTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string) (int64, error) {
 	var used int64
 	err := tx.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&used)

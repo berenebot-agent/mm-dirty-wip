@@ -160,6 +160,11 @@ downloadable without re-running.
   isolated stores backed by a once-migrated template instead of applying the
   baseline per fixture. Do **not** use it in tests that assert schema/baseline
   behaviour or need a genuinely fresh database.
+- Public schema initialization, restart/data preservation and unsupported-schema
+  rejection are covered in `tests/unit/dbschema`. Its mail workflow checks run
+  against a fresh public database. `internal/dbschema/schema_test.go` exercises
+  future additive migrations and rollback through the private runner, without
+  production test hooks. These tests require no historical development schema.
 - Deliberately slow tests belong behind `tests/support/smoke.Require` so they
   run only in the `smoke` tier.
 
@@ -192,4 +197,3 @@ These are manual and end-to-end checks to run before a release. Automated unit, 
 - Back up and restore `/data` and any separately supplied encryption key.
 - Check the basic resource profile under idle and ingest load, and investigate unexpected memory or CPU growth.
 - Record the commit tested, test results and any skipped provider checks in the release notes.
-
