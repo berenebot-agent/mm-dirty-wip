@@ -80,17 +80,28 @@ func (rt *remoteMXRuntime) RemoteMXStatus(_ context.Context, accountID string) a
 	}
 	st.Configured = true
 	st.Revision = acct.revision
-	live := acct.mgr.ConnectionStatus()
-	switch strings.ToLower(strings.TrimSpace(live.State)) {
-	case "ready":
-		st.State = app.MXStateActive
-	case "connecting", "":
-		st.State = app.MXStateConnecting
-	default:
-		st.State = app.MXStateConnecting
-		st.Detail = live.Reason
-	}
+	st.State, st.Detail = remoteMXState(acct.mgr.ConnectionStatus())
 	return st
+}
+
+// remoteMXState maps the private dialer's connection state onto one account
+// receiver's status. Only a live handshake is active, and only a session that
+// was reached and is being retried stays connecting. A settled failure — the
+// receiver refused the session (including a session path it does not serve), it
+// cannot be reached, or the destination was refused before the dial — is
+// unavailable with an operator-facing reason, never a connection still in
+// progress.
+func remoteMXState(live mxdial.Status) (state, detail string) {
+	switch strings.ToLower(strings.TrimSpace(live.State)) {
+	case mxdial.StatusActive:
+		return app.MXStateActive, ""
+	case mxdial.StatusUnreachable, mxdial.StatusRejected, mxdial.StatusUnavailable:
+		return app.MXStateUnavailable, receiverDetail(live.Reason)
+	case mxdial.StatusConnecting, "":
+		return app.MXStateConnecting, ""
+	default:
+		return app.MXStateConnecting, live.Reason
+	}
 }
 
 // Run reconciles until ctx is cancelled.

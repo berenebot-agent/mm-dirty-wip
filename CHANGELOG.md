@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A receiving connector that the core can reach but that will not take the
+  session no longer reads as "Reconnecting" forever. A receiver that answers and
+  declines is now a settled failure — "Receiver refused the session", "Receiver
+  speaks HTTP/1.1, not HTTP/2", "Wrong receiver mode" or "Receiver protocol
+  mismatch" — in the Antler MX status dialog, the account Remote MX panel and
+  the installation Direct MX panel. A receiver that is merely restarting (HTTP
+  5xx) keeps retrying as before, and a receiver that has never answered is still
+  "Receiver unreachable". The core keeps retrying a refused receiver, so
+  redeploying or upgrading it recovers on its own.
+
 - The OpenClaw connector now says plainly that it is an early alpha. The
   Add-connector dialog shows a short note between the Type and Name fields
   whenever OpenClaw is selected, and the connector guide says the same: the

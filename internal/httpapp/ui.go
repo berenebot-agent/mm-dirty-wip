@@ -334,10 +334,6 @@ func (s *Server) dialMXStatuses(domain string) []mxdialStatusView {
 // Only a ready receiver advertises a usable MX target.
 func dialMXReady(st mxdialStatusView) bool { return st.State == mxdial.StatusActive }
 
-// dialMXUnreachable reports a receiver the core could not reach at all, so the
-// server-rendered panel marks it red rather than as a pending authorization.
-func dialMXUnreachable(st mxdialStatusView) bool { return st.State == mxdial.StatusUnreachable }
-
 // dialMXStatusClass returns a "danger" pill class for a receiver that is a
 // settled failure — rejected (including not_mx), unavailable, or unreachable —
 // and "" for the amber in-progress states, matching the JS dialog.
@@ -352,10 +348,27 @@ func dialMXStatusClass(st mxdialStatusView) string {
 
 // dialMXStatusLabel renders one receiver row's state for the server-rendered
 // setup panel. It mirrors the wizard's labels so the dialog and the panel never
-// describe the same receiver differently.
+// describe the same receiver differently: the receiver's own reason wins where
+// it names a settled refusal, and a ready row whose authorization window has
+// closed is expired rather than in progress.
 func dialMXStatusLabel(st mxdialStatusView) string {
+	switch st.Reason {
+	case "session_rejected":
+		return "receiver refused the session"
+	case "http2_required":
+		return "receiver speaks HTTP/1.1, not HTTP/2"
+	case "mode_mismatch":
+		return "wrong receiver mode"
+	case "protocol_mismatch":
+		return "receiver protocol mismatch"
+	case "destination_not_allowed":
+		return "blocked — receiver destination not allowed"
+	}
 	switch st.State {
 	case mxdial.StatusActive:
+		if st.ExpiresAt != nil && !st.ExpiresAt.After(time.Now()) {
+			return "authorization expired"
+		}
 		return "ready"
 	case mxdial.StatusConnecting:
 		return "authorizing"
@@ -522,7 +535,6 @@ func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
 		"deliveryStatus":       deliveryStatus,
 		"uncertainDelivery":    store.IsUncertainDelivery,
 		"dialmxReady":          dialMXReady,
-		"dialmxUnreachable":    dialMXUnreachable,
 		"dialmxStatusClass":    dialMXStatusClass,
 		"dialmxStatusLabel":    dialMXStatusLabel,
 		"dialmxExpiry":         statusExpiry,
@@ -2040,7 +2052,7 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
 </form>
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
 <h3 class="section-head">Remote MX receiver</h3>
-{{if $r.Configured}}<p class="muted small">This account's own receiver at <code>{{$r.URL}}</code> · <span class="pill{{if ne $r.State "active"}} amber{{end}}">{{mxStateLabel $r.State}}</span>{{if $r.Detail}} · {{$r.Detail}}{{end}}</p>
+{{if $r.Configured}}<p class="muted small">This account's own receiver at <code>{{$r.URL}}</code> · <span class="pill{{if or (eq $r.State "unavailable") (eq $r.State "failed")}} danger{{else if ne $r.State "active"}} amber{{end}}">{{mxStateLabel $r.State}}</span>{{if $r.Detail}} · {{$r.Detail}}{{end}}</p>
 <p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No DNS key record is needed: your receiver authenticates this core with its bearer key.</p>
 {{else}}<p class="muted small">No Remote MX receiver is configured for this account yet. Add your own receiver below, then select it here.</p>{{end}}
 {{if $.Principal.Admin}}<details class="remote-mx-editor" open><summary>Account receiver settings</summary>
