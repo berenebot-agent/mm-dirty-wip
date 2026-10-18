@@ -123,11 +123,16 @@ func adminDo(h http.Handler, method, path, body, key string) *httptest.ResponseR
 }
 
 // TestDomainConfigCrossAccountIsolation proves another account can neither read
-// nor mutate a domain's sending, receiving or delivery config.
+// nor mutate a domain's sending, receiving or delivery config, and cannot
+// rotate its Antler (Dial MX) signing key.
 func TestDomainConfigCrossAccountIsolation(t *testing.T) {
 	t.Parallel()
-	svc, h, _, dom, _ := httpFixture(t)
+	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
+	_, keyA, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "a-admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b, err := svc.Store.CreateAccountAndAdmin(ctx, "B", "b@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +142,20 @@ func TestDomainConfigCrossAccountIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "/v1/admin/domains/" + dom.ID
+	// The owner configures Dial MX first, so there is a real signing key for the
+	// foreign account to try to rotate.
+	owner := adminDo(h, "PUT", base+"/receiving", `{"provider":"dialmx","config":{"receiver_urls":"https://receiver.example","enforcement":"hard"}}`, keyA)
+	if owner.Code != 200 {
+		t.Fatalf("owner configure dialmx: %d %s", owner.Code, owner.Body.String())
+	}
+	var configured map[string]any
+	if err := json.Unmarshal(owner.Body.Bytes(), &configured); err != nil {
+		t.Fatal(err)
+	}
+	keyID, _ := configured["key_id"].(string)
+	if keyID == "" {
+		t.Fatalf("owner configure dialmx returned no key id: %s", owner.Body.String())
+	}
 	for _, tc := range []struct {
 		method, path, body string
 	}{
@@ -145,12 +164,18 @@ func TestDomainConfigCrossAccountIsolation(t *testing.T) {
 		{"DELETE", base + "/sending", ""},
 		{"GET", base + "/receiving", ""},
 		{"PUT", base + "/receiving", `{"provider":"cloudflare","config":{"webhook_secret":"x"}}`},
+		{"PUT", base + "/receiving", `{"provider":"dialmx","regenerate_secret":true}`},
 		{"DELETE", base + "/receiving", ""},
 		{"GET", base + "/sending/deliveries", ""},
 	} {
 		if rr := adminDo(h, tc.method, tc.path, tc.body, keyB); rr.Code != http.StatusNotFound {
 			t.Fatalf("foreign account %s %s = %d %s", tc.method, tc.path, rr.Code, rr.Body.String())
 		}
+	}
+	// The refused rotation left the owner's signing key untouched.
+	credential, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, dom.ID)
+	if err != nil || credential.KeyID != keyID {
+		t.Fatalf("foreign rotation changed the signing key: %+v err=%v", credential, err)
 	}
 }
 
