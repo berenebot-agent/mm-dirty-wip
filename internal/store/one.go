@@ -49,18 +49,29 @@ CREATE TABLE gmail_history_pages (
 // a YYYY-MM-DD value stops the backfill walk at that Gmail search boundary.
 const migration070 = `ALTER TABLE inbox_gmail_sync ADD COLUMN backfill_after TEXT NOT NULL DEFAULT '';`
 
+// Migration 080 counts consecutive authorization failures for each One binding.
+// One transient rejection must not mark an inbox unavailable, so the binding is
+// flagged only once the count reaches OneFailureThreshold, and a confirmed
+// revalidation clears it. The default backfills existing rows to "no failures".
+const migration080 = `ALTER TABLE inbox_one_bindings ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0;`
+
+// OneFailureThreshold is how many consecutive authorization failures a One
+// binding may record before it is marked unavailable.
+const OneFailureThreshold = 3
+
 type OneBinding struct {
 	DisplayName                                                                             string
 	InboxID, AccountID, ConnectionID, EncryptedConnectionKey, GmailEmail, Status, LastError string
 	EncryptedKey, KeyAAD, Fingerprint, RateGroup                                            string
 	Revision                                                                                int64
+	FailureCount                                                                            int
 	LastCheckedAt                                                                           time.Time
 }
 
 func (s *Store) OneBinding(ctx context.Context, account, inbox string) (OneBinding, error) {
 	var b OneBinding
 	var checked string
-	err := s.read.QueryRowContext(ctx, `SELECT inbox_id,account_id,rate_group,connection_id,encrypted_connection_key,gmail_email,status,last_error,last_checked_at,encrypted_key,key_aad,fingerprint,revision FROM inbox_one_bindings WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&b.InboxID, &b.AccountID, &b.RateGroup, &b.ConnectionID, &b.EncryptedConnectionKey, &b.GmailEmail, &b.Status, &b.LastError, &checked, &b.EncryptedKey, &b.KeyAAD, &b.Fingerprint, &b.Revision)
+	err := s.read.QueryRowContext(ctx, `SELECT inbox_id,account_id,rate_group,connection_id,encrypted_connection_key,gmail_email,status,last_error,last_checked_at,encrypted_key,key_aad,fingerprint,revision,failure_count FROM inbox_one_bindings WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&b.InboxID, &b.AccountID, &b.RateGroup, &b.ConnectionID, &b.EncryptedConnectionKey, &b.GmailEmail, &b.Status, &b.LastError, &checked, &b.EncryptedKey, &b.KeyAAD, &b.Fingerprint, &b.Revision, &b.FailureCount)
 	if err == sql.ErrNoRows {
 		err = ErrNotFound
 	}
@@ -77,11 +88,22 @@ func (s *Store) SetOneHealth(ctx context.Context, account, inbox, status, messag
 	return err
 }
 
-// SetOneRequestHealth records request feedback only while the binding is still
-// active. A request queued before a disconnect must not replace its authoritative
-// operator detail (or mark it healthy again).
-func (s *Store) SetOneRequestHealth(ctx context.Context, account, inbox, status, message string, revision int64) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE inbox_one_bindings SET status=?,last_error=?,last_checked_at=? WHERE account_id=? AND inbox_id=? AND revision=? AND status='active'`, status, message, nowText(), account, inbox, revision)
+// RecordOneFailure counts a consecutive authorization failure and marks the
+// binding unavailable once the count reaches OneFailureThreshold. It writes only
+// while the binding is still active, so a late or concurrent rejection cannot
+// replace an already-recorded verdict or its operator detail; only
+// ClearOneFailures may change a flagged binding.
+func (s *Store) RecordOneFailure(ctx context.Context, account, inbox, message string, revision int64) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_one_bindings SET failure_count=failure_count+1,status=CASE WHEN failure_count+1>=? THEN 'attention' ELSE status END,last_error=CASE WHEN failure_count+1>=? THEN ? ELSE last_error END,last_checked_at=? WHERE account_id=? AND inbox_id=? AND revision=? AND status='active'`, OneFailureThreshold, OneFailureThreshold, message, nowText(), account, inbox, revision)
+	return err
+}
+
+// ClearOneFailures records a revalidation that One accepted: the consecutive
+// failure count is wiped and the binding returns to service. This is the only
+// path that may lift an "attention" verdict, so a connection that recovers
+// resumes on its own instead of waiting for a manual re-save.
+func (s *Store) ClearOneFailures(ctx context.Context, account, inbox string, revision int64) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_one_bindings SET status='active',failure_count=0,last_error='',last_checked_at=? WHERE account_id=? AND inbox_id=? AND revision=? AND status<>'disconnected'`, nowText(), account, inbox, revision)
 	return err
 }
 

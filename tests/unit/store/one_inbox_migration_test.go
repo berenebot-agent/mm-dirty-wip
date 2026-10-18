@@ -37,6 +37,9 @@ func TestOneMigration067FansOutExistingCredentials(t *testing.T) {
 	for _, sql := range []string{
 		`DROP TABLE inbox_one_bindings`, `DROP TABLE one_import_setups`, `DELETE FROM schema_migrations WHERE version='067'`,
 		`DELETE FROM schema_migrations WHERE version='068'`,
+		// 067 rebuilds the binding table, so the later column migration must be
+		// re-applied to the rebuilt table rather than skipped by its marker.
+		`DELETE FROM schema_migrations WHERE version='080'`,
 		`CREATE TABLE one_accounts(id TEXT PRIMARY KEY,account_id TEXT NOT NULL,owner_user_id TEXT NOT NULL,encrypted_key TEXT NOT NULL,fingerprint TEXT NOT NULL,revision INTEGER NOT NULL,status TEXT NOT NULL,last_validated_at TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
 		`CREATE TABLE inbox_one_bindings(inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,account_id TEXT NOT NULL,one_account_id TEXT NOT NULL REFERENCES one_accounts(id),connection_id TEXT NOT NULL,encrypted_connection_key TEXT NOT NULL,gmail_email TEXT NOT NULL,status TEXT NOT NULL,last_error TEXT NOT NULL,last_checked_at TEXT NOT NULL)`,
 	} {

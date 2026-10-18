@@ -118,7 +118,7 @@ func (s *Store) SaveOneBinding(ctx context.Context, b OneBinding, expected int64
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE inbox_one_bindings SET encrypted_key=?,key_aad=?,fingerprint=?,encrypted_connection_key=?,status='active',last_error='',last_checked_at=?,revision=revision+1 WHERE account_id=? AND inbox_id=? AND revision=? AND connection_id=? AND gmail_email=?`, b.EncryptedKey, b.KeyAAD, b.Fingerprint, b.EncryptedConnectionKey, nowText(), b.AccountID, b.InboxID, expected, b.ConnectionID, b.GmailEmail)
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_one_bindings SET encrypted_key=?,key_aad=?,fingerprint=?,encrypted_connection_key=?,status='active',last_error='',failure_count=0,last_checked_at=?,revision=revision+1 WHERE account_id=? AND inbox_id=? AND revision=? AND connection_id=? AND gmail_email=?`, b.EncryptedKey, b.KeyAAD, b.Fingerprint, b.EncryptedConnectionKey, nowText(), b.AccountID, b.InboxID, expected, b.ConnectionID, b.GmailEmail)
 	if err != nil {
 		return err
 	}
