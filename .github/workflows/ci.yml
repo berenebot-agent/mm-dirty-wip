@@ -31,7 +31,7 @@ jobs:
             fi
           } 2>&1 | tee ci-logs/gofmt.log
       - name: vet
-        run: go vet ./... 2>&1 | tee ci-logs/vet.log
+        run: go vet -mod=readonly ./... 2>&1 | tee ci-logs/vet.log
       # Dead-code gate: U1000 reports unused unexported functions, types, fields
       # and methods (test files included). Kept in step with tests/run.sh --lint.
       - name: lint
@@ -76,11 +76,11 @@ jobs:
       - name: unit
         run: |
           set -o pipefail
-          go test -race -count=1 -timeout=60s ./... 2>&1 | tee ci-logs/unit.log
+          go test -mod=readonly -race -count=1 -timeout=60s ./... 2>&1 | tee ci-logs/unit.log
       - name: smoke
         run: |
           set -o pipefail
-          MAILMOOSE_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
+          MAILMOOSE_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@v4

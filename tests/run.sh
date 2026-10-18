@@ -201,12 +201,15 @@ for t in "${SELECTED[@]}"; do
             # -race for CI parity. No outer wall-clock cap: Go's per-test-binary
             # -timeout (matching CI's 60s) already bounds a hung test and gives a
             # panic + goroutine dump, which a `timeout` SIGTERM cannot.
+            # -mod=readonly fails loudly instead of silently rewriting go.mod
+            # when a gitignored scratch package (e.g. under tests/logs) imports
+            # something the module does not require.
             MAILMOOSE_TEST_DIR="$RUN_DIR/unit" \
-                ./mailmoose-go.sh test -race -count=1 -timeout=60s -v ./... >/dev/null 2>&1 || rc=$?
+                ./mailmoose-go.sh test -mod=readonly -race -count=1 -timeout=60s -v ./... >/dev/null 2>&1 || rc=$?
             ;;
         vet)
             MAILMOOSE_TEST_DIR="$RUN_DIR/vet" \
-                ./mailmoose-go.sh vet ./... >/dev/null 2>&1 || rc=$?
+                ./mailmoose-go.sh vet -mod=readonly ./... >/dev/null 2>&1 || rc=$?
             ;;
         fmt)
             # CI gate: gofmt -l prints unformatted files; empty output = pass.
@@ -252,7 +255,7 @@ for t in "${SELECTED[@]}"; do
             # instead of skipping; it is passed through to the container by
             # mailmoose-go.sh.
             MAILMOOSE_SMOKE=1 MAILMOOSE_TEST_DIR="$RUN_DIR/smoke" \
-                ./mailmoose-go.sh test -race -count=1 -timeout=60s -v \
+                ./mailmoose-go.sh test -mod=readonly -race -count=1 -timeout=60s -v \
                 ./tests/unit/dialmx/receiver/ >/dev/null 2>&1 || rc=$?
             ;;
     esac

@@ -42,6 +42,10 @@ type Server struct {
 	// a slow handler can hold an event for at most that long.
 	ackTimeout      time.Duration
 	processingLease time.Duration
+	// bodyFor fetches a short preview of a remote message the first time it is
+	// relayed. It is installed by cmd/server over the remote mailbox service; nil
+	// means remote events carry only their metadata summary.
+	bodyFor func(ctx context.Context, accountID string, arrival store.RemoteArrival) (string, bool)
 }
 
 // relayQuietReconnectWindow suppresses Info-level spam from the idle-timeout
@@ -52,6 +56,12 @@ const (
 	defaultRelayAckTimeout   = 60 * time.Second
 	defaultProcessingLease   = 30 * time.Minute
 	relayHeartbeatBufferSize = 8
+	// remoteBodyTimeout bounds the one-off preview fetch for a remote event, so a
+	// slow mailbox cannot delay the relay.
+	remoteBodyTimeout = 8 * time.Second
+	// remoteBodyPlaceholder is the metadata-only body used when no preview could
+	// be fetched.
+	remoteBodyPlaceholder = "(remote message; fetch it via the API)"
 )
 
 // maxConcurrentOutbound bounds in-flight outbound operations per relay socket,
@@ -87,6 +97,17 @@ func (s *Server) SetAckTimeoutsForTest(ackTimeout, processingLease time.Duration
 	if processingLease > 0 {
 		s.processingLease = processingLease
 	}
+}
+
+// SetRemoteBody installs the source of a short preview body for relayed remote
+// arrivals. It is set once at startup.
+func (s *Server) SetRemoteBody(fn func(ctx context.Context, accountID string, arrival store.RemoteArrival) (string, bool)) {
+	s.bodyFor = fn
+}
+
+// SetRemoteBodyForTest installs a deterministic remote preview body source.
+func (s *Server) SetRemoteBodyForTest(fn func(ctx context.Context, accountID string, arrival store.RemoteArrival) (string, bool)) {
+	s.bodyFor = fn
 }
 
 // ackWait is one event's acknowledgement window. The timer is re-armed by a
@@ -544,11 +565,11 @@ func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnecti
 // deliverRemote delivers one remote-arrival event to the gateway with the same
 // acknowledge/cursor protocol as a local message: the durable cursor only advances
 // after the gateway acknowledges, and the delivery log records the attempt. The
-// event is remote-aware and carries no body (the gateway fetches content through
-// the canonical API using the remote locator).
+// event is remote-aware and carries the remote locator (so the gateway can fetch
+// the full message through the canonical API) plus a short preview of the body.
 func (s *Server) deliverRemote(ctx context.Context, h store.HermesConnection, wr *socketWriter, ev model.Event, arrival store.RemoteArrival, after *int64, ackCh, beatCh <-chan int64, errCh <-chan error) error {
 	_ = s.Store.RecordHermesDeliveryPending(ctx, h.ID, ev.ID)
-	if err := wr.JSON(map[string]any{"type": "inbound", "event": remoteMessageEvent(arrival), "bufferId": ev.Cursor}); err != nil {
+	if err := wr.JSON(map[string]any{"type": "inbound", "event": remoteMessageEvent(arrival, s.remoteBody(ctx, h.AccountID, arrival)), "bufferId": ev.Cursor}); err != nil {
 		_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
 		return err
 	}
@@ -597,16 +618,36 @@ func (s *Server) awaitAcknowledgement(ctx context.Context, h store.HermesConnect
 	}
 }
 
+// remoteBody returns a bounded preview of an arrival's body. Fetching is
+// best-effort and bounded: a failure or timeout leaves the metadata-only body,
+// so a slow mailbox never holds up the relay.
+func (s *Server) remoteBody(ctx context.Context, accountID string, arrival store.RemoteArrival) string {
+	if s.bodyFor == nil {
+		return ""
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, remoteBodyTimeout)
+	defer cancel()
+	body, ok := s.bodyFor(fetchCtx, accountID, arrival)
+	if !ok {
+		return ""
+	}
+	return body
+}
+
 // remoteMessageEvent projects a detected remote arrival onto the gateway event
-// shape. It mirrors messageEvent but carries the remote locator instead of an
-// archived body, so the gateway fetches the message live through the canonical
-// API and never receives a stale archived copy.
-func remoteMessageEvent(a store.RemoteArrival) map[string]any {
+// shape. It mirrors messageEvent but carries the remote locator as well, so the
+// gateway can fetch the full message live through the canonical API. A short
+// preview (when one could be fetched) gives the agent something to read; the
+// body is never archived.
+func remoteMessageEvent(a store.RemoteArrival, preview string) map[string]any {
 	name := a.FromName
 	if name == "" {
 		name = a.FromAddress
 	}
-	display := fmt.Sprintf("From: %s\nSubject: %s\n\n(remote message; fetch it via the API)", a.FromAddress, a.Subject)
+	display := fmt.Sprintf("From: %s\nSubject: %s\n\n%s", a.FromAddress, a.Subject, remoteBodyPlaceholder)
+	if preview != "" {
+		display = fmt.Sprintf("From: %s\nSubject: %s\n\n%s", a.FromAddress, a.Subject, preview)
+	}
 	return map[string]any{
 		"text": display, "message_type": "text", "user_id": a.FromAddress, "user_name": name, "message_id": a.ID,
 		"source": map[string]any{"platform": "email", "chat_id": a.RFCMessageID, "chat_type": "thread", "chat_name": a.Subject, "user_id": a.FromAddress, "user_name": name, "thread_id": a.RFCMessageID, "chat_topic": nil, "message_id": a.ID},
@@ -659,10 +700,15 @@ func outboundResult(requestID string, success bool, errText, messageID string) m
 
 // resolveRelayReplyTarget resolves the exact mail a relay reply answers. The
 // local-thread lookup stays first, so local-mail replies keep their existing
-// behaviour. Only when no local thread matches is reply_to_message_id resolved:
-// first as a local message (for an outbound target), then through the shared
-// remote-message resolver, which understands both metadata ids and arrival ids.
-// The relay connection's own inbox is always enforced.
+// behaviour. Only when no local thread matches is a reply id resolved: the
+// explicit reply_to_message_id when the gateway sends one, otherwise the
+// conversation id itself. A Hermes gateway always sends an RFC Message-ID as
+// chat_id, which for a detected remote arrival never names a local thread; the
+// remote resolver still matches it to the cached remote message of that
+// Message-ID, so connected-mailbox replies work without a gateway change. Both
+// ids resolve first as a local message (an outbound target), then through the
+// shared remote-message resolver, which understands metadata ids and arrival
+// ids. The relay connection's own inbox is always enforced.
 func (s *Server) resolveRelayReplyTarget(ctx context.Context, h store.HermesConnection, thread, replyTo string) (model.Message, error) {
 	target, err := s.Store.LatestInboundMessageInThread(ctx, h.AccountID, h.InboxID, thread)
 	if err == nil {
@@ -671,29 +717,34 @@ func (s *Server) resolveRelayReplyTarget(ctx context.Context, h store.HermesConn
 	if !errors.Is(err, store.ErrNotFound) {
 		return model.Message{}, err
 	}
-	id := strings.TrimSpace(replyTo)
-	if id == "" {
-		return model.Message{}, store.ErrNotFound
-	}
-	if target, lerr := s.Store.GetMessageByID(ctx, h.AccountID, id); lerr == nil {
-		if target.InboxID != h.InboxID || target.Internal {
-			return model.Message{}, store.ErrNotFound
+	tried := map[string]bool{}
+	for _, id := range []string{replyTo, thread} {
+		id = strings.TrimSpace(id)
+		if id == "" || tried[id] {
+			continue
+		}
+		tried[id] = true
+		if target, lerr := s.Store.GetMessageByID(ctx, h.AccountID, id); lerr == nil {
+			if target.InboxID != h.InboxID || target.Internal {
+				return model.Message{}, store.ErrNotFound
+			}
+			return target, nil
+		} else if !errors.Is(lerr, store.ErrNotFound) {
+			return model.Message{}, lerr
+		}
+		if s.Service.RemoteMessages == nil {
+			continue
+		}
+		target, ok, rerr := s.Service.RemoteMessages.ResolveRemoteReply(ctx, h.AccountID, id)
+		if rerr != nil {
+			return model.Message{}, rerr
+		}
+		if !ok || target.InboxID != h.InboxID || target.Internal {
+			continue
 		}
 		return target, nil
-	} else if !errors.Is(lerr, store.ErrNotFound) {
-		return model.Message{}, lerr
 	}
-	if s.Service.RemoteMessages == nil {
-		return model.Message{}, store.ErrNotFound
-	}
-	target, ok, rerr := s.Service.RemoteMessages.ResolveRemoteReply(ctx, h.AccountID, id)
-	if rerr != nil {
-		return model.Message{}, rerr
-	}
-	if !ok || target.InboxID != h.InboxID || target.Internal {
-		return model.Message{}, store.ErrNotFound
-	}
-	return target, nil
+	return model.Message{}, store.ErrNotFound
 }
 
 func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.HermesConnection, requestID string, a outboundAction) {
@@ -734,6 +785,23 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 		if err != nil {
 			_ = wr.JSON(outboundResult(requestID, false, "email inbox not found", ""))
 			return
+		}
+		if inbox.Kind == model.InboxKindStandalone {
+			thread = target.ID
+		}
+		if len(model.DefaultReplyRecipients(target)) == 0 {
+			// The local path leaves an unclassifiable target to the send layer. A
+			// relay reply has no local thread to consult, so treat an unclassified
+			// remote message as incoming and answer its sender; an outbound (Sent)
+			// message keeps its stored recipients and with none still needs an
+			// explicit choice, which the relay has no surface for.
+			if target.Direction == model.DirectionUnknown && strings.TrimSpace(target.From.Address) != "" {
+				target.Direction = model.DirectionInbound
+			}
+			if len(model.DefaultReplyRecipients(target)) == 0 {
+				_ = wr.JSON(outboundResult(requestID, false, "email thread not found", ""))
+				return
+			}
 		}
 		// A connection may be held to the Assistant boundary: instead of
 		// sending with Owner authority, it creates a draft and requests

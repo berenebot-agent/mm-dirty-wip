@@ -5624,3 +5624,30 @@ holding the single SQLite writer.
 reply behaviour; the local-thread protocol fields; storage quotas, cap
 admission and thread-merge rules. Exactly-once execution after a client crash
 is not promised.
+
+## D139 — Relay replies resolve the wire form a stock Hermes gateway sends
+
+**Decision:** The relay reply path accepts the identifiers an unmodified Hermes
+gateway can send.
+
+- A message is resolved in this order: the local thread (unchanged for local
+  mail), an explicit `reply_to_message_id`, the conversation id itself as a
+  local message id, then as a remote message. A remote id may be a metadata id,
+  an arrival id, or an RFC Message-ID (the form a Hermes gateway sends as
+  `chat_id`); the last is matched newest-first within the account.
+- A resolved relay reply with no local thread classifies an unclassified remote
+  message as incoming and answers its sender. An outbound (Sent) message keeps
+  its stored recipients. REST reply behaviour is unchanged.
+- A relayed connected-mailbox event carries a short plain-text preview of the
+  message body. It reuses the cached snippet when one exists and otherwise
+  fetches a bounded preview once (then caches it); failure or timeout leaves
+  the metadata-only placeholder. Mail bodies are never archived.
+
+**Why:** Hermes is used out of the box and cannot be changed to send an
+explicit reply target. Without this, every reply to a connected-mailbox email
+failed, and the gateway stored remote notifications with an empty body.
+
+**Unchanged:** no gateway change is required, local replies keep their
+existing lookup, and the inbox boundary check still applies to every resolved
+target. A notification whose RFC Message-ID is not in the cache yet still
+cannot be answered by that gateway, which sees the failure as before.

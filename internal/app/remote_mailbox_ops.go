@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/messagepreview"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
@@ -1250,6 +1251,40 @@ func (m *RemoteMailboxService) resolveRemoteRecord(ctx context.Context, accountI
 	if !errors.Is(aerr, store.ErrNotFound) {
 		return store.RemoteMessage{}, false, mapStoreError(aerr)
 	}
+	// A relay/gateway client identifies a connected-mailbox message by its RFC
+	// Message-ID rather than the metadata id the REST surface uses. Resolve that
+	// wire form too, newest first and scoped to the account.
+	if msgID := strings.TrimSpace(id); msgID != "" {
+		if rec, ok, lerr := m.remoteMessageByRFCID(ctx, accountID, msgID); lerr != nil || ok {
+			return rec, ok, lerr
+		}
+	}
+	return store.RemoteMessage{}, false, nil
+}
+
+// remoteMessageByRFCID resolves a cached remote message by its RFC Message-ID
+// (with or without angle brackets), newest first across the account's standalone
+// inboxes. It is the wire form older relay gateways send as their conversation id.
+func (m *RemoteMailboxService) remoteMessageByRFCID(ctx context.Context, accountID, msgID string) (store.RemoteMessage, bool, error) {
+	id := msgID
+	if !strings.HasPrefix(id, "<") {
+		id = "<" + id + ">"
+	}
+	boxes, err := m.Service.Store.ListStandaloneInboxes(ctx, accountID)
+	if err != nil {
+		return store.RemoteMessage{}, false, mapStoreError(err)
+	}
+	for _, box := range boxes {
+		recs, lerr := m.Service.Store.ListRemoteMessagesFiltered(ctx, accountID, box.ID, store.RemoteMessageFilter{Limit: 200})
+		if lerr != nil {
+			return store.RemoteMessage{}, false, lerr
+		}
+		for _, rec := range recs {
+			if strings.EqualFold(strings.TrimSpace(rec.RFCMessageID), id) {
+				return rec, true, nil
+			}
+		}
+	}
 	return store.RemoteMessage{}, false, nil
 }
 
@@ -1522,4 +1557,47 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 		return RemoteMessageView{}, mapStoreError(err)
 	}
 	return m.GetRemoteMessage(ctx, p, inboxID, updated.ID)
+}
+
+// ArrivalBodyPreview fetches a short plain-text preview of a detected arrival
+// for realtime relay delivery, so a notification event carries something the
+// agent can read. The body is never archived. A successful preview is cached in
+// the remote metadata (replacing only the snippet), so a reconnect replay does
+// not fetch the same message again. ok=false leaves the caller on its
+// metadata-only body.
+func (m *RemoteMailboxService) ArrivalBodyPreview(ctx context.Context, accountID string, a store.RemoteArrival) (string, bool) {
+	rec, err := m.Service.Store.RemoteMessageForArrival(ctx, accountID, a.ID)
+	if err != nil {
+		rec = store.RemoteMessage{ID: a.ID, AccountID: accountID, InboxID: a.InboxID, FolderPath: a.FolderPath, UIDValidity: a.UIDValidity, UID: a.UID}
+	}
+	if strings.TrimSpace(rec.Snippet) != "" {
+		return rec.Snippet, true
+	}
+	path, _, ferr := m.fetchArrivalRawToTemp(ctx, model.Inbox{ID: a.InboxID, AccountID: accountID}, a)
+	if ferr != nil {
+		return "", false
+	}
+	defer m.CleanupRemoteRaw(path)
+	parsed, perr := mailparse.ParseFile(path, m.Service.mimeLimits())
+	if perr != nil {
+		return "", false
+	}
+	preview := messagepreview.FromBodies(parsed.Text, parsed.HTML)
+	if preview == "" {
+		return "", false
+	}
+	header := store.RemoteMessageInput{
+		FolderPath:   a.FolderPath,
+		UIDValidity:  a.UIDValidity,
+		UID:          a.UID,
+		RFCMessageID: a.RFCMessageID,
+		FromName:     a.FromName,
+		FromAddress:  a.FromAddress,
+		Subject:      a.Subject,
+		SizeBytes:    a.SizeBytes,
+	}
+	if err := m.Service.Store.UpsertRemotePreview(ctx, accountID, a.InboxID, header.FolderPath, header.UIDValidity, header.UID, header, preview); err != nil {
+		m.Service.Log.Debug("cache arrival preview", "inbox_id", a.InboxID, "arrival", a.ID, "error", err)
+	}
+	return preview, true
 }

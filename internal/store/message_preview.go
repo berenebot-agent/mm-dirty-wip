@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 
+	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/messagepreview"
 	"github.com/dellarb/mailmoose/internal/model"
 )
@@ -27,11 +29,80 @@ func (s *Store) QueueRemotePreview(ctx context.Context, account, inbox, id strin
 // swallowing it hid a real gap: every IMAP arrival was declined and no caller
 // could see it.
 func (s *Store) QueueRemotePreviewRows(ctx context.Context, account, inbox, id string) (int64, error) {
-	res, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_messages SET snippet_pending=1 WHERE account_id=? AND inbox_id=? AND id=? AND snippet='' AND remote_uid>0`, account, inbox, id)
+	res, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_messages SET snippet_pending=1 WHERE account_id=? AND inbox_id=? AND id=? AND snippet='' AND (remote_uid>0 OR folder_path LIKE 'gmail:%' OR folder_path LIKE 'microsoft:%')`, account, inbox, id)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// UpsertRemotePreview stores a short plain-text preview fetched from the live
+// mailbox. It creates the metadata row when the arrival has not been indexed yet
+// (a detected arrival always has one) and replaces only the snippet, so later
+// header refreshes keep it. The added bytes are charged like any other metadata.
+func (s *Store) UpsertRemotePreview(ctx context.Context, account, inbox, folderPath string, uidValidity, uid uint32, header RemoteMessageInput, preview string) error {
+	preview = messagepreview.Text(preview)
+	if preview == "" {
+		return nil
+	}
+	var kind string
+	if err := s.read.QueryRowContext(ctx, `SELECT kind FROM inboxes WHERE id=? AND account_id=?`, inbox, account).Scan(&kind); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if kind != model.InboxKindStandalone {
+		return ErrStandaloneRequired
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var oldBytes int64
+	var existingID string
+	byUID := uid > 0
+	if byUID {
+		oldBytes, _, err = remoteMessageBytesByUIDTx(ctx, tx, inbox, folderPath, uidValidity, uid)
+	} else {
+		// A provider-identified arrival has no remote UID; address it by its RFC
+		// Message-ID when a cached row already names it.
+		if msgID := strings.TrimSpace(header.RFCMessageID); msgID != "" {
+			_ = tx.QueryRowContext(ctx, `SELECT id,`+remoteMessageBytesSQL+` FROM inbox_remote_messages WHERE inbox_id=? AND rfc_message_id=? LIMIT 1`, inbox, msgID).Scan(&existingID, &oldBytes)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
+			snippet=excluded.snippet,thread_key=CASE WHEN inbox_remote_messages.thread_key='' THEN excluded.thread_key ELSE inbox_remote_messages.thread_key END`,
+		idgen.New("rm"), account, inbox, folderPath, uidValidity, uid, header.RFCMessageID, header.InReplyTo, jsonString(header.References), header.RFCMessageID,
+		header.FromName, header.FromAddress, jsonString(header.To), jsonString(header.CC), header.Subject, preview, header.SizeBytes, boolInt(header.HasAttach), boolInt(header.Read), boolInt(header.Flagged),
+		boolInt(header.Answered), boolInt(header.Draft), jsonString(header.Flags), nullStringPtr(header.ReceivedAt), nullStringPtr(header.SentAt), nullStringPtr(header.InternalDate), now, now, now); err != nil {
+		return err
+	}
+	if !byUID && existingID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET snippet=?,snippet_pending=0 WHERE account_id=? AND inbox_id=? AND id=?`, preview, account, inbox, existingID); err != nil {
+			return err
+		}
+	}
+	var newBytes int64
+	if byUID {
+		newBytes, _, err = remoteMessageBytesByUIDTx(ctx, tx, inbox, folderPath, uidValidity, uid)
+	} else if existingID != "" {
+		newBytes, _, err = remoteMessageBytesTx(ctx, tx, account, inbox, existingID)
+	}
+	if err != nil {
+		return err
+	}
+	if err = applyRemoteMetadataDeltaTx(ctx, tx, account, inbox, newBytes-oldBytes); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) PendingRemotePreviews(ctx context.Context, limit int) ([]RemoteMessage, error) {
