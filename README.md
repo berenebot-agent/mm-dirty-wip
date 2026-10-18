@@ -16,6 +16,8 @@ Bring your own email providers, connect AI agents or applications, and control e
 
 [![CI](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
+<img src="assets/mailmoose-dashboard.png" alt="The MailMoose dashboard, listing inboxes, clients and domains" width="1000">
+
 </div>
 
 ## Why MailMoose?
