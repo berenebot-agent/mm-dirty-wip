@@ -6096,6 +6096,11 @@ function hideInboxSubview(dlg) {
     try { initialUnexpected = JSON.parse(form.dataset.antlerUnexpected || '[]') || []; } catch (err) { initialUnexpected = []; }
     var initialDNS = [];
     try { initialDNS = JSON.parse(form.dataset.antlerDns || '[]') || []; } catch (err) { initialDNS = []; }
+    // The recorded Antler manifest source is seeded too, so the status view says
+    // where its receiver set came from — the live GitHub manifest or the built-in
+    // defaults — without waiting for the first fetch.
+    var initialManifest = null;
+    try { initialManifest = JSON.parse(form.dataset.antlerManifest || 'null'); } catch (err) { initialManifest = null; }
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
@@ -6122,7 +6127,7 @@ function hideInboxSubview(dlg) {
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Receiver authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
-      '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p></div>' +
+      '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><p class="antler-manifest-note muted small" hidden></p></div>' +
       '<p class="antler-error error" role="alert" hidden></p>';
     // A plain-language intro shown on the first step only, mirroring the
     // "Inbound: Antler MX" extract in docs/EMAIL_PROVIDERS.md: what the service
@@ -6500,10 +6505,30 @@ function hideInboxSubview(dlg) {
       var labels = String(domainName || '').split('.').filter(Boolean);
       return labels.length === 2 ? '@' : (domainName || '@');
     }
+    // renderManifest states where the domain's receiver set came from, so an
+    // operator can tell a live GitHub fetch from the built-in defaults. The record
+    // is fixed when the set is snapshotted: a re-save never re-fetches, so it
+    // describes the receivers the published MX records already point at, not the
+    // manifest's state today.
+    function renderManifest(manifest) {
+      var manifestNote = wizard.querySelector('.antler-manifest-note');
+      if (!manifest) { manifestNote.hidden = true; manifestNote.textContent = ''; return; }
+      if (manifest.source === 'embedded') {
+        manifestNote.textContent = 'Could not fetch Antler receivers from GitHub — using built-in defaults';
+      } else {
+        var when = '';
+        var at = manifest.at ? new Date(manifest.at) : null;
+        // An unparsable timestamp still names the source; only the time is dropped.
+        if (at && !isNaN(at.getTime())) { when = ' at ' + at.toLocaleTimeString(); }
+        manifestNote.textContent = 'Antler receivers updated from GitHub' + when;
+      }
+      manifestNote.hidden = false;
+    }
     function renderSkeleton(connectors) {
       var instructions = initialInstructions || {};
       var domainName = form.dataset.antlerDomainName || '';
       renderStatusRecords(initialStatuses, instructions, initialDNS, initialUnexpected, domainName, mxRecordName(domainName));
+      renderManifest(initialManifest);
     }
     // renderReceivers fills the wizard's own receivers step (used while setting
     // up, not the saved status view) from the live status set.
@@ -6523,6 +6548,9 @@ function hideInboxSubview(dlg) {
       state = data;
       note.dataset.checkedAt = new Date().toLocaleTimeString();
       countdown = null;
+      // The poll carries the record on every read; the seeded copy covers a
+      // payload that predates it (or no save yet), so the line never flashes off.
+      renderManifest(data.antler_manifest || initialManifest);
       var instructions = data.instructions || {};
       ready = (data.status || []).some(isReady);
       var records = wizard.querySelector('.antler-records');

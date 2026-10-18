@@ -142,10 +142,11 @@ type Service struct {
 	dialMXIngestSem       chan struct{}
 }
 
-// AntlerEndpointResolver resolves the current Antler MX receiver set. It is
-// satisfied by *mxdial.AntlerResolver and stubbed in tests.
+// AntlerEndpointResolver resolves the current Antler MX receiver set, and says
+// where it came from. It is satisfied by *mxdial.AntlerResolver and stubbed in
+// tests.
 type AntlerEndpointResolver interface {
-	Receivers(ctx context.Context) ([]mxdial.AntlerReceiver, error)
+	Receivers(ctx context.Context) (mxdial.AntlerEndpointSet, error)
 }
 
 // OutboxWaker is the outbox worker's wake surface. It is satisfied by
@@ -1028,16 +1029,28 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 		setupID = idgen.New("setup")
 	}
 	receivers := AntlerReceiversFromConfig(old)
+	// Where the snapshot came from is recorded alongside it, so the setup dialog
+	// can say whether it used the live GitHub manifest or the built-in defaults. A
+	// reused snapshot keeps its original record: it describes the receiver set the
+	// domain's published MX records already point at, not today's manifest.
+	source, _ := old["antler_manifest_source"].(string)
+	fetchedAt, _ := old["antler_manifest_at"].(string)
 	if len(receivers) == 0 {
 		resolver := s.AntlerEndpoints
 		if resolver == nil {
 			resolver = mxdial.DefaultAntlerResolver()
 		}
-		fetched, err := resolver.Receivers(ctx)
+		set, err := resolver.Receivers(ctx)
 		if err != nil {
 			return invalidConfig("Antler MX endpoints are unavailable right now; try again shortly")
 		}
-		receivers = fetched
+		receivers = set.Receivers
+		source = string(set.Source)
+		fetchedAt = ""
+		if !set.FetchedAt.IsZero() {
+			fetchedAt = set.FetchedAt.UTC().Format(time.RFC3339)
+		}
+		s.logAntlerManifest(set)
 	}
 	snapshot, err := json.Marshal(receivers)
 	if err != nil {
@@ -1052,7 +1065,32 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	merged["setup_id"] = setupID
 	merged["receiver_urls"] = strings.Join(urls, ",")
 	merged["antler_receivers"] = string(snapshot)
+	merged["antler_manifest_source"] = source
+	if fetchedAt != "" {
+		merged["antler_manifest_at"] = fetchedAt
+	}
 	return nil
+}
+
+// logAntlerManifest reports where a freshly resolved receiver set came from, so
+// an operator reading the container log can see whether setup reached GitHub or
+// fell back. Only a resolved set is logged: a re-save that reuses the snapshot
+// fetches nothing.
+func (s *Service) logAntlerManifest(set mxdial.AntlerEndpointSet) {
+	if s.Log == nil {
+		return
+	}
+	if set.Source == mxdial.AntlerSourceEmbedded {
+		attrs := []any{"url", mxdial.AntlerManifestURL, "receivers", len(set.Receivers)}
+		if set.Err != nil {
+			attrs = append(attrs, "error", set.Err)
+		}
+		s.Log.Warn("could not fetch Antler receivers from GitHub; using built-in defaults", attrs...)
+		return
+	}
+	s.Log.Info("Antler receivers updated from GitHub",
+		"url", mxdial.AntlerManifestURL, "receivers", len(set.Receivers),
+		"fetched_at", set.FetchedAt.UTC().Format(time.RFC3339))
 }
 
 // AntlerSettings is the mutable, non-credential half of an Antler MX setup: the

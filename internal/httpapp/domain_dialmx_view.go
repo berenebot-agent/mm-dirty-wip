@@ -25,6 +25,30 @@ type dialMXLiveView struct {
 	MX           []dialMXMXInstruction
 	Statuses     []mxdialStatusView
 	DNS          []domainDNSView
+	// Manifest is where the domain's snapshotted receiver set came from, so the
+	// setup dialog can say whether it used the live GitHub manifest or the
+	// built-in defaults. Nil for a config saved before the record existed.
+	Manifest *antlerManifestView
+}
+
+// antlerManifestView records where a snapshotted Antler MX receiver set came
+// from. At is the manifest fetch time (RFC3339) and is empty for the built-in
+// defaults. It carries no secret.
+type antlerManifestView struct {
+	Source string `json:"source"`
+	At     string `json:"at,omitempty"`
+}
+
+// antlerManifestViewFromConfig reads the recorded manifest source off a
+// decrypted receiving config. A config with no record (one saved before this
+// field existed) returns nil rather than inventing a source.
+func antlerManifestViewFromConfig(values map[string]any) *antlerManifestView {
+	source, _ := values["antler_manifest_source"].(string)
+	if source == "" {
+		return nil
+	}
+	at, _ := values["antler_manifest_at"].(string)
+	return &antlerManifestView{Source: source, At: at}
 }
 
 // dialMXLiveView builds the view for a domain whose effective receiving
@@ -48,6 +72,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 		view.Service = mxdial.ServiceAntler
 		view.ContactEmail, _ = values["contact_email"].(string)
 		view.Enforcement, _ = values["enforcement"].(string)
+		view.Manifest = antlerManifestViewFromConfig(values)
 		for _, r := range app.AntlerReceiversFromConfig(values) {
 			view.MX = append(view.MX, dialMXMXInstruction{Hostname: r.SMTPHostname, Priority: r.MXPriority})
 		}

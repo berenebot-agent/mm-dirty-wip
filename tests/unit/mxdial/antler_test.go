@@ -59,7 +59,8 @@ func TestParseAntlerManifestValidates(t *testing.T) {
 
 // TestAntlerResolverFetchesAndFallsBack proves the live fetch is used, cached,
 // and that a fetch failure falls back to the last known good copy rather than
-// failing setup.
+// failing setup. Each attempt reports where its set came from, so setup can say
+// whether it reached GitHub.
 func TestAntlerResolverFetchesAndFallsBack(t *testing.T) {
 	t.Parallel()
 	var fail atomic.Bool
@@ -74,24 +75,32 @@ func TestAntlerResolverFetchesAndFallsBack(t *testing.T) {
 
 	resolver := &mxdial.AntlerResolver{URL: srv.URL, Client: srv.Client(), TTL: time.Minute}
 	got, err := resolver.Receivers(context.Background())
-	if err != nil || len(got) != 2 {
+	if err != nil || len(got.Receivers) != 2 {
 		t.Fatalf("fetch: %v %+v", err, got)
 	}
-	if got[0].SessionURL != "https://antler1.example.test" {
-		t.Fatalf("live manifest not used: %+v", got[0])
+	if got.Source != mxdial.AntlerSourceGitHub || got.FetchedAt.IsZero() {
+		t.Fatalf("live fetch source = %q (fetched %v), want github with a fetch time", got.Source, got.FetchedAt)
+	}
+	if got.Receivers[0].SessionURL != "https://antler1.example.test" {
+		t.Fatalf("live manifest not used: %+v", got.Receivers[0])
 	}
 
-	// A stale cache plus a failing fetch returns the cached copy.
+	// A stale cache plus a failing fetch returns the cached copy, still named as
+	// the copy fetched from GitHub earlier.
 	resolver.TTL = 0
 	fail.Store(true)
 	got, err = resolver.Receivers(context.Background())
-	if err != nil || len(got) != 2 {
+	if err != nil || len(got.Receivers) != 2 {
 		t.Fatalf("cached fallback: %v %+v", err, got)
+	}
+	if got.Source != mxdial.AntlerSourceCache || got.FetchedAt.IsZero() {
+		t.Fatalf("cached fallback source = %q (fetched %v), want cache with the original fetch time", got.Source, got.FetchedAt)
 	}
 }
 
 // TestAntlerResolverUsesEmbeddedWhenNeverFetched proves setup still works with
-// no network at all: the embedded manifest is used.
+// no network at all: the embedded manifest is used, and the set says so and
+// carries the fetch failure that forced it.
 func TestAntlerResolverUsesEmbeddedWhenNeverFetched(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -103,7 +112,10 @@ func TestAntlerResolverUsesEmbeddedWhenNeverFetched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedded fallback: %v", err)
 	}
-	if len(got) != 2 || got[0].SessionURL != "https://antler1.hgolabs.com" {
-		t.Fatalf("embedded manifest not used: %+v", got)
+	if got.Source != mxdial.AntlerSourceEmbedded || got.Err == nil || !got.FetchedAt.IsZero() {
+		t.Fatalf("embedded fallback source = %q (err %v, fetched %v), want embedded with the fetch error and no time", got.Source, got.Err, got.FetchedAt)
+	}
+	if len(got.Receivers) != 2 || got.Receivers[0].SessionURL != "https://antler1.hgolabs.com" {
+		t.Fatalf("embedded manifest not used: %+v", got.Receivers)
 	}
 }

@@ -56,6 +56,32 @@ type AntlerReceiver struct {
 	MXPriority   int    `json:"mx_priority"`
 }
 
+// AntlerSource names where a resolved receiver set came from, so setup can say
+// whether it used the live manifest or the copy compiled into the binary.
+type AntlerSource string
+
+const (
+	// AntlerSourceGitHub is a manifest fetched from the live URL this call.
+	AntlerSourceGitHub AntlerSource = "github"
+	// AntlerSourceCache is a last-known-good copy from an earlier fetch.
+	AntlerSourceCache AntlerSource = "cache"
+	// AntlerSourceEmbedded is the copy compiled into this build, used when the
+	// fetch failed and no cached copy exists.
+	AntlerSourceEmbedded AntlerSource = "embedded"
+)
+
+// AntlerEndpointSet is a resolved receiver set plus where it came from.
+// FetchedAt is when the set was fetched from the manifest: the current time for
+// a live fetch, the original fetch time for a cached set, and the zero time for
+// the embedded copy. Err is the fetch failure that forced the embedded copy and
+// is nil for every other source.
+type AntlerEndpointSet struct {
+	Receivers []AntlerReceiver
+	Source    AntlerSource
+	FetchedAt time.Time
+	Err       error
+}
+
 type antlerManifest struct {
 	SchemaVersion int              `json:"schema_version"`
 	Receivers     []AntlerReceiver `json:"receivers"`
@@ -201,22 +227,23 @@ func (r *AntlerResolver) ttl() time.Duration {
 	return antlerManifestTTL
 }
 
-// Receivers returns the current receiver set. A fresh cache is returned
-// directly; a stale cache is returned while a recent fetch failure is still in
-// its retry cooldown; otherwise the manifest is fetched and validated. When the
-// fetch fails and there is no cache, the embedded manifest is used so setup
-// never depends on the network.
-func (r *AntlerResolver) Receivers(ctx context.Context) ([]AntlerReceiver, error) {
+// Receivers returns the current receiver set and its source. A fresh cache is
+// returned directly; a stale cache is returned while a recent fetch failure is
+// still in its retry cooldown; otherwise the manifest is fetched and validated.
+// When the fetch fails and there is no cache, the embedded manifest is used so
+// setup never depends on the network, with the fetch error carried alongside it
+// so the caller can report the fallback.
+func (r *AntlerResolver) Receivers(ctx context.Context) (AntlerEndpointSet, error) {
 	now := r.now()
 	r.mu.Lock()
 	if len(r.cached) > 0 {
 		if now.Sub(r.fetchedAt) < r.ttl() {
-			out := cloneAntlerReceivers(r.cached)
+			out := r.cachedSet(AntlerSourceCache)
 			r.mu.Unlock()
 			return out, nil
 		}
 		if !r.failedAt.IsZero() && now.Sub(r.failedAt) < antlerRetryAfterFailure {
-			out := cloneAntlerReceivers(r.cached)
+			out := r.cachedSet(AntlerSourceCache)
 			r.mu.Unlock()
 			return out, nil
 		}
@@ -228,23 +255,29 @@ func (r *AntlerResolver) Receivers(ctx context.Context) ([]AntlerReceiver, error
 		r.mu.Lock()
 		if len(r.cached) > 0 {
 			r.failedAt = now
-			out := cloneAntlerReceivers(r.cached)
+			out := r.cachedSet(AntlerSourceCache)
 			r.mu.Unlock()
 			return out, nil
 		}
 		r.mu.Unlock()
 		embedded := EmbeddedAntlerReceivers()
 		if len(embedded) == 0 {
-			return nil, fmt.Errorf("mxdial: no Antler endpoints available: %w", err)
+			return AntlerEndpointSet{}, fmt.Errorf("mxdial: no Antler endpoints available: %w", err)
 		}
-		return embedded, nil
+		return AntlerEndpointSet{Receivers: embedded, Source: AntlerSourceEmbedded, Err: err}, nil
 	}
 	r.mu.Lock()
 	r.cached = cloneAntlerReceivers(fetched)
 	r.fetchedAt = now
 	r.failedAt = time.Time{}
 	r.mu.Unlock()
-	return fetched, nil
+	return AntlerEndpointSet{Receivers: fetched, Source: AntlerSourceGitHub, FetchedAt: now}, nil
+}
+
+// cachedSet returns the cached receivers with the time they were fetched, so
+// callers can report when the live manifest was last read. The caller holds mu.
+func (r *AntlerResolver) cachedSet(source AntlerSource) AntlerEndpointSet {
+	return AntlerEndpointSet{Receivers: cloneAntlerReceivers(r.cached), Source: source, FetchedAt: r.fetchedAt}
 }
 
 func (r *AntlerResolver) fetch(ctx context.Context) ([]AntlerReceiver, error) {
