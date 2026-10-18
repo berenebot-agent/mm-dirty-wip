@@ -200,7 +200,7 @@ A 32-byte `APP_ENCRYPTION_KEY` has no legacy derivation and is used directly.
 
 ## Supported versions
 
-MailMoose is at V1. Only the latest release and the current `main`
+MailMoose is in public beta. Only the latest release and the current `main`
 branch are supported; there is no backport line for older versions.
 
 ## What to expect

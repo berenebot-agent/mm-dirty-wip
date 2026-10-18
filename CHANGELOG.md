@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 - A One / Gmail inbox no longer stays disconnected until someone saves its key
   again. The connection is marked unavailable only after three consecutive
   authorization failures, and the background sync keeps trying meanwhile — every

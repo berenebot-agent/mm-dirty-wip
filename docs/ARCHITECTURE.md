@@ -227,7 +227,7 @@ Use generated internal IDs for paths, for example:
 
 Store attachment metadata in SQLite.
 
-Read attachment bytes from the canonical MIME blob on demand in V1.
+Read attachment bytes from the canonical MIME blob on demand in the beta.
 
 Serve attachment content as a download with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. Any future inline preview uses a separately sanitized rendering path.
 
@@ -296,7 +296,7 @@ type OutboundTransport interface {
 }
 ```
 
-V1 implementations register through the outbound transport registry:
+The beta implementations register through the outbound transport registry:
 
 ```text
 Mailgun HTTP API
