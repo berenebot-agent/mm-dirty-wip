@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Two published images, and one edge image for both receiver modes.** The
+  `Dockerfile.mx` edge image and the standalone-receiver image were the same
+  program under two names, differing only in the in-container binary filename;
+  both are retired. The edge is now `mailmoose-remote-mx`, built from
+  `dialmx/Dockerfile`, and `DIALMX_MODE=shared` or `DIALMX_MODE=single` picks
+  the mode at runtime. Dev images published from this fork carry a `dirty-wip-`
+  prefix (`dirty-wip-mailmoose`, `dirty-wip-mailmoose-remote-mx`) so they cannot
+  be mistaken for release images. The embedded `mailmoose-mx` binary, the
+  `_mailmoose-mx` TXT proof record and the session protocol names are unchanged.
+  See `D137`.
+
+- The publish workflow no longer claims that a push triggers it: it is
+  manual-only (`workflow_dispatch`), and `release.yml` owns tagged releases.
+
 - **The public database starts from one clean baseline.** All existing developer
   installations have completed the one-time transition, so the converter,
   maintenance image, historical fixture and transition instructions are retired.

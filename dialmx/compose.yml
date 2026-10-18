@@ -23,7 +23,7 @@
 
 services:
   dialmx:
-    image: mailmoose-dialmx:latest
+    image: mailmoose-remote-mx:latest
     build:
       context: ..
       dockerfile: dialmx/Dockerfile
