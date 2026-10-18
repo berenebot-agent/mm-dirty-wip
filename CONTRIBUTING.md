@@ -1,6 +1,6 @@
 # Contributing to MailMoose
 
-Thanks for your interest. This is a V1 project with a deliberately small scope.
+Thanks for your interest. This is a beta project with a deliberately small scope.
 
 Please also read `SECURITY.md` before reporting a security issue, and never open
 a public issue for a suspected vulnerability.

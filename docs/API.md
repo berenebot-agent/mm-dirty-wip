@@ -1,4 +1,4 @@
-# MailMoose — V1 API Contract
+# MailMoose — API Contract
 
 This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
 
