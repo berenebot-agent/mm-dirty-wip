@@ -6118,7 +6118,18 @@ function hideInboxSubview(dlg) {
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
       '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p></div>' +
       '<p class="antler-error error" role="alert" hidden></p>';
+    // A plain-language intro shown on the first step only, mirroring the
+    // "Inbound: Antler MX" extract in docs/EMAIL_PROVIDERS.md: what the service
+    // is, the mail-flow diagram, and the outbound-only connection, without the
+    // setup steps the wizard already walks through.
+    var intro = document.createElement('section');
+    intro.className = 'antler-intro';
+    intro.innerHTML = '<p>Antler MX is a <b>free hosted SMTP receiver for your domain</b>. It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose your web interface to the internet.</p>' +
+      '<figure><img src="/assets/antler-mx-diagram.svg" alt="Public senders deliver to the hosted Antler relay; MailMoose connects to it outbound, so no inbound port forwarding is needed."></figure>' +
+      '<p>MailMoose makes an <b>outbound connection</b> to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to MailMoose over that connection. Antler is a receiving relay, not a hosted mailbox or an outgoing mail service.</p>' +
+      '<p class="muted small">Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.</p>';
     group.appendChild(wizard);
+    wizard.insertBefore(intro, wizard.querySelector('[data-antler-step="0"]'));
     function moveField(input, index) {
       var label = input.previousElementSibling;
       var panel = wizard.querySelector('[data-antler-step="' + index + '"]');
@@ -6649,6 +6660,10 @@ function hideInboxSubview(dlg) {
         panel.hidden = statusMode ? (index === 2 || index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
       });
       advancedLabel.hidden = statusMode;
+      // The intro belongs to the hosted Antler service and reads once, so it
+      // shows on the first step only — not in the saved status view, and not
+      // when the operator has switched to custom receivers.
+      intro.hidden = statusMode || custom || step !== 0;
       if (statusMode) {
         wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
         var contactDescription = wizard.querySelector('[data-antler-step="0"] p');

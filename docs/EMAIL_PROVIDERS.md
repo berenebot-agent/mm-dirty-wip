@@ -32,7 +32,7 @@ Direct MX is not needed for Antler MX or provider-webhook receiving. Advanced se
 
 ## Inbound: Antler MX
 
-**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet.
+**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
 
 ### How it works
 

@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/dellarb/mailmoose/internal/httpapp"
 )
 
 func TestBrandAssetsServed(t *testing.T) {
@@ -19,6 +21,7 @@ func TestBrandAssetsServed(t *testing.T) {
 		{"/favicon-32x32.png", "image/png"},
 		{"/apple-touch-icon.png", "image/png"},
 		{"/assets/logo-horizontal.png", "image/png"},
+		{"/assets/antler-mx-diagram.svg", "image/svg+xml"},
 	} {
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, httptest.NewRequest("GET", tc.path, nil))
@@ -27,6 +30,24 @@ func TestBrandAssetsServed(t *testing.T) {
 		}
 		if got := rr.Header().Get("Content-Type"); !strings.HasPrefix(got, tc.ct) {
 			t.Fatalf("%s content-type = %q, want %q", tc.path, got, tc.ct)
+		}
+	}
+}
+
+// The Antler MX setup wizard opens with a short service intro and the mail-flow
+// diagram, mirroring docs/EMAIL_PROVIDERS.md. The wizard markup is built in
+// app.js, so assert the intro and its asset reference survive there.
+func TestAntlerWizardIntro(t *testing.T) {
+	t.Parallel()
+	bundle := string(httpapp.AppJS())
+	for _, want := range []string{
+		"/assets/antler-mx-diagram.svg",
+		"free hosted SMTP receiver for your domain",
+		"outbound connection",
+		"Antler MX is a community service, provided on a best-efforts basis",
+	} {
+		if !strings.Contains(bundle, want) {
+			t.Fatalf("Antler wizard intro missing %q", want)
 		}
 	}
 }
