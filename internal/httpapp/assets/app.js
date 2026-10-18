@@ -7607,6 +7607,34 @@ function hideInboxSubview(dlg) {
     td.appendChild(el('span', 'pill unread-pill', String(value)));
   }
 
+  // setReceivingLabel writes the server's provider label into a dashboard Domain
+  // row's Receiving cell. The row is server-rendered, so a receiving dialog that
+  // stores a provider while the row is on screen — the Antler MX wizard saves the
+  // provider on its first step, so cancelling a setup part-way leaves the domain
+  // configured — would otherwise keep drawing an amber "Add" beside a live light
+  // until a manual reload. An empty label leaves the cell alone: a domain with no
+  // receiving provider, or one that inherits "(inherited)", is already rendered
+  // correctly. The light dot, when the cell has one, stays the button's first
+  // child, matching the server-rendered order.
+  function setReceivingLabel(row, info) {
+    var label = info && info.label;
+    if (!row || !label) {
+      return;
+    }
+    var btn = row.querySelector('[data-receiving-button]');
+    if (!btn) {
+      return;
+    }
+    var dot = btn.querySelector('[data-receiving-light]');
+    btn.replaceChildren();
+    if (dot) {
+      btn.appendChild(dot);
+    }
+    btn.appendChild(document.createTextNode(label));
+    btn.classList.remove('amber');
+    btn.classList.add('secondary');
+  }
+
   // setTrafficLight patches a dashboard Domain row's light dot in place. It is
   // parameterised by the dot's data attribute and its owning button's data
   // attribute so the receiving light (data-receiving-light) and the sending DKIM
@@ -7668,6 +7696,7 @@ function hideInboxSubview(dlg) {
       if (data.domains) {
         document.querySelectorAll('tbody[data-domain-rows] tr[data-domain-id]').forEach(function (row) {
           var info = data.domains[row.getAttribute('data-domain-id')];
+          setReceivingLabel(row, info);
           setTrafficLight(row, info ? info.light : '', info ? info.title : '', 'data-receiving-light', 'data-receiving-button');
         });
       }

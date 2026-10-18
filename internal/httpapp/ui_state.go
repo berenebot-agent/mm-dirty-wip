@@ -51,12 +51,22 @@ func (s *Server) inboxUnreadCounts(ctx context.Context, p model.Principal) map[s
 	return unread
 }
 
+// dashboardReceivingState is the live state of one dashboard Receiving cell: the
+// aggregate traffic light (empty when the domain names no receiver target) and
+// the provider label the cell shows. The label is what keeps a row honest when a
+// receiving dialog stores a provider while the row is already on screen.
+type dashboardReceivingState struct {
+	Light string `json:"light"`
+	Title string `json:"title"`
+	Label string `json:"label"`
+}
+
 // uiStateDashboard returns per-inbox unread and pending-send counts plus, when
-// includeLights is set, the per-domain inbound traffic light. It is keyed by
-// inbox/domain id so the browser can update one cell without re-rendering the
-// dashboard. includeLights is false for a mail-triggered refresh so those reads
-// stay DNS-free; the browser asks for lights on load, reconnect and a
-// receiver-health notification.
+// includeLights is set, the per-domain inbound traffic light and receiving
+// provider label. It is keyed by inbox/domain id so the browser can update one
+// cell without re-rendering the dashboard. includeLights is false for a
+// mail-triggered refresh so those reads stay DNS-free; the browser asks for
+// lights on load, reconnect and a receiver-health notification.
 func (s *Server) uiStateDashboard(w http.ResponseWriter, r *http.Request, p model.Principal, includeLights bool) {
 	ctx := r.Context()
 	unread := s.inboxUnreadCounts(ctx, p)
@@ -79,16 +89,22 @@ func (s *Server) uiStateDashboard(w http.ResponseWriter, r *http.Request, p mode
 		c.Pending = n
 		counts[id] = c
 	}
-	var lights map[string]domainLight
+	var lights map[string]dashboardReceivingState
 	if includeLights {
-		lights = map[string]domainLight{}
+		lights = map[string]dashboardReceivingState{}
 		if domains, err := s.Service.Store.ListDomains(ctx, p.AccountID); err == nil {
 			for _, d := range domains {
-				light, title := s.domainInboundLight(ctx, d.AccountID, d.ID, d.Name, d.ReceivingProvider)
-				if light == "" {
+				// The label travels beside the light so the client patches both
+				// together. It is carried even when no light is drawn, because a
+				// receiving dialog stores the provider before any receiver can
+				// report ready: a setup started and cancelled part-way leaves a
+				// configured domain whose row would otherwise keep reading "Add".
+				state := dashboardReceivingState{Label: s.receivingCellLabel(ctx, d)}
+				state.Light, state.Title = s.domainInboundLight(ctx, d.AccountID, d.ID, d.Name, d.ReceivingProvider)
+				if state.Light == "" && state.Label == "" {
 					continue
 				}
-				lights[d.ID] = domainLight{Light: light, Title: title}
+				lights[d.ID] = state
 			}
 		}
 	}

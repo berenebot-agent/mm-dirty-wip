@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
@@ -68,7 +69,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	if keyID != "" && len(publicKey) > 0 {
 		view.TXTValue = mxwire.DomainTXT(keyID, publicKey)
 	}
-	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
+	if dialMXService(values) == mxdial.ServiceAntler {
 		view.Service = mxdial.ServiceAntler
 		view.ContactEmail, _ = values["contact_email"].(string)
 		view.Enforcement, _ = values["enforcement"].(string)
@@ -282,4 +283,46 @@ func (s *Server) dialMXHasReceiverTargets(ctx context.Context, accountID, domain
 	}
 	raw, _ := values["receiver_urls"].(string)
 	return strings.TrimSpace(raw) != ""
+}
+
+// dialMXCustomService reports whether a domain's stored Dial MX receiving config
+// uses custom receiver URLs rather than the hosted Antler MX relay. A missing or
+// undecryptable config is not custom.
+func (s *Server) dialMXCustomService(ctx context.Context, accountID, domainID string) bool {
+	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
+	if err != nil {
+		return false
+	}
+	values, err := s.Service.DecryptDomainReceivingConfig(cfg)
+	if err != nil {
+		return false
+	}
+	return dialMXService(values) == mxdial.ServiceCustom
+}
+
+// dialMXService classifies a decrypted Dial MX receiving config as the hosted
+// Antler MX relay or a custom receiver set. The two spellings live here so the
+// live view and the dashboard label cannot disagree about which one a domain is.
+func dialMXService(values map[string]any) string {
+	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
+		return mxdial.ServiceAntler
+	}
+	return mxdial.ServiceCustom
+}
+
+// receivingCellLabel returns the label the dashboard's Receiving cell shows for a
+// domain whose receiving configuration is its own, so the live snapshot can
+// rewrite a cell whose row was rendered before the configuration existed. It is
+// empty for a domain with no receiving provider and for one that inherits its
+// receiving config: an inherited cell reads "(inherited)" and its dialog cannot
+// change the provider, so the snapshot leaves it to the server-rendered row.
+func (s *Server) receivingCellLabel(ctx context.Context, d model.Domain) string {
+	if d.ReceivingProvider == "" || d.ReceivingInheritedFrom != "" {
+		return ""
+	}
+	custom := false
+	if normalizeDomainProvider(d.ReceivingProvider) == "dialmx" {
+		custom = s.dialMXCustomService(ctx, d.AccountID, d.ID)
+	}
+	return receivingProviderLabel(d.ReceivingProvider, custom)
 }
