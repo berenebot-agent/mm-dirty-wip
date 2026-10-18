@@ -155,7 +155,7 @@ function texts(row, className) {
   const rendered = rows(body);
   assert.equal(rendered.length, 2, 'both queue rows render');
   assert.equal(rendered[0].getAttribute('data-state'), 'done', 'parent sorts first');
-  assert.ok(texts(rendered[0], 'aq-kind')[0].includes('Empty Trash'), 'parent row names the operation');
+  assert.ok(texts(rendered[0], 'aq-kind')[0].includes('Empty trash'), 'parent row names the operation');
   assert.deepEqual(texts(rendered[0], 'aq-meta'), ['501 of 501 purged'], 'parent row shows purge progress');
   assert.deepEqual(texts(rendered[0], 'aq-btn'), ['Dismiss'], 'completed parent row can be dismissed');
 }

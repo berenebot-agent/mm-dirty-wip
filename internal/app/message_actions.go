@@ -122,6 +122,15 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		if err := w.svc.Store.SettleMessageAction(outcome, a.ID, state, reason, next); err != nil {
 			w.svc.Log.Error("action settlement", "action_id", a.ID, "error", err)
 		}
+		// An Empty Trash parent re-runs a coordination turn every
+		// emptyTrashTurnDelay while its purge children are still in flight. Such
+		// a turn only re-reads progress and changes nothing the queue shows, so
+		// publishing here would flood listeners with events that each trigger a
+		// full UI refresh. Real transitions (done, failed, ambiguous) and every
+		// child settle still publish.
+		if a.Input.Kind == "empty_trash" && state == "pending" {
+			return
+		}
 		w.svc.Hub.Publish(model.Event{AccountID: a.AccountID, InboxID: a.InboxID, Type: "actions.changed", Transient: true})
 	}()
 	if a.Input.Kind == "empty_trash" {

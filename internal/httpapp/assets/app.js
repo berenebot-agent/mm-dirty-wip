@@ -548,7 +548,7 @@
     }
     if (input.kind === 'delete') { return 'Move to trash'; }
     if (input.kind === 'purge') { return 'Delete permanently'; }
-    if (input.kind === 'empty_trash') { return 'Empty Trash'; }
+    if (input.kind === 'empty_trash') { return 'Empty trash'; }
     if (input.kind === 'restore') { return 'Restore'; }
     if (input.kind === 'move') { return 'Move'; }
     return input.kind || 'Action';
