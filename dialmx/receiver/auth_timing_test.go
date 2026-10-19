@@ -51,7 +51,7 @@ func TestAuthenticationDNSPhases(t *testing.T) {
 						return []*net.MX{{Host: "mx.test."}}, nil
 					},
 				}, nil)
-				c, body := timingConnection(t, r)
+				c := timingConnection(t, r)
 				f, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{Domain: "example.test", KeyID: "key1"})
 				if err := r.auth(c, f); err != nil {
 					t.Fatal(err)
@@ -61,31 +61,31 @@ func TestAuthenticationDNSPhases(t *testing.T) {
 				}
 				synctest.Wait()
 				r.expireConn(c)
-				answerTimingChallenge(t, r, c, body, priv)
+				answerTimingChallenge(t, r, c, priv)
 				time.Sleep(12 * time.Second)
 				synctest.Wait()
-				assertTimingGrant(t, r, body)
+				assertTimingGrant(t, r, c)
 				if phase == "renewal TXT" {
 					time.Sleep(4 * time.Minute)
 					r.revalidateConn(c)
-					answerTimingChallenge(t, r, c, body, priv)
+					answerTimingChallenge(t, r, c, priv)
 					time.Sleep(time.Second)
 					synctest.Wait()
 					r.revalidateConn(c)
 					r.expireConn(c)
-					if body.Body.Len() != 0 {
+					if unreadTimingBytes(c) != 0 {
 						t.Fatal("issued overlapping renewal or expired in-flight verification")
 					}
 					time.Sleep(11 * time.Second)
 					synctest.Wait()
-					assertTimingGrant(t, r, body)
+					assertTimingGrant(t, r, c)
 				}
 			})
 		})
 	}
 }
 
-func timingConnection(t *testing.T, r *Receiver) (*connection, *httptest.ResponseRecorder) {
+func timingConnection(t *testing.T, r *Receiver) *connection {
 	t.Helper()
 	body := httptest.NewRecorder()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,12 +95,31 @@ func timingConnection(t *testing.T, r *Receiver) (*connection, *httptest.Respons
 		id: "connection", receiver: "receiver", ip: "127.0.0.1", ctx: ctx, cancel: cancel,
 		writer:  &lockedWriter{w: body, ctl: http.NewResponseController(body)},
 		domains: map[uint64]*binding{}, challenges: map[uint64]challenge{}, pending: map[uint64]*pending{},
-	}, body
+	}
 }
 
-func answerTimingChallenge(t *testing.T, r *Receiver, c *connection, body *httptest.ResponseRecorder, priv ed25519.PrivateKey) {
+// timingFrame consumes the next frame from the connection's response recorder,
+// and unreadTimingBytes reports what is left unread, both under the writer's
+// lock: verification runs on a spawned goroutine that writes through
+// lockedWriter, and httptest.ResponseRecorder is not safe for concurrent use.
+func timingFrame(t *testing.T, c *connection) (mxwire.Frame, error) {
 	t.Helper()
-	f, err := mxwire.ReadFrame(body.Body)
+	w := c.writer
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return mxwire.ReadFrame(w.w.(*httptest.ResponseRecorder).Body)
+}
+
+func unreadTimingBytes(c *connection) int {
+	w := c.writer
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.(*httptest.ResponseRecorder).Body.Len()
+}
+
+func answerTimingChallenge(t *testing.T, r *Receiver, c *connection, priv ed25519.PrivateKey) {
+	t.Helper()
+	f, err := timingFrame(t, c)
 	if err != nil || f.Type != mxwire.FrameChallenge {
 		t.Fatalf("challenge: %v, frame %v", err, f.Type)
 	}
@@ -120,9 +139,9 @@ func answerTimingChallenge(t *testing.T, r *Receiver, c *connection, body *httpt
 	synctest.Wait()
 }
 
-func assertTimingGrant(t *testing.T, r *Receiver, body *httptest.ResponseRecorder) {
+func assertTimingGrant(t *testing.T, r *Receiver, c *connection) {
 	t.Helper()
-	f, err := mxwire.ReadFrame(body.Body)
+	f, err := timingFrame(t, c)
 	if err != nil || f.Type != mxwire.FrameAuthResult {
 		t.Fatalf("result: %v, frame %v", err, f.Type)
 	}
@@ -156,13 +175,13 @@ func TestRetiredAuthenticationCannotGrant(t *testing.T) {
 						}
 					},
 				}, nil)
-				c, body := timingConnection(t, r)
+				c := timingConnection(t, r)
 				f, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{Domain: "example.test", KeyID: "key1"})
 				if err := r.auth(c, f); err != nil {
 					t.Fatal(err)
 				}
 				synctest.Wait()
-				answerTimingChallenge(t, r, c, body, priv)
+				answerTimingChallenge(t, r, c, priv)
 				if retire == "unregister" {
 					f, _ = mxwire.JSONFrame(mxwire.FrameDomainUnregister, 0, 1, mxwire.DomainNotice{Domain: "example.test"})
 					if err := r.unregister(c, f); err != nil {
@@ -201,13 +220,13 @@ func TestAuthenticationRecoversAfterDNSFailure(t *testing.T) {
 				return []*net.MX{{Host: "mx.test."}}, nil
 			},
 		}, nil)
-		c, body := timingConnection(t, r)
+		c := timingConnection(t, r)
 		f, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{Domain: "example.test", KeyID: "key1"})
 		if err := r.auth(c, f); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		result, err := mxwire.ReadFrame(body.Body)
+		result, err := timingFrame(t, c)
 		var rejected mxwire.AuthResult
 		if err != nil || mxwire.DecodeFrame(result, &rejected) != nil || rejected.Accepted || rejected.Reason != "dns_unavailable" {
 			t.Fatalf("expected DNS rejection: %+v, %v", rejected, err)
@@ -218,9 +237,9 @@ func TestAuthenticationRecoversAfterDNSFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		answerTimingChallenge(t, r, c, body, priv)
+		answerTimingChallenge(t, r, c, priv)
 		synctest.Wait()
-		assertTimingGrant(t, r, body)
+		assertTimingGrant(t, r, c)
 	})
 }
 
@@ -240,7 +259,7 @@ func TestAuthenticationFreshnessAndVerificationRemainBounded(t *testing.T) {
 						return nil, ctx.Err()
 					},
 				}, nil)
-				c, body := timingConnection(t, r)
+				c := timingConnection(t, r)
 				f, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{Domain: "example.test", KeyID: "key1"})
 				if err := r.auth(c, f); err != nil {
 					t.Fatal(err)
@@ -249,12 +268,12 @@ func TestAuthenticationFreshnessAndVerificationRemainBounded(t *testing.T) {
 				if phase == "late response" {
 					time.Sleep(mxwire.AuthChallengeTTL + time.Second)
 				}
-				answerTimingChallenge(t, r, c, body, priv)
+				answerTimingChallenge(t, r, c, priv)
 				if phase == "verification timeout" {
 					time.Sleep(mxwire.AuthVerifyTimeout + time.Second)
 					synctest.Wait()
 				}
-				result, err := mxwire.ReadFrame(body.Body)
+				result, err := timingFrame(t, c)
 				var rejected mxwire.AuthResult
 				if err != nil || mxwire.DecodeFrame(result, &rejected) != nil || rejected.Accepted {
 					t.Fatalf("expected bounded rejection: %+v, %v", rejected, err)
