@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The in-app Feedback panel is now a wide panel with a Back button, headed
+  "MailMoose is in active development", and points at the public repository
+  (`github.com/dellarb/mailmoose`) alongside the feedback address.
+
 - The relay WebSocket is no longer scheme-redirected behind a TLS front that
   omits `X-Forwarded-Proto` on upgrade requests, but only for an upgrade from a
   caller inside `TRUSTED_PROXIES`. `POST /relay/enroll` keeps the redirect: it
