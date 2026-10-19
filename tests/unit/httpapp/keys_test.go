@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -204,5 +205,52 @@ func TestCreateKeyRedirectsWithoutJSONAccept(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("create client = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestKeyFlashRendersCopyButton(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"create", "rotate"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			svc, h, u, _, box := httpFixture(t)
+			cookie, csrf := uiSession(t, svc, u.ID)
+			path := "/ui/keys"
+			if action == "rotate" {
+				key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "read"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				path += "/" + key.ID + "/rotate"
+			}
+			form := url.Values{"type": {"api"}, "name": {"Agent"}, "_csrf": {csrf}, "role_" + box.ID: {"read"}}
+			req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.AddCookie(cookie)
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/?_flash=") {
+				t.Fatalf("key %s = %d, location=%q", action, rr.Code, rr.Header().Get("Location"))
+			}
+			location := rr.Header().Get("Location")
+			get := func() *httptest.ResponseRecorder {
+				req := httptest.NewRequest("GET", location, nil)
+				req.AddCookie(cookie)
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != http.StatusOK {
+					t.Fatalf("dashboard = %d", rr.Code)
+				}
+				return rr
+			}
+			body := get().Body.String()
+			match := regexp.MustCompile(`<pre>(mmm_[A-Za-z0-9_-]+)</pre><button type="button" class="secondary" data-copy-value="([^"]+)">Copy</button>`).FindStringSubmatch(body)
+			if len(match) != 3 || match[1] != match[2] {
+				t.Fatal("one-time secret needs a Copy button for exactly the displayed key")
+			}
+			if strings.Contains(get().Body.String(), match[1]) {
+				t.Fatal("refresh exposed the one-time key again")
+			}
+		})
 	}
 }
