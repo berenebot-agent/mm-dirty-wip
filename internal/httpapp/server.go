@@ -1280,6 +1280,14 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 		case "/health", "/healthz", "/v1/health":
 			next.ServeHTTP(w, r)
 			return
+		case "/relay", "/relay/enroll":
+			// The relay WebSocket endpoint must never be scheme-redirected: a TLS-
+			// terminating front that omits X-Forwarded-Proto on upgrade requests
+			// would 308 this path, and a WebSocket client cannot follow an
+			// http->https redirect (it yields "scheme isn't ws or wss" on retry).
+			// A WS dial never legitimately needs a scheme redirect, so bypass it.
+			next.ServeHTTP(w, r)
+			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/internal/") {
 			next.ServeHTTP(w, r)
