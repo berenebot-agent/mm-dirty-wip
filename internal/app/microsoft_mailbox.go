@@ -195,7 +195,34 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 	if arrived > 0 {
 		m.WakeMicrosoftPush()
 	}
+	if err == nil && status.Status == store.RemoteIndexComplete {
+		m.dedupeMicrosoftOnce(ctx, account, inbox)
+	}
 	return status, err
+}
+
+// dedupeMicrosoftOnce folds an inbox's duplicated Microsoft cache rows once per
+// process. The sweep is a grouped query with no provider I/O; it exists because
+// rows written before the identity retarget kept one row per provider id form, and
+// the row the list showed could no longer be deleted.
+func (m *RemoteMailboxService) dedupeMicrosoftOnce(ctx context.Context, account, inbox string) {
+	m.refreshMu.Lock()
+	done := m.microsoftDeduped[inbox]
+	m.refreshMu.Unlock()
+	if done {
+		return
+	}
+	removed, err := m.Service.Store.DedupeMicrosoftInbox(ctx, account, inbox)
+	if err != nil {
+		m.Service.Log.Warn("microsoft dedupe", "inbox_id", inbox, "error", err)
+		return
+	}
+	m.refreshMu.Lock()
+	m.microsoftDeduped[inbox] = true
+	m.refreshMu.Unlock()
+	if removed > 0 {
+		m.Service.Log.Info("microsoft dedupe", "inbox_id", inbox, "removed", removed)
+	}
 }
 
 // reconcileMicrosoftQuick runs the cheap Microsoft detection pass: the Inbox
@@ -494,9 +521,58 @@ func (m *RemoteMailboxService) moveMicrosoft(ctx context.Context, p model.Princi
 	}
 	g, e := m.Microsoft.Move(ctx, t, c.Mailbox, provider, f.Path)
 	if e != nil {
+		if microsoftMissing(e) {
+			return m.moveMicrosoftRetiredID(ctx, p.AccountID, inbox, id, c.Mailbox, f.Path, t)
+		}
 		return RemoteMessageView{}, e
 	}
 	return m.cacheMicrosoft(ctx, p.AccountID, inbox, g)
+}
+
+// moveMicrosoftRetiredID finishes a move whose cached provider id the provider has
+// retired. Microsoft hands back one message under two id forms (the folder delta
+// and a move response disagree), and the delta's id stops resolving once the
+// message moves, so a cached row can hold an id Graph rejects although the message
+// is still there. The message is found again by its RFC Message-ID. When it is
+// already cached under another id, the row this action addressed is the stale twin
+// and is retired, so one message keeps one row.
+func (m *RemoteMailboxService) moveMicrosoftRetiredID(ctx context.Context, account, inbox, id, mailbox, dest, token string) (RemoteMessageView, error) {
+	rec, e := m.Service.Store.GetRemoteMessage(ctx, account, inbox, id)
+	if e != nil {
+		return RemoteMessageView{}, mapStoreError(e)
+	}
+	if strings.TrimSpace(rec.RFCMessageID) == "" {
+		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindNotFound, "the message no longer exists at the provider", false, nil)
+	}
+	live, e := m.Microsoft.MessageByInternetID(ctx, token, mailbox, rec.RFCMessageID)
+	if e != nil {
+		if !microsoftMissing(e) {
+			return RemoteMessageView{}, e
+		}
+		// The provider no longer has the message under any id: the move already
+		// took effect, or the mail is gone. Retire the dead row rather than report
+		// an action the user asked for as failed.
+		view := m.remoteView(ctx, rec)
+		view.FolderPath = dest
+		if de := m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); de != nil && !errors.Is(de, store.ErrNotFound) {
+			return RemoteMessageView{}, mapStoreError(de)
+		}
+		return view, nil
+	}
+	g, e := m.Microsoft.Move(ctx, token, mailbox, live.ID, dest)
+	if e != nil {
+		return RemoteMessageView{}, e
+	}
+	v, e := m.cacheMicrosoft(ctx, account, inbox, g)
+	if e != nil {
+		return RemoteMessageView{}, e
+	}
+	if v.ID != id {
+		if de := m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); de != nil && !errors.Is(de, store.ErrNotFound) {
+			return RemoteMessageView{}, mapStoreError(de)
+		}
+	}
+	return v, nil
 }
 func (m *RemoteMailboxService) microsoftLabels(ctx context.Context, p model.Principal, inbox, id string, names []string, mode string) (RemoteMessageView, error) {
 	v, e := m.getMicrosoft(ctx, p, inbox, id)

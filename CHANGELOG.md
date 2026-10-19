@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A Microsoft inbox no longer caches one message twice when the provider hands it
+  out under two ids. The folder delta and a move response disagree on the id, and
+  the delta's id stops resolving once the message moves, so the row the list showed
+  could not be deleted: the delete succeeded against the provider, the other row
+  updated, and the message reappeared straight away — after which every retry
+  failed with "provider rejected the request". A second id now updates the existing
+  row (matched on the message's RFC Message-ID), a move whose cached id the
+  provider has retired is completed against the live id and the dead row is
+  dropped, and a completed reconcile folds duplicates an inbox already had.
+
 - Creating a Hermes relay connection now shows the setup steps alongside the
   credentials: which `.env` file the gateway reads, that the `GATEWAY_RELAY_*`
   lines are replaced rather than duplicated, that the gateway only picks them up

@@ -121,6 +121,9 @@ type RemoteMailboxService struct {
 	roleRefreshing   map[string]bool
 	metadataTotals   map[string]map[string]int64
 	metadataChecking map[string]int
+	// microsoftDeduped records the Microsoft inboxes whose duplicate cache rows
+	// have been folded this process. Guarded by refreshMu.
+	microsoftDeduped map[string]bool
 }
 
 type remoteReconcileCall struct {
@@ -136,7 +139,7 @@ func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	if concurrency < 1 {
 		concurrency = 2
 	}
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), deltaSyncing: make(map[string]bool), roleRefreshing: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), deltaSyncing: make(map[string]bool), roleRefreshing: make(map[string]bool), microsoftDeduped: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs

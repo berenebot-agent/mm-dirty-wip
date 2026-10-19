@@ -3577,6 +3577,20 @@ dedicated/core listeners. This supports private self-hosted instances immediatel
 and reuses existing demand/proactive detection rather than requiring public HTTPS
 for every connection. Shared delegated mailboxes remain delta-polled.
 
+**Amendment (2026-10-19, bug fix):** A Microsoft message id is not a stable cache
+key. Graph serves one message under two id forms — the folder delta and a
+move/draft response disagree — and the delta's form stops resolving once the
+message moves, so keying the metadata row on the provider id grew a second row
+per message: the row the list showed could no longer be deleted (the move
+succeeded against the provider, the other row updated, and the listed row stayed
+in the Inbox), and every retry failed against the retired id. The row is now
+resolved by the message's RFC Message-ID when an unseen provider id arrives for
+a message already cached (one unambiguous match only), a move whose cached id the
+provider has retired re-resolves and retries against the live id and drops the
+dead row, and a completed reconcile folds duplicates an inbox had already
+accumulated. Immutable-ID requests remain as they were; the Message-ID is the
+identity the cache trusts.
+
 **Complexity/resource budget:** One additive migration, a standard-library Graph
 transport, provider-specific app orchestration and wizard/settings integration.
 Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency,

@@ -387,6 +387,34 @@ func (c *Client) Message(ctx context.Context, t, mailbox, id string) (Message, e
 	e := c.json(ctx, t, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select="+metadata, nil, &m, false)
 	return m, e
 }
+
+// MessageByInternetID resolves the one message carrying an RFC Message-ID in the
+// mailbox. Microsoft can hand back one message under two id forms (the delta feed
+// and a move response do not agree) and retire the id the feed gave once the
+// message moves, so a cached id can stop resolving while the message is still
+// there. The Message-ID is the stable identity to find it again by. Nothing found,
+// or more than one match (a resent copy), is reported as not found: the caller
+// must never guess which message to act on.
+func (c *Client) MessageByInternetID(ctx context.Context, t, mailbox, rfcID string) (Message, error) {
+	rfcID = strings.TrimSpace(rfcID)
+	if rfcID == "" {
+		return Message{}, failure(model.ErrKindNotFound, "message not found", false)
+	}
+	v := url.Values{
+		"$filter": {"internetMessageId eq '" + strings.ReplaceAll(rfcID, "'", "''") + "'"},
+		"$select": {metadata},
+		"$top":    {"2"},
+	}
+	var p MessagePage
+	if e := c.request(ctx, t, "GET", mailboxPath(mailbox)+"/messages?"+v.Encode(), "", nil, "", &p, nil, false); e != nil {
+		return Message{}, e
+	}
+	if len(p.Messages) != 1 {
+		return Message{}, failure(model.ErrKindNotFound, "message not found", false)
+	}
+	return p.Messages[0], nil
+}
+
 func (c *Client) Messages(ctx context.Context, t, mailbox, folder, query, cursor string, limit int) (MessagePage, error) {
 	path := mailboxPath(mailbox)
 	if folder != "" {

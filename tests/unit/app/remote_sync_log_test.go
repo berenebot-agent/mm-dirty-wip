@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -447,13 +448,40 @@ type microsoftLogFixture struct {
 	// folderEnumerations counts /mailFolders list calls, so a test can prove the
 	// quick detection path does not re-enumerate the folder tree.
 	folderEnumerations int
+	// retired holds message ids the provider no longer accepts (its id was
+	// replaced after a move), so a request naming one answers not found.
+	retired map[string]bool
+	// moves counts accepted and rejected /move calls, so a test can prove the
+	// retired id was tried before the live one.
+	moves int
 }
 
 // add appends a message to the inbox that the next delta pass will report.
 func (f *microsoftLogFixture) add(id, folder, subject string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.messages = append(f.messages, map[string]any{"id": id, "conversationId": "c-" + id, "parentFolderId": folder, "subject": subject, "receivedDateTime": "2026-10-11T10:00:00Z"})
+	f.messages = append(f.messages, map[string]any{"id": id, "conversationId": "c-" + id, "parentFolderId": folder, "subject": subject, "receivedDateTime": "2026-10-11T10:00:00Z", "internetMessageId": "<" + id + "@graph>"})
+}
+
+// retire makes the provider reject one message id, as Microsoft does once it has
+// re-issued the message under another id form.
+func (f *microsoftLogFixture) retire(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retired == nil {
+		f.retired = map[string]bool{}
+	}
+	f.retired[id] = true
+}
+
+// find returns the stored message with this provider id, or nil.
+func (f *microsoftLogFixture) find(id string) map[string]any {
+	for _, m := range f.messages {
+		if m["id"] == id {
+			return m
+		}
+	}
+	return nil
 }
 
 func (f *microsoftLogFixture) handle(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +495,31 @@ func (f *microsoftLogFixture) handle(w http.ResponseWriter, r *http.Request) {
 			value = append(value, m)
 		}
 		json.NewEncoder(w).Encode(map[string]any{"value": value, "@odata.deltaLink": f.url + r.URL.Path + "?cursor=1"})
+	case strings.HasSuffix(r.URL.Path, "/move"):
+		f.moves++
+		var body struct {
+			DestinationID string `json:"destinationId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		id := path.Base(strings.TrimSuffix(r.URL.Path, "/move"))
+		if f.retired[id] || f.find(id) == nil {
+			w.WriteHeader(404)
+			return
+		}
+		moved := map[string]any{}
+		for k, v := range f.find(id) {
+			moved[k] = v
+		}
+		moved["parentFolderId"] = body.DestinationID
+		json.NewEncoder(w).Encode(moved)
+	case r.URL.Query().Get("$filter") != "":
+		var value []any
+		for _, m := range f.messages {
+			if rfc, _ := m["internetMessageId"].(string); strings.Contains(r.URL.Query().Get("$filter"), "'"+rfc+"'") {
+				value = append(value, m)
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"value": value})
 	case strings.HasSuffix(r.URL.Path, "/mailFolders"):
 		f.folderEnumerations++
 		json.NewEncoder(w).Encode(map[string]any{"value": []any{map[string]any{"id": "inbox-id", "displayName": "Inbox", "totalItemCount": len(f.messages)}}})
