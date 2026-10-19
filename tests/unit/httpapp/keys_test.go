@@ -56,7 +56,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`, `id="key-openclaw-alpha"`} {
+	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`, `id="key-openclaw-alpha"`, `id="key-hermes-guide"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -89,7 +89,11 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		!strings.Contains(asset, "inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-edit-form')") ||
 		!strings.Contains(asset, "showInboxSubview") ||
 		!strings.Contains(asset, "#key-dialog #key-form>.dialog-actions") ||
-		!strings.Contains(asset, "openclawAlpha.hidden = sel.value !== 'openclaw'") {
+		!strings.Contains(asset, "openclawAlpha.hidden = sel.value !== 'openclaw'") ||
+		// The Hermes guide carries the .env path, the replace-not-append trap and
+		// the restart, so it must render for a Hermes creation and stay hidden for
+		// every other kind.
+		!strings.Contains(asset, "key-hermes-guide').hidden = sel.value !== 'hermes'") {
 		t.Fatalf("connector setup script does not remove inbox-level controls: status=%d", assetRR.Code)
 	}
 	if strings.Contains(body, "<h2>Hermes Relay</h2>") {

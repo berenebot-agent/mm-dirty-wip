@@ -1297,6 +1297,7 @@
     resultLabel.textContent = data.label || '';
     resultSecret.textContent = data.secret || '';
     document.getElementById('key-openclaw-guide').hidden = sel.value !== 'openclaw';
+    document.getElementById('key-hermes-guide').hidden = sel.value !== 'hermes';
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
