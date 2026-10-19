@@ -136,6 +136,7 @@ See the [agent connector guide](docs/CONNECTORS.md).
 | [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
 | [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
 | [API](docs/API.md) | Endpoints, permissions, drafts and events |
+| [Decisions](docs/DECISIONS.md) | Architecture decisions and their rationale (maintainers) |
 
 ## Contributing
 
