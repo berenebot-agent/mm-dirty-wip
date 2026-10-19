@@ -1788,7 +1788,11 @@ func (s *session) notice(f mxwire.Frame, revoked bool) error {
 		// The receiver holds a newer binding from another connection. Park the
 		// pin: no new resolve and no re-auth reclaim, but already-pinned
 		// transactions may still ingest DATA until the old authorization
-		// expires.
+		// expires. Log it: this instance stops receiving on that connector and
+		// will not recover without a restart, so it must not be silent.
+		slog.Warn("mxdial domain replaced by another connection",
+			"domain", n.Domain, "receiver", s.url, "key_id", ad.domain.KeyID,
+			"receiver_id", s.ready.ReceiverID, "connection_id", s.ready.ConnectionID)
 		ad.state = authReplaced
 		ad.proofNonce = ""
 	case revoked || n.Reason == "revoked" || n.Reason == "auth_expired":
