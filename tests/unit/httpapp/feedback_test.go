@@ -9,7 +9,8 @@ import (
 )
 
 // TestFeedbackButtonOnSignedInShell asserts the global header exposes the
-// feedback entry point and its mailto target once a user is signed in.
+// feedback entry point and its mailto and repository targets once a user is
+// signed in.
 func TestFeedbackButtonOnSignedInShell(t *testing.T) {
 	t.Parallel()
 	_, h, u, _, _ := httpFixture(t)
@@ -47,6 +48,9 @@ func TestFeedbackButtonOnSignedInShell(t *testing.T) {
 	}
 	if !strings.Contains(body, `mailto:mailmoose@hgolabs.com`) {
 		t.Fatalf("signed-in shell has no feedback mailto link")
+	}
+	if !strings.Contains(body, `id="feedback-github"`) || !strings.Contains(body, `https://github.com/dellarb/mailmoose`) {
+		t.Fatalf("signed-in shell has no feedback repository link")
 	}
 }
 
