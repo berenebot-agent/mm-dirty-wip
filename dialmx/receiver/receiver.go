@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	challengeTTL = 10 * time.Second
+	challengeTTL = mxwire.AuthChallengeTTL
 
 	// Bounds for source-IP behaviour. The per-IP connection cap stops one
 	// sender consuming every connection slot; the per-IP connection window
@@ -105,8 +105,9 @@ type Config struct {
 	// MaxConnections so the receiver is bounded on its own terms.
 	MaxTransactions int
 
-	// AuthTimeout bounds one DNS proof, ResolveTimeout one recipient resolve and
-	// IngestTimeout one staged message handoff.
+	// AuthTimeout bounds each DNS lookup within the protocol's separate 30-second
+	// initial-lookup and verification budgets. ResolveTimeout bounds one recipient
+	// resolve and IngestTimeout one staged message handoff.
 	AuthTimeout, ResolveTimeout, IngestTimeout time.Duration
 	// RevalidateInterval is the nominal renewal period. A binding is renewed
 	// when its renewAt deadline passes, which is derived from the grant rather
@@ -403,11 +404,12 @@ type binding struct {
 // challenge is one in-flight challenge. binding is nil for an initial
 // authentication and non-nil for a maintenance renewal.
 type challenge struct {
-	value   mxwire.Challenge
-	expires time.Time
-	keyID   string
-	domain  string
-	binding *binding
+	value     mxwire.Challenge
+	expires   time.Time
+	keyID     string
+	domain    string
+	binding   *binding
+	verifying bool
 	// contactEmail/setupID are the optional registration metadata echoed from
 	// the DomainAuth that started this challenge.
 	contactEmail string
@@ -1278,7 +1280,13 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 			return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, "replaced", time.Time{}, &proofTrace{})
 		}
 	}
-	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(challengeTTL), contactEmail: contactEmail, setupID: setupID}
+	// A newer attempt on this connection supersedes unfinished work for the domain.
+	for ch, pending := range c.challenges {
+		if pending.domain == d {
+			delete(c.challenges, ch)
+		}
+	}
+	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(mxwire.AuthLookupTimeout), contactEmail: contactEmail, setupID: setupID}
 	r.mu.Unlock()
 	if !r.spawn(c, func() { r.initialAuth(c, f.ChannelID, d, a.KeyID) }) {
 		r.dropChallenge(c, f.ChannelID)
@@ -1298,7 +1306,7 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 		return
 	}
 	defer r.releaseAuth(c)
-	ctx, cancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, min(r.cfg.AuthTimeout, mxwire.AuthLookupTimeout))
 	defer cancel()
 	txt, err := r.lookupTXT(ctx, d)
 	r.logProof(c, "dns_lookup", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
@@ -1331,6 +1339,7 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 		return
 	}
 	ent.value = issued
+	ent.expires = time.Now().Add(challengeTTL)
 	c.challenges[ch] = ent
 	r.mu.Unlock()
 	_ = r.send(c, mxwire.FrameChallenge, 0, ch, issued)
@@ -1378,11 +1387,8 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 	now := time.Now()
 	r.mu.Lock()
 	issued, ok := c.challenges[f.ChannelID]
-	if ok {
-		delete(c.challenges, f.ChannelID)
-	}
-	r.mu.Unlock()
-	if !ok || !now.Before(issued.expires) || issued.value.Nonce == "" || issued.domain != x.Domain || issued.keyID != x.KeyID || issued.value.Nonce != x.Nonce {
+	if !ok || issued.verifying || !now.Before(issued.expires) || issued.value.Nonce == "" || issued.domain != x.Domain || issued.keyID != x.KeyID || issued.value.Nonce != x.Nonce {
+		r.mu.Unlock()
 		// Damp only the domain that was actually challenged; a mismatched
 		// response's own domain is attacker-chosen and must not seed cooldown
 		// entries for arbitrary names.
@@ -1391,13 +1397,28 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 		}
 		return r.authReply(c, f.ChannelID, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, &proofTrace{})
 	}
+	// Freshness was checked on receipt; DNS verification has its own deadline.
+	issued.verifying = true
+	issued.expires = now.Add(mxwire.AuthVerifyTimeout)
+	c.challenges[f.ChannelID] = issued
+	r.mu.Unlock()
 	if !r.spawn(c, func() { r.verifyProof(c, f.ChannelID, issued, x) }) {
+		r.dropChallenge(c, f.ChannelID)
 		return nil
 	}
 	return nil
 }
 
 func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxwire.ChallengeResponse) {
+	defer func() {
+		r.mu.Lock()
+		if pending := c.challenges[ch]; pending.value.Nonce == issued.value.Nonce {
+			delete(c.challenges, ch)
+		}
+		r.mu.Unlock()
+	}()
+	verifyCtx, verifyCancel := context.WithDeadline(c.ctx, issued.expires)
+	defer verifyCancel()
 	started := time.Now()
 	trace := &proofTrace{}
 	if ok, reason := r.acquireAuth(c, x.Domain); !ok {
@@ -1419,7 +1440,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		return
 	}
 	defer r.releaseAuth(c)
-	ctx, cancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
+	ctx, cancel := context.WithTimeout(verifyCtx, r.cfg.AuthTimeout)
 	txt, e := r.lookupTXT(ctx, x.Domain)
 	cancel()
 	r.logProof(c, "dns_lookup", x.Domain, x.KeyID, resultWord(e == nil), boundedReason(e), time.Since(started))
@@ -1440,16 +1461,6 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "proof_invalid", time.Time{}, trace)
 		return
 	}
-	now := time.Now()
-	if !now.Before(issued.expires) {
-		if issued.binding != nil {
-			r.revoke(issued.binding, "reauth_failed")
-		}
-		r.logProof(c, "challenge", x.Domain, x.KeyID, "rejected", "challenge_expired", time.Since(started))
-		trace.add("challenge", "rejected", "challenge_expired")
-		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, trace)
-		return
-	}
 	// Routing gate: authority is proven, but this receiver only accepts the
 	// domain when its own SMTP hostname is published in the domain's MX. A
 	// resolver failure here is transient and deferrable — it must not revoke a
@@ -1464,7 +1475,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	// not_mx verdict too — otherwise deleting the record would be deferred
 	// forever and the binding would never fail closed. Only an error that
 	// leaves the question unanswered (timeout, SERVFAIL, refused) defers.
-	mxCtx, mxCancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
+	mxCtx, mxCancel := context.WithTimeout(verifyCtx, r.cfg.AuthTimeout)
 	mxs, mxErr := r.lookupMX(mxCtx, x.Domain)
 	mxCancel()
 	r.logProof(c, "mx_lookup", x.Domain, x.KeyID, resultWord(mxErr == nil), boundedReason(mxErr), time.Since(started))
@@ -1494,13 +1505,14 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, reasonNotMX, time.Time{}, trace)
 		return
 	}
+	now := time.Now()
 	if issued.binding != nil {
 		// Renewal: only the exact binding identity may be extended. The grant
 		// is capped at AuthLifetime from now (never extended past a cached
 		// ceiling) and the new renewAt is derived from the fresh grant.
 		r.mu.Lock()
 		b := issued.binding
-		if c.closing || b.state != bindActive || b.c != c || b.channel != ch || c.domains[ch] != b || r.domains[b.domain] != b {
+		if _, ok := c.challenges[ch]; !ok || !time.Now().Before(issued.expires) || c.closing || b.state != bindActive || b.c != c || b.channel != ch || c.domains[ch] != b || r.domains[b.domain] != b {
 			r.mu.Unlock()
 			r.logProof(c, "renewal", x.Domain, x.KeyID, "rejected", "superseded", time.Since(started))
 			trace.add("renewal", "rejected", "superseded")
@@ -1512,6 +1524,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		// Renew on the configured cadence measured from the fresh grant, so a
 		// renewal always starts before expiry even when auth completed late.
 		b.renewAt = now.Add(r.cfg.RevalidateInterval)
+		delete(c.challenges, ch)
 		exp := b.expires
 		expiresIn := time.Until(exp)
 		email, setupID := b.contactEmail, b.setupID
@@ -1524,7 +1537,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	}
 	// Initial authentication: install a new binding, superseding any other.
 	r.mu.Lock()
-	if c.closing {
+	if _, ok := c.challenges[ch]; !ok || !time.Now().Before(issued.expires) || c.closing {
 		r.mu.Unlock()
 		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "closing", time.Since(started))
 		trace.add("registration", "rejected", "closing")
@@ -1548,6 +1561,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	}
 	b := &binding{c: c, channel: ch, domain: x.Domain, keyID: x.KeyID, state: bindActive, expires: now.Add(authProofLifetime), renewAt: now.Add(r.cfg.RevalidateInterval), pub: pub, contactEmail: issued.contactEmail, setupID: issued.setupID}
 	c.domains[ch] = b
+	delete(c.challenges, ch)
 	r.domains[x.Domain] = b
 	r.mu.Unlock()
 	r.clearDomainCooldown(c, x.Domain)
@@ -1575,6 +1589,7 @@ func (r *Receiver) unregister(c *connection, f mxwire.Frame) error {
 	}
 	r.mu.Lock()
 	b := c.domains[f.ChannelID]
+	delete(c.challenges, f.ChannelID)
 	delete(c.domains, f.ChannelID)
 	if b != nil {
 		b.state = bindRevoked

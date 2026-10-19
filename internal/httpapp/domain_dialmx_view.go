@@ -198,15 +198,11 @@ func (s *Server) dialMXExtraMX(domainID string) []string {
 // is a "dns-light" token ("ok", "amber" or "danger") and title is the human
 // explanation for its tooltip.
 //
-// A replaced binding is the one failure a ready sibling must not hide: it means
-// another connection authenticated this domain's key and now owns the receiver,
-// so this instance is not receiving on that connector and will not reclaim it
-// until it restarts. Mail addressed to the replaced connector is going somewhere
-// else, which is not an amber "in progress" condition.
+// A ready sibling must not hide a replaced binding: another connection owns it.
 func dialMXHealth(statuses []mxdialStatusView, unexpectedMX []string, now time.Time) (light, title string) {
 	for _, st := range statuses {
 		if st.Reason == "replaced" {
-			return "danger", "Another connection took over this domain's inbound authorization — a second MailMoose instance using the same domain is probably running. Stop it, then restart this instance"
+			return "danger", "Another connection took over this receiver's domain binding — check for another MailMoose instance using the same domain key"
 		}
 	}
 	ready := 0

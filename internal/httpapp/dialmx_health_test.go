@@ -3,7 +3,7 @@ package httpapp
 // This suite lives in package httpapp rather than under tests/unit because
 // dialMXHealth is an unexported rendering helper whose aggregate rule (any
 // ready receiver and no extra MX => green, ready with extra MX => amber,
-// otherwise red) is exactly the traffic-light contract worth pinning. The
+// replaced binding => red regardless of siblings) is worth pinning. The
 // black-box convention cannot reach it. It uses no database or server.
 
 import (
@@ -13,6 +13,7 @@ import (
 )
 
 func TestDialMXHealthAggregatesReceiverStatus(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	future := now.Add(5 * time.Minute)
 	past := now.Add(-time.Minute)
@@ -34,10 +35,9 @@ func TestDialMXHealthAggregatesReceiverStatus(t *testing.T) {
 		{"reconnecting and rejected", []mxdialStatusView{{State: "disconnected"}, {State: "rejected"}}, nil, "danger", ""},
 		{"not_mx is not ready", []mxdialStatusView{{State: "rejected", Reason: "not_mx", SMTPHostname: "mx1.test"}}, nil, "danger", ""},
 		{"one ready and one not_mx", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "rejected", Reason: "not_mx"}}, nil, "ok", ""},
-		// Replaced is the one failure a ready sibling must not hide: another
-		// connection owns this domain's receiver binding, so this instance is
-		// not receiving on it and cannot reclaim it without a restart.
+		// A ready sibling must not hide another connection owning the binding.
 		{"replaced overrides a ready sibling", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "unavailable", Reason: "replaced"}}, nil, "danger", "another connection"},
+		{"replaced overrides extra MX amber", []mxdialStatusView{{State: "unavailable", Reason: "replaced"}, {State: "ready", ExpiresAt: &future}}, []string{"old.example.test"}, "danger", "another connection"},
 		{"ready with extra MX", []mxdialStatusView{{State: "ready", ExpiresAt: &future}}, []string{"old.example.test"}, "amber", ""},
 		{"no ready with extra MX stays red", []mxdialStatusView{{State: "connecting"}}, []string{"old.example.test"}, "danger", ""},
 	} {

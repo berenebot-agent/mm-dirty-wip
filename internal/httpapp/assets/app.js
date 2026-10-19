@@ -6306,9 +6306,6 @@ function generateBearerSecret() {
         case 'mode_mismatch': return 'Wrong receiver mode';
         case 'protocol_mismatch': return 'Receiver protocol mismatch';
         case 'destination_not_allowed': return 'Blocked — receiver destination not allowed';
-        // Another core authenticated this domain's key and took the receiver
-        // binding: only one instance may serve a domain, so this one stays
-        // parked until it restarts.
         case 'replaced': return 'Replaced by another connection';
       }
       // Ready when this page was rendered, but the authorization window has
