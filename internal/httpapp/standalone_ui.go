@@ -381,13 +381,10 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		Notice:            r.URL.Query().Get("notice"),
 	}
 	if box.Kind == model.InboxKindStandalone {
-		data.StandaloneMode = true
-		data.StandaloneConfigured = box.RemoteConfigured && box.Remote != nil
-		data.StandalonePlain = box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain
-		data.RemoteConnectorURL = "/ui/inboxes/" + box.ID + "/remote"
-		if view, verr := s.remoteConfigView(r.Context(), p, box.ID); verr == nil {
-			data.RemoteConfig = view
-		}
+		// The shared standalone decoration, not a hand-rolled copy: it also
+		// carries the provider connection state the reconnect banner needs, which
+		// this page used to omit entirely.
+		s.applyStandaloneMailbox(r, p, box, &data)
 	}
 	s.pendingMessageOverlay(r, &data)
 	s.renderMail(w, r, folderBody, data)

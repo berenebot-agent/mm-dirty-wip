@@ -510,7 +510,7 @@
   // "error" and "paused" need attention.
   var SYNC_RANK = { error: 0, paused: 0, running: 1, queued: 2, waiting: 3 };
   var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Downloading', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
-  var csrf = '', items = [], syncs = [], displaySyncs = [], active = false;
+  var csrf = '', items = [], syncs = [], displaySyncs = [], connections = {}, active = false;
   var bubble = document.createElement('dialog');
   bubble.id = 'action-queue';
   bubble.tabIndex = -1;
@@ -747,6 +747,14 @@
     for (var i = 0; i < displaySyncs.length; i++) {
       if (displaySyncs[i].inbox_id === inbox) { match = displaySyncs[i]; break; }
     }
+    // A rejected authorization has its own banner with the reconnect control.
+    // When this page was rendered before the verdict was recorded, build that
+    // banner here so the operator can repair it without reloading.
+    var conn = connections[inbox];
+    if (conn && conn.state === 'disconnected') { syncReconnectBanner(conn, inbox); }
+    // Once that banner is on the page it carries the verdict and the control, so
+    // the strip never repeats the same line.
+    if (match && conn && conn.state === 'disconnected' && match.state === 'error' && match.error && match.error === conn.detail) { match = null; }
     if (!match) {
       banner.hidden = true;
       banner.textContent = '';
@@ -797,6 +805,7 @@
     items = (data.items || []).filter(function (a) { return a.state !== 'done' || (a.input && a.input.kind === 'empty_trash'); });
     syncs = data.syncs || [];
     displaySyncs = syncs.filter(shouldDisplaySync);
+    connections = data.connections || {};
     // The header spinner reads every status, so routine refreshes still show
     // there while staying out of the banner, rows and counts.
     if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
@@ -5641,39 +5650,8 @@ function generateBearerSecret() {
     fetch(host.dataset.readUrl, { method: 'POST', credentials: 'same-origin', body: form }).catch(function () {});
     host.dataset.unread = '';
   }
-  // reconnectBanner mirrors the server-rendered per-inbox reconnect banner for a
-  // failure the client only discovers after the page has painted. The One control
-  // opens the shared in-place dialog (its handler is delegated on document), so a
-  // dynamically built button behaves exactly like the static one.
-  function reconnectBanner(conn) {
-    var banner = document.createElement('div');
-    banner.className = 'banner danger';
-    banner.setAttribute('role', 'alert');
-    banner.setAttribute('data-inbox-reconnect', '');
-    var text = document.createElement('span');
-    text.textContent = conn.detail || 'This connection needs to be reconnected.';
-    banner.appendChild(text);
-    var inboxID = document.body.getAttribute('data-inbox') || '';
-    if (conn.reconnect === 'one') {
-      var button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'secondary btn-sm';
-      button.setAttribute('data-one-reconnect', '');
-      button.setAttribute('data-inbox', inboxID);
-      button.textContent = conn.action_label || 'Reconnect with One';
-      banner.appendChild(button);
-    } else if (conn.reconnect) {
-      var link = document.createElement('a');
-      link.className = 'btn secondary btn-sm';
-      var field = conn.reconnect === 'microsoft' ? 'microsoft_inbox' : 'google_inbox';
-      link.href = '/ui/inboxes/standalone/new?' + field + '=' + encodeURIComponent(inboxID);
-      link.textContent = conn.action_label || 'Reconnect';
-      link.setAttribute('data-inbox', inboxID);
-      link.setAttribute(conn.reconnect === 'microsoft' ? 'data-microsoft-reconnect' : 'data-google-reconnect-now', '');
-      banner.appendChild(link);
-    }
-    return banner;
-  }
+  // load() renders the message body; the reconnect banner it may need is built
+  // by the shared mailmooseReconnectBanner helper.
   function load() {
     if (active) { return; }
     active = true;
@@ -5769,7 +5747,7 @@ function generateBearerSecret() {
       // Retry that could only fail again.
       var conn = failure && failure.connection;
       if (conn && conn.state === 'disconnected') {
-        host.replaceChildren(reconnectBanner(conn));
+        host.replaceChildren(window.mailmooseReconnectBanner(conn));
         return;
       }
       host.replaceChildren(status);
@@ -8454,6 +8432,59 @@ function generateBearerSecret() {
     });
   });
 })();
+
+// mailmooseReconnectBanner builds the per-inbox reconnect banner the server
+// renders, from the connection state the /ui/actions poll reports. It is used by
+// the message reader (a failure the client only discovers after painting) and by
+// the sync strip (a verdict recorded while the page is already open), so both
+// surfaces show the same control. The controls keep the same hooks as the
+// server-rendered markup: the delegated handlers below open the One dialog or
+// start the provider's in-place reconnect.
+function mailmooseReconnectBanner(conn, inboxID) {
+  var banner = document.createElement('div');
+  banner.className = 'banner danger';
+  banner.setAttribute('role', 'alert');
+  banner.setAttribute('data-inbox-reconnect', '');
+  var text = document.createElement('span');
+  text.textContent = conn.detail || 'This connection needs to be reconnected.';
+  banner.appendChild(text);
+  inboxID = inboxID || document.body.getAttribute('data-inbox') || '';
+  if (conn.reconnect === 'one') {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary btn-sm';
+    button.setAttribute('data-one-reconnect', '');
+    button.setAttribute('data-inbox', inboxID);
+    button.textContent = conn.action_label || 'Reconnect with One';
+    banner.appendChild(button);
+  } else if (conn.reconnect === 'imap') {
+    var settings = document.createElement('a');
+    settings.className = 'btn secondary btn-sm';
+    settings.href = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/remote';
+    settings.textContent = conn.action_label || 'Reconnect IMAP';
+    banner.appendChild(settings);
+  } else if (conn.reconnect) {
+    var link = document.createElement('a');
+    link.className = 'btn secondary btn-sm';
+    var field = conn.reconnect === 'microsoft' ? 'microsoft_inbox' : 'google_inbox';
+    link.href = '/ui/inboxes/standalone/new?' + field + '=' + encodeURIComponent(inboxID);
+    link.textContent = conn.action_label || 'Reconnect';
+    link.setAttribute('data-inbox', inboxID);
+    link.setAttribute(conn.reconnect === 'microsoft' ? 'data-microsoft-reconnect' : 'data-google-reconnect-now', '');
+    banner.appendChild(link);
+  }
+  return banner;
+}
+window.mailmooseReconnectBanner = mailmooseReconnectBanner;
+
+// syncReconnectBanner puts that banner at the top of the mailbox content when
+// the page did not already render one, so a connection the provider rejected
+// mid-visit is actionable without a reload.
+function syncReconnectBanner(conn, inboxID) {
+  var content = document.querySelector('.mailcontent');
+  if (!content || content.querySelector('[data-inbox-reconnect]')) { return; }
+  content.insertBefore(mailmooseReconnectBanner(conn, inboxID), content.firstChild);
+}
 
 // The One import screen lets the operator tick whole rows. Any click in a row
 // toggles its checkbox, highlights while selected, and shows None in the

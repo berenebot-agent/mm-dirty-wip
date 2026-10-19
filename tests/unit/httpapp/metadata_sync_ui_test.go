@@ -184,6 +184,13 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		"displaySyncs",
 		"displaySyncs.forEach",
 		"displaySyncs.slice",
+		// The reconnect verdict rides the same poll: its own banner carries the
+		// control, so the strip must not repeat the line and a verdict recorded
+		// while the page is open must be actionable without a reload.
+		"connections",
+		"mailmooseReconnectBanner",
+		"syncReconnectBanner",
+		"data-inbox-reconnect",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing sync wiring %q", want)
