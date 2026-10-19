@@ -59,8 +59,10 @@ closed as accepted, so please check here before spending effort on one.
 
 **Status:** accepted Low risk — decisions `D058`, `D059` and `D133` in `docs/DECISIONS.md`.
 
-The approval workflow compares the reported envelope sender and MIME `From:`
-with the nominated approver. These comparisons are not proof of sender identity:
+The approval workflow compares the message MIME `From:` with the nominated
+approver. The transport envelope sender is recorded as relay metadata but is not
+an approval input (`D140` removed that requirement). The comparison is not proof
+of sender identity:
 
 - **Mailgun** — the webhook HMAC covers only `timestamp + token`
   (`internal/transport/mailgun/inbound.go`), so the `sender` form field is not
@@ -75,11 +77,12 @@ with the nominated approver. These comparisons are not proof of sender identity:
   asserts. Postmark does not sign inbound webhooks.
 - **Resend** — the adapter assigns Svix-signed webhook `data.from` to
   `EnvelopeFrom`. Signing a reported `From:` value authenticates Resend's report,
-  not the original sender or an independent SMTP envelope. The two address checks
-  may therefore compare the same attacker-asserted identity twice. An attacker
-  does not need Resend's signing secret if Resend delivers their spoofed message.
+  not the original sender or an independent SMTP envelope. The comparison
+  therefore consumes the same attacker-asserted identity the provider reports.
+  An attacker does not need Resend's signing secret if Resend delivers their
+  spoofed message.
 
-**Exposure:** an attacker who can deliver a message satisfying the sender checks
+**Exposure:** an attacker who can deliver a message satisfying the sender check
 still needs the **correct, live, 128-bit single-use approval token**. The token
 permits a decision only on its associated pending request, whose reviewed content
 is bound to the request. This is not demonstrated account takeover, general
@@ -88,10 +91,10 @@ can nevertheless send the draft's existing content and attachments to its existi
 recipients; unauthorized rejection can stop that request. It is not a guarantee
 against data disclosure through the approved email.
 
-**Why it is retained:** failing closed on an unattested envelope sender breaks
-email-based draft approvals for the providers that pass one through, which are
-supported and documented inbound providers. The maintainer judged the residual
-risk lower than losing that capability.
+**Why it is retained:** no webhook provider attests the sender, so failing the
+comparison closed would remove email-based draft approvals entirely. The
+maintainer judged the residual risk lower than losing that capability; the live
+single-use token and the frozen-content binding carry the decision.
 
 **Eventual fix (out of scope until then):** carry a provenance flag on inbound
 messages so an unattested envelope sender can never be consumed as attested, or
@@ -160,7 +163,8 @@ connected mailbox and returned to MailMoose over a path whose envelope sender is
 not attested. The approval decision therefore matches the **message `From`
 address** directly against the nominated approver
 (`Service.HandleRemoteApprovalControl` in `internal/app/control.go`), together
-with the 128-bit single-use approval token.
+with the 128-bit single-use approval token, as the webhook path now does
+(`D140`).
 
 The consequence is the same class of exposure as `D058`/`D059`: a caller who can
 place mail in the connected mailbox can assert the approver's `From` address.

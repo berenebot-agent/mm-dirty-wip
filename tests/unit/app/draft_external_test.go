@@ -483,27 +483,12 @@ func controlRequestFor(t *testing.T, svc *app.Service, u model.User, box model.I
 	return approvalToken(t, svc, u.AccountID, box.ID)
 }
 
-// TestExternalApprovalEnvelopeBinding proves the approval decision is bound to
-// the provider-attested envelope sender, not the spoofable MIME From header.
-func TestExternalApprovalEnvelopeBinding(t *testing.T) {
+// TestExternalApprovalSenderBinding proves the approval decision is bound to
+// the message From address and the one-time token; the provider envelope sender
+// is untrusted relay metadata, not an approval input (D140).
+func TestExternalApprovalSenderBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-
-	t.Run("spoofed MIME From is rejected", func(t *testing.T) {
-		svc, u, dom, box := testService(t)
-		svc.Config.ApprovalExpiryHours = 48
-		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
-		token := controlRequestFor(t, svc, u, box)
-		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
-		// Envelope is the attacker; the header claims the approver.
-		req := mgControlRequestFrom(t, testMailgunKey, "ctl-spoof", box.Address, "mallory@evil.test", "Ben <"+approverAddress+">", "[GH-APPROVE:"+token+"]", body)
-		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
-			t.Fatalf("ingest err=%v", err)
-		}
-		if !pendingRequestStillOpen(t, svc, u, box) {
-			t.Fatal("spoofed MIME From authorized the request")
-		}
-	})
 
 	t.Run("spoofed header with approver envelope is rejected", func(t *testing.T) {
 		svc, u, dom, box := testService(t)
@@ -520,7 +505,7 @@ func TestExternalApprovalEnvelopeBinding(t *testing.T) {
 		}
 	})
 
-	t.Run("missing envelope is rejected", func(t *testing.T) {
+	t.Run("missing envelope with approver header approves", func(t *testing.T) {
 		svc, u, dom, box := testService(t)
 		svc.Config.ApprovalExpiryHours = 48
 		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -530,8 +515,25 @@ func TestExternalApprovalEnvelopeBinding(t *testing.T) {
 		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
 			t.Fatalf("ingest err=%v", err)
 		}
-		if !pendingRequestStillOpen(t, svc, u, box) {
-			t.Fatal("missing envelope authorized the request")
+		if pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("missing envelope blocked a valid From approval")
+		}
+	})
+
+	t.Run("ESP-rewritten envelope with approver header approves", func(t *testing.T) {
+		svc, u, dom, box := testService(t)
+		svc.Config.ApprovalExpiryHours = 48
+		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+		token := controlRequestFor(t, svc, u, box)
+		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
+		// Brevo and similar ESPs rewrite MAIL FROM to their own bounce address
+		// while the message From stays the approver.
+		req := mgControlRequestFrom(t, testMailgunKey, "ctl-esp", box.Address, "bounce@esp.test", "Ben <"+approverAddress+">", "[GH-APPROVE:"+token+"]", body)
+		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+			t.Fatalf("ingest err=%v", err)
+		}
+		if pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("ESP-rewritten envelope blocked a valid From approval")
 		}
 	})
 

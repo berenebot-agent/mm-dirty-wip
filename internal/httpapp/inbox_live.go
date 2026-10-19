@@ -274,7 +274,11 @@ func (s *Server) buildSendRequests(r *http.Request, p model.Principal, id string
 			continue
 		}
 		atts, _ := s.Service.Store.ListDraftAttachments(r.Context(), p, d.ID)
-		out = append(out, SendRequestRow{Request: sr, Draft: d, SizeBytes: draftDisplaySize(d, atts)})
+		row := SendRequestRow{Request: sr, Draft: d, SizeBytes: draftDisplaySize(d, atts)}
+		if cm, ok, cerr := s.Service.Store.LatestInvalidReply(r.Context(), p.AccountID, id, sr.ID); cerr == nil && ok {
+			row.InvalidReply = &cm
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }
