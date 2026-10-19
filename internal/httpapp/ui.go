@@ -643,6 +643,12 @@ type pageData struct {
 	// a mailbox, a folder, a message) set it, so the One setup and import screens,
 	// which have their own key entry, never carry a second api_key field.
 	ShowOneReconnect bool
+	// GoogleClientID and GoogleReconnect prefill the Google wizard when it was
+	// opened to reconnect an existing Gmail inbox: the stored client ID is typed
+	// back in, and the client-secret entry becomes optional because the stored
+	// secret is reused when it is left blank.
+	GoogleClientID  string
+	GoogleReconnect bool
 	// StandaloneInboxes lists the account's standalone inboxes, for the key-dialog
 	// role matrix (they have no managed domain to appear under).
 	StandaloneInboxes      []model.Inbox
