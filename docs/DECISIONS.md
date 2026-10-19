@@ -1397,6 +1397,10 @@ spoof `https` to bypass the redirect and `Secure` cookies. Request `Host`
 headers are attacker-controlled, so echoing them in a 308 enables phishing
 redirects and cache poisoning.
 
+> **Amended by D141:** a WebSocket upgrade to `/relay` from a caller inside
+> `TRUSTED_PROXIES` is not redirected. Every other path, including
+> `POST /relay/enroll`, keeps the redirect above.
+
 ## D054 — Operator MX edge secrets require 256 bits
 
 **Decision:** Every operator-supplied MX edge HMAC secret (`MX_EDGE_KEYS`
@@ -5693,3 +5697,43 @@ token, nominated-approver, expiry and content-fingerprint binding stand.
 
 **Complexity:** One condition removed from the control handler, one indexed store
 read and two UI lines. No schema, dependency or runtime service change.
+
+## D141 — Only a trusted proxy passes a relay upgrade through the HTTPS redirect
+
+**Context:** A connector behind Traefik reached the relay over HTTPS, but the
+proxy omits `X-Forwarded-Proto` on WebSocket upgrade requests. `httpsRedirect`
+then saw plaintext and answered `GET /relay` with a 308 to the canonical
+`https://` origin. A WebSocket client cannot follow that redirect, so the relay
+failed as `InvalidURI` / "scheme isn't ws or wss". The first fix exempted both
+`/relay` and `/relay/enroll` from the redirect for every caller and method.
+
+**Decision:** `httpsRedirect` skips the redirect only for `GET /relay` when the
+request carries a real WebSocket upgrade (`Upgrade: websocket` plus a
+`Connection: upgrade` token, the same two-header test gorilla/websocket
+applies) **and** the caller is trusted (`TRUSTED_PROXIES` matched, or the app
+itself terminated TLS, which already passes earlier). No other path or method is
+exempt: `POST /relay/enroll` is redirected whenever the scheme is unproven.
+
+**Reason:** The enrollment POST mints a new relay secret and returns it in the
+response body, and the default `docker-compose.yml` publishes
+`0.0.0.0:8081`. Exempting it meant an operator who mistakenly exposed that port
+could have a relay credential issued over cleartext with `FORCE_HTTPS=true`,
+which is exactly the misconfiguration the redirect is a net for. A WebSocket
+dial, by contrast, is the one request shape that can never benefit from a scheme
+redirect, carries no secret in its response, and is authenticated by a signed,
+expiring upgrade token. Gating on the trust set is free rather than
+inconvenient: `FORCE_HTTPS=true` without a matchable `TRUSTED_PROXIES` already
+loops every request (`config.Load` refuses `TRUST_PROXY_HEADERS`), so no working
+deployment depends on the wider exception. A direct cleartext caller to an
+exposed port is not a trusted proxy and is still redirected, even for an
+upgrade.
+
+**Limit:** the redirect is defence in depth for enrollment, not a guarantee. The
+server reads the plaintext request body before it can answer; the 308 only
+ensures the new secret is never issued over cleartext. A relay pointed at
+`ws://` directly, bypassing its TLS front, needs `FORCE_HTTPS=false` rather than
+an exemption.
+
+**Complexity:** One predicate and one small header helper in
+`internal/httpapp/server.go`; covered by `TestForceHTTPSRelayPaths`. No schema,
+dependency or config-surface change.

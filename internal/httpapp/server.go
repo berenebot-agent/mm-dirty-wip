@@ -1237,6 +1237,23 @@ func (s *Server) trustForwarded(r *http.Request) bool {
 	return s.Service.Config.TrustProxyHeaders || s.Service.Config.IsTrustedProxy(r.RemoteAddr)
 }
 
+// isWebSocketUpgrade reports whether r is a WebSocket upgrade handshake, using
+// the same two-header test gorilla/websocket applies before it upgrades: an
+// Upgrade token of "websocket" and a Connection token of "upgrade".
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	for _, value := range r.Header.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // requestBaseURL derives the public origin a discovery document was fetched
 // from, so /openapi.json advertises the host the caller actually reached
 // instead of trusting BASE_URL config. It honours X-Forwarded-Proto when proxy
@@ -1276,16 +1293,19 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		switch r.URL.Path {
-		case "/health", "/healthz", "/v1/health":
+		// A WebSocket client cannot follow an http->https 308, and a TLS-
+		// terminating front may omit X-Forwarded-Proto on upgrade requests, which
+		// would 308 the relay and surface as "scheme isn't ws or wss" on retry.
+		// Only a trusted proxy may pass an upgrade through: a direct cleartext
+		// caller to a mistakenly published port is still redirected, and the
+		// enrollment POST is deliberately excluded because it returns a fresh
+		// relay secret (D141).
+		if r.Method == http.MethodGet && r.URL.Path == "/relay" && isWebSocketUpgrade(r) && s.trustForwarded(r) {
 			next.ServeHTTP(w, r)
 			return
-		case "/relay", "/relay/enroll":
-			// The relay WebSocket endpoint must never be scheme-redirected: a TLS-
-			// terminating front that omits X-Forwarded-Proto on upgrade requests
-			// would 308 this path, and a WebSocket client cannot follow an
-			// http->https redirect (it yields "scheme isn't ws or wss" on retry).
-			// A WS dial never legitimately needs a scheme redirect, so bypass it.
+		}
+		switch r.URL.Path {
+		case "/health", "/healthz", "/v1/health":
 			next.ServeHTTP(w, r)
 			return
 		}

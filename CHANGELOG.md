@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The relay WebSocket is no longer scheme-redirected behind a TLS front that
+  omits `X-Forwarded-Proto` on upgrade requests, but only for an upgrade from a
+  caller inside `TRUSTED_PROXIES`. `POST /relay/enroll` keeps the redirect: it
+  returns a new relay secret, so a mistakenly published plaintext port can no
+  longer have a credential minted over cleartext (`D141`).
+
 - Email approval replies now work when the approver's provider rewrites the SMTP
   envelope sender (for example Brevo). A decision binds to the message `From:`
   address and the one-time token; the envelope sender is kept as relay metadata
