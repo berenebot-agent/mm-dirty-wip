@@ -3,8 +3,10 @@ package httpapp_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -20,10 +22,20 @@ import (
 // redirect and the advertised scheme without a TLS socket.
 func forceHTTPSHandler(t *testing.T) http.Handler {
 	t.Helper()
+	return forceHTTPSHandlerWith(t, nil)
+}
+
+// forceHTTPSHandlerWith is forceHTTPSHandler with a hook to adjust the config,
+// so tests can declare a trusted proxy.
+func forceHTTPSHandlerWith(t *testing.T, adjust func(*config.Config)) http.Handler {
+	t.Helper()
 	dir := t.TempDir()
 	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", ForceHTTPS: true, AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	if adjust != nil {
+		adjust(&cfg)
+	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
@@ -237,5 +249,78 @@ func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
 	}
 	if len(doc.Servers) != 1 || doc.Servers[0].URL != "https://mail.example.org" {
 		t.Fatalf("servers = %#v, want https", doc.Servers)
+	}
+}
+
+// TestForceHTTPSRelayPaths pins the one scheme-redirect exception: a WebSocket
+// upgrade through a trusted proxy may pass so a relay behind a TLS front that
+// omits X-Forwarded-Proto on upgrade requests is not 308'd (a WebSocket client
+// cannot follow that redirect). Everything else on the relay paths keeps the
+// redirect, in particular POST /relay/enroll, which returns a fresh relay
+// secret and must not be minted over cleartext (D141).
+func TestForceHTTPSRelayPaths(t *testing.T) {
+	t.Parallel()
+	const proxyAddr = "10.1.1.18:53124"
+	h := forceHTTPSHandlerWith(t, func(cfg *config.Config) {
+		cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.1.1.18/32")}
+	})
+	upgrade := func(req *http.Request) *http.Request {
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		return req
+	}
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		remote string
+		proto  string
+		ws     bool
+		want   int
+	}{
+		// The enrollment POST returns a new relay secret, so it is never exempt:
+		// a caller reaching a mistakenly published port over cleartext, or a
+		// trusted proxy that reports no scheme, both get the canonical 308.
+		{name: "enroll direct cleartext", method: http.MethodPost, path: "/relay/enroll", remote: "203.0.113.9:4000", want: http.StatusPermanentRedirect},
+		{name: "enroll trusted proxy without proto", method: http.MethodPost, path: "/relay/enroll", remote: proxyAddr, want: http.StatusPermanentRedirect},
+		{name: "enroll trusted proxy over https", method: http.MethodPost, path: "/relay/enroll", remote: proxyAddr, proto: "https", want: http.StatusForbidden},
+		{name: "enroll trusted proxy with upgrade headers", method: http.MethodPost, path: "/relay/enroll", remote: proxyAddr, ws: true, want: http.StatusPermanentRedirect},
+
+		// A direct cleartext upgrade is still redirected, so an exposed port
+		// cannot be used to open a plaintext relay connection.
+		{name: "upgrade direct cleartext", method: http.MethodGet, path: "/relay", remote: "203.0.113.9:4000", ws: true, want: http.StatusPermanentRedirect},
+		// The UAT case: trusted Traefik omits X-Forwarded-Proto on the upgrade.
+		// Reaching the handler (401, no bearer token) proves it was not
+		// redirected.
+		{name: "upgrade through trusted proxy without proto", method: http.MethodGet, path: "/relay", remote: proxyAddr, ws: true, want: http.StatusUnauthorized},
+		{name: "upgrade through trusted proxy over https", method: http.MethodGet, path: "/relay", remote: proxyAddr, proto: "https", ws: true, want: http.StatusUnauthorized},
+		// Only an actual upgrade is exempt; an ordinary GET on /relay redirects.
+		{name: "plain GET through trusted proxy", method: http.MethodGet, path: "/relay", remote: proxyAddr, want: http.StatusPermanentRedirect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body io.Reader
+			if tt.method == http.MethodPost {
+				body = strings.NewReader(`{"enrollmentToken":"nope","gatewayId":"test"}`)
+			}
+			req := httptest.NewRequest(tt.method, tt.path, body)
+			req.RemoteAddr = tt.remote
+			if tt.proto != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.proto)
+			}
+			if tt.ws {
+				upgrade(req)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != tt.want {
+				t.Fatalf("%s %s = %d body=%q, want %d", tt.method, tt.path, rr.Code, rr.Body.String(), tt.want)
+			}
+			if tt.want == http.StatusPermanentRedirect {
+				if loc := rr.Header().Get("Location"); loc != "https://mail.example.test"+tt.path {
+					t.Fatalf("%s %s redirect Location = %q", tt.method, tt.path, loc)
+				}
+			}
+		})
 	}
 }
