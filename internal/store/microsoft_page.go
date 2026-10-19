@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // This file owns the one generation-guarded write path for a Microsoft folder
@@ -149,7 +150,10 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			}
 		}
 		if e.Cache != nil {
-			id := microsoftMessageID(e.Cache.ProviderID, page.InboxID)
+			id, err := microsoftResolveRowTx(ctx, tx, page.AccountID, page.InboxID, e.Cache)
+			if err != nil {
+				return MicrosoftDeltaPageResult{}, err
+			}
 			exists, err := microsoftMessageRowExistsTx(ctx, tx, page.AccountID, page.InboxID, id)
 			if err != nil {
 				return MicrosoftDeltaPageResult{}, err
@@ -172,7 +176,7 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			if err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
-			if err := upsertMicrosoftMessageTx(ctx, tx, page.AccountID, page.InboxID, e.Cache); err != nil {
+			if err := upsertMicrosoftMessageTx(ctx, tx, page.AccountID, page.InboxID, id, e.Cache); err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
 			// Labels are the entry's full current set, exactly as the provider
@@ -301,12 +305,55 @@ func microsoftMessageID(provider, inbox string) string {
 	return "ms_" + provider + "_" + inbox
 }
 
-// upsertMicrosoftMessageTx writes one Microsoft message's metadata row and its
-// provider-id mapping inside the caller's transaction. The caller owns the
-// metadata cap check and the storage-counter reconciliation, because a delta page
-// charges both once for the whole page.
-func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox string, c *MicrosoftDeltaCache) error {
+// microsoftResolveRowTx returns the local metadata row id a provider message must
+// be written under. Microsoft can serve one message under two id forms — the
+// folder delta and a move/draft response disagree — and the id the feed gave stops
+// resolving once the message moves, so a cache keyed only on the provider id grows
+// a second row for the same message. When the incoming provider id is unseen and
+// exactly one cached row carries the same stable identity, that row takes the new
+// provider id instead of a duplicate row appearing.
+func microsoftResolveRowTx(ctx context.Context, tx *sql.Tx, account, inbox string, c *MicrosoftDeltaCache) (string, error) {
 	id := microsoftMessageID(c.ProviderID, inbox)
+	exists, err := microsoftMessageRowExistsTx(ctx, tx, account, inbox, id)
+	if err != nil || exists || strings.TrimSpace(c.Input.RFCMessageID) == "" {
+		return id, err
+	}
+	// Only an unambiguous match is retargeted: resent mail can share a Message-ID,
+	// and two candidates mean the cache cannot tell the copies apart.
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id<>? AND rfc_message_id=? AND received_at IS ? AND subject=? AND from_address=? LIMIT 2`, account, inbox, id, c.Input.RFCMessageID, nullStringPtr(c.Input.ReceivedAt), c.Input.Subject, c.Input.FromAddress)
+	if err != nil {
+		return id, err
+	}
+	defer rows.Close()
+	var candidates []string
+	for rows.Next() {
+		var candidate string
+		if err = rows.Scan(&candidate); err != nil {
+			return id, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err = rows.Err(); err != nil || len(candidates) != 1 {
+		return id, err
+	}
+	// The mapping carries the provider id; a row without one is not ours to
+	// retarget, and the usual insert then handles it.
+	res, err := tx.ExecContext(ctx, `UPDATE microsoft_message_ids SET provider_id=? WHERE inbox_id=? AND message_id=?`, c.ProviderID, inbox, candidates[0])
+	if err != nil {
+		return id, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return id, nil
+	}
+	return candidates[0], nil
+}
+
+// upsertMicrosoftMessageTx writes one Microsoft message's metadata row and its
+// provider-id mapping inside the caller's transaction, under the row id
+// microsoftResolveRowTx chose. The caller owns the metadata cap check and the
+// storage-counter reconciliation, because a delta page charges both once for the
+// whole page.
+func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox, id string, c *MicrosoftDeltaCache) error {
 	// The cache row is created only for a connected inbox. The caller has already
 	// verified the connection, so a missing row here is a real fault rather than
 	// an acceptable partial write, and a silent failure would leave the UPDATE

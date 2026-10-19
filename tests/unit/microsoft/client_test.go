@@ -232,3 +232,35 @@ func TestBackoffIsPerMailbox(t *testing.T) {
 		t.Fatalf("mailbox B server hits = %d, want 1", bCalls)
 	}
 }
+
+// TestMessageByInternetIDRequiresOneMatch proves the retired-id lookup never
+// guesses: only a single match is a message, while no match and an ambiguous
+// Message-ID (a resent copy) both report not found.
+func TestMessageByInternetIDRequiresOneMatch(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/users/selected/messages") {
+			t.Errorf("lookup path = %s", r.URL.Path)
+		}
+		filter := r.URL.Query().Get("$filter")
+		switch {
+		case strings.Contains(filter, "<one@example.net>"):
+			w.Write([]byte(`{"value":[{"id":"one"}]}`))
+		case strings.Contains(filter, "<two@example.net>"):
+			w.Write([]byte(`{"value":[{"id":"a"},{"id":"b"}]}`))
+		default:
+			w.Write([]byte(`{"value":[]}`))
+		}
+	}))
+	defer s.Close()
+	c := microsoft.NewClient(s.Client())
+	c.BaseURL = s.URL
+	ctx := context.Background()
+	if m, e := c.MessageByInternetID(ctx, "token", "selected", " <one@example.net> "); e != nil || m.ID != "one" {
+		t.Fatalf("single match = %#v %v", m, e)
+	}
+	for _, rfc := range []string{"<two@example.net>", "<none@example.net>", ""} {
+		if _, e := c.MessageByInternetID(ctx, "token", "selected", rfc); e == nil {
+			t.Fatalf("%q was accepted as one message", rfc)
+		}
+	}
+}

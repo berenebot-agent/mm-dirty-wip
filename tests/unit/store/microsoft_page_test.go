@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
@@ -289,5 +290,99 @@ func TestMicrosoftDeltaPageQuotaRollsBackWholePage(t *testing.T) {
 	}
 	if c, _, _, _ := s.MicrosoftDelta(ctx, inbox, "inbox-folder"); c != "cursor-2" {
 		t.Fatalf("replayed cursor = %q, want cursor-2", c)
+	}
+}
+
+// TestMicrosoftUpsertRetargetsSecondProviderID proves the cache keeps one row per
+// message when the provider serves that message under a second id form: the
+// existing row takes the new provider id (keeping its local id) instead of a
+// duplicate appearing.
+func TestMicrosoftUpsertRetargetsSecondProviderID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, acct, inbox := microsoftPageSetup(t)
+
+	in := store.RemoteMessageInput{FolderPath: "microsoft:feed-id", RFCMessageID: "<dup@graph>", FromAddress: "sender@outside.test", Subject: "MMTEST phantom"}
+	if _, err := s.UpsertMicrosoftMessage(ctx, acct, inbox, "feed-id", "thread", "inbox-folder", in); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.MicrosoftLocalID(ctx, acct, inbox, "feed-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := in
+	moved.FolderPath = "microsoft:move-id"
+	if _, err = s.UpsertMicrosoftMessage(ctx, acct, inbox, "move-id", "thread", "trash-folder", moved); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.MicrosoftLocalID(ctx, acct, inbox, "move-id")
+	if err != nil || second != first {
+		t.Fatalf("second id resolved to %q (%v), want the existing row %q", second, err, first)
+	}
+	if _, err = s.MicrosoftLocalID(ctx, acct, inbox, "feed-id"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("retired id still mapped: %v", err)
+	}
+	trashed, err := s.ListRemoteMessagesFiltered(ctx, acct, inbox, store.RemoteMessageFilter{FolderPath: "trash-folder"})
+	if err != nil || len(trashed) != 1 || trashed[0].ID != first {
+		t.Fatalf("trash rows = %+v (%v), want the one retargeted row", trashed, err)
+	}
+	left, err := s.ListRemoteMessagesFiltered(ctx, acct, inbox, store.RemoteMessageFilter{FolderPath: "inbox-folder"})
+	if err != nil || len(left) != 0 {
+		t.Fatalf("inbox rows = %+v (%v), want the row to have left", left, err)
+	}
+}
+
+// TestMicrosoftDedupeFoldsOneMessagesTwoRows proves the one-shot sweep drops a
+// duplicate row and that a row with an unsettled action is never folded away: the
+// action addresses that row.
+func TestMicrosoftDedupeFoldsOneMessagesTwoRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, acct, inbox := microsoftPageSetup(t)
+	p := model.Principal{AccountID: acct, Admin: true}
+	stamped := "2026-10-11T10:00:00Z"
+
+	seed := func(rfc, stale, live string) string {
+		t.Helper()
+		in := store.RemoteMessageInput{FolderPath: "microsoft:" + stale, RFCMessageID: rfc, FromAddress: "sender@outside.test", Subject: "MMTEST phantom"}
+		if _, err := s.UpsertMicrosoftMessage(ctx, acct, inbox, stale, "thread", "inbox-folder", in); err != nil {
+			t.Fatal(err)
+		}
+		// A different received stamp is what the write path cannot fold, so this
+		// recreates the duplicate state an inbox reached before it could.
+		moved := in
+		moved.FolderPath = "microsoft:" + live
+		moved.ReceivedAt = &stamped
+		if _, err := s.UpsertMicrosoftMessage(ctx, acct, inbox, live, "thread", "trash-folder", moved); err != nil {
+			t.Fatal(err)
+		}
+		id, err := s.MicrosoftLocalID(ctx, acct, inbox, live)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	seed("<fold@graph>", "fold-stale", "fold-live")
+	removed, err := s.DedupeMicrosoftInbox(ctx, acct, inbox)
+	if err != nil || removed != 1 {
+		t.Fatalf("dedupe removed %d (%v), want one duplicate", removed, err)
+	}
+	rows, err := s.ListRemoteMessagesFiltered(ctx, acct, inbox, store.RemoteMessageFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows after dedupe = %+v (%v), want one", rows, err)
+	}
+
+	protected := seed("<busy@graph>", "busy-stale", "busy-live")
+	if _, err = s.EnqueueMessageAction(ctx, p, inbox, protected, store.MessageActionInput{Kind: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err = s.DedupeMicrosoftInbox(ctx, acct, inbox)
+	if err != nil || removed != 0 {
+		t.Fatalf("dedupe removed %d with an unsettled action (%v), want none", removed, err)
+	}
+	rows, err = s.ListRemoteMessagesFiltered(ctx, acct, inbox, store.RemoteMessageFilter{})
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("rows = %+v (%v), want the protected pair untouched", rows, err)
 	}
 }
