@@ -233,3 +233,102 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 		t.Fatal("expired attempt consumed")
 	}
 }
+
+// TestGoogleReconnectReusesStoredAppCredentials proves reconnecting an existing
+// Gmail inbox does not make the operator retype its Google app credentials: the
+// wizard prefills the client ID, a blank client secret is taken from the stored
+// connection, and a pasted secret for a different client ID is refused.
+func TestGoogleReconnectReusesStoredAppCredentials(t *testing.T) {
+	t.Parallel()
+	svc, _, u, _, _, _ := standaloneFixture(t)
+	svc.Config.BaseURL = "https://mail.example.com"
+	ctx := context.Background()
+	box, e := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "reconnect@example.net"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var exchange url.Values
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/token":
+			r.ParseForm()
+			exchange = r.PostForm
+			w.Write([]byte(`{"access_token":"access","refresh_token":"refresh","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.modify","token_type":"Bearer"}`))
+		case r.URL.Path == "/userinfo":
+			w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/profile"):
+			w.Write([]byte(`{"emailAddress":"reconnect@example.net","historyId":"10"}`))
+		case strings.HasSuffix(r.URL.Path, "/labels"):
+			w.Write([]byte(`{"labels":[]}`))
+		default:
+			w.Write([]byte(`{"historyId":"10","messages":[]}`))
+		}
+	}))
+	defer fixture.Close()
+	rm := app.NewRemoteMailboxService(svc)
+	defer rm.Stop()
+	rm.Google = gmail.NewClient(fixture.Client())
+	rm.Google.BaseURL = fixture.URL
+	rm.Google.TokenURL = fixture.URL + "/token"
+	rm.Google.UserInfoURL = fixture.URL + "/userinfo"
+	if e = rm.SaveGoogleGrant(ctx, u.AccountID, box.ID, "client", "secret", gmail.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: gmail.Scope}); e != nil {
+		t.Fatal(e)
+	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	token, csrf, e := svc.Store.CreateSession(ctx, u.ID, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cookie := &http.Cookie{Name: "mmm_session", Value: token}
+	post := func(v url.Values) *httptest.ResponseRecorder {
+		v.Set("_csrf", csrf)
+		r := httptest.NewRequest("POST", "/ui/oauth/google/begin", strings.NewReader(v.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		return rr
+	}
+
+	page := httptest.NewRequest("GET", "/ui/inboxes/standalone/new?google_inbox="+box.ID, nil)
+	page.AddCookie(cookie)
+	pr := httptest.NewRecorder()
+	h.ServeHTTP(pr, page)
+	if pr.Code != 200 || !strings.Contains(pr.Body.String(), `name="client_id" value="client" required`) ||
+		!strings.Contains(pr.Body.String(), `name="client_secret" type="password" autocomplete="new-password" placeholder="Saved`) {
+		t.Fatalf("reconnect wizard did not prefill the stored client ID: %d %s", pr.Code, pr.Body.String())
+	}
+
+	wrong := post(url.Values{"inbox_id": {box.ID}, "client_id": {"other"}})
+	if wrong.Code != 400 || !strings.Contains(wrong.Body.String(), "client secret for this client ID") {
+		t.Fatalf("blank secret reused for a different client ID: %d %s", wrong.Code, wrong.Body.String())
+	}
+	begin := post(url.Values{"inbox_id": {box.ID}})
+	if begin.Code != 200 {
+		t.Fatalf("reconnect begin %d %s", begin.Code, begin.Body.String())
+	}
+	var result map[string]string
+	json.Unmarshal(begin.Body.Bytes(), &result)
+	auth, e := url.Parse(result["authorization_url"])
+	if e != nil {
+		t.Fatal(e)
+	}
+	if q := auth.Query(); q.Get("client_id") != "client" || q.Get("state") == "" {
+		t.Fatalf("authorization URL missing stored client ID: %s", auth)
+	}
+	callback := auth.Query().Get("redirect_uri") + "?" + url.Values{"state": {auth.Query().Get("state")}, "code": {"once"}}.Encode()
+	finish := httptest.NewRequest("POST", "/ui/oauth/google/finish", strings.NewReader(url.Values{"_csrf": {csrf}, "callback_url": {callback}}.Encode()))
+	finish.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	finish.AddCookie(cookie)
+	fr := httptest.NewRecorder()
+	h.ServeHTTP(fr, finish)
+	if fr.Code != 200 {
+		t.Fatalf("reconnect finish %d %s", fr.Code, fr.Body.String())
+	}
+	if exchange.Get("client_id") != "client" || exchange.Get("client_secret") != "secret" {
+		t.Fatalf("stored client secret was not used for the exchange: %v", exchange)
+	}
+}
