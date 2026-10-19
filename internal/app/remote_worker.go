@@ -763,7 +763,12 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 // whole-mailbox reconcile (every folder, prune, folder tree) runs on the
 // full-sync cadence instead. It logs its own completion line.
 func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) {
-	_, _ = w.remote.reconcileMicrosoftQuick(ctx, inbox.AccountID, inbox.ID)
+	_, err := w.remote.reconcileMicrosoftQuick(ctx, inbox.AccountID, inbox.ID)
+	// See detectGoogle: a rejected grant must read as disconnected before the
+	// next deep reconcile would record it.
+	if reconnectRequired(err) {
+		w.remote.recordReconnectVerdict(ctx, inbox.AccountID, inbox.ID)
+	}
 }
 
 // detectInboxIMAP runs one durable IMAP detection pass for one inbox. It opens a

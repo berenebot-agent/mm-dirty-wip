@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -450,4 +452,52 @@ func TestMetadataSyncQueuedAndCoalesced(t *testing.T) {
 		t.Fatalf("slots/coalescing: %+v", items)
 	}
 	rm.Stop()
+}
+
+// TestGoogleDetectionRecordsReconnectVerdict proves a cheap Gmail poll that hits
+// a rejected grant records the same durable reconnect verdict a failed metadata
+// sync writes. Without it the inbox's reconnect banner would wait for the next
+// deep reconcile (15 minutes by default) even though the poll has been failing
+// every minute.
+func TestGoogleDetectionRecordsReconnectVerdict(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, _ := googleLogEnv(t)
+	ctx := context.Background()
+	// Replace the healthy grant with an expired one so the next provider call has
+	// to refresh, then reject that refresh the way Google rejects a revoked token.
+	aad := app.GoogleAAD(box.AccountID, box.ID)
+	secret, err := svc.EncryptSecretAAD(aad, []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := svc.EncryptSecretAAD(aad, []byte(`{"access_token":"stale","refresh_token":"refresh"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SaveGoogleConnection(ctx, store.GoogleConnection{AccountID: box.AccountID, InboxID: box.ID, ClientID: "client", EncryptedSecret: secret, EncryptedToken: token, ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`))
+	}))
+	defer tokenSrv.Close()
+	rm.Google.TokenURL = tokenSrv.URL
+
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox)
+
+	snapshot, err := svc.Store.MetadataSyncSnapshot(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != "error" || snapshot.Error != "Reconnect this inbox to resume metadata sync" {
+		t.Fatalf("detection verdict = %q %q", snapshot.State, snapshot.Error)
+	}
 }

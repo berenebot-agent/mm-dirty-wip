@@ -5276,6 +5276,13 @@ function bindInboxSettingsShell(dlg) {
   });
   root.querySelectorAll('[data-wizard-back]').forEach(function (b) {
     b.addEventListener('click', function () {
+      // A reconnect deep-link belongs to one inbox, so Back returns to that
+      // inbox rather than to this page's provider chooser, which is the
+      // new-inbox screen.
+      if (reconnect || microsoftReconnect) {
+        window.location.assign('/ui/inboxes/' + encodeURIComponent(reconnect || microsoftReconnect));
+        return;
+      }
       // Arrived from the Add-inbox dialog: step back to the dashboard rather
       // than to this page's own provider chooser.
       if (deepLinked) {
@@ -5661,6 +5668,8 @@ function generateBearerSecret() {
       var field = conn.reconnect === 'microsoft' ? 'microsoft_inbox' : 'google_inbox';
       link.href = '/ui/inboxes/standalone/new?' + field + '=' + encodeURIComponent(inboxID);
       link.textContent = conn.action_label || 'Reconnect';
+      link.setAttribute('data-inbox', inboxID);
+      link.setAttribute(conn.reconnect === 'microsoft' ? 'data-microsoft-reconnect' : 'data-google-reconnect-now', '');
       banner.appendChild(link);
     }
     return banner;
@@ -8404,6 +8413,48 @@ function generateBearerSecret() {
 
   dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
     b.addEventListener('click', function () { dlg.close(); });
+  });
+})();
+
+// Provider reconnect controls in an inbox banner act in place instead of
+// handing the operator to the setup wizard. Google reuses the saved app
+// credentials for a one-step OAuth round trip in this tab. Microsoft opens the
+// wizard's sign-in step in a popup, because its localhost redirect still needs
+// the paste-the-URL step, and the inbox reloads once that popup closes. The
+// href stays the no-JS fallback and the path to different credentials, so any
+// failure just follows it.
+(function () {
+  document.addEventListener('click', function (event) {
+    var trigger = event.target.closest('[data-google-reconnect-now], [data-microsoft-reconnect]');
+    if (!trigger) { return; }
+    var href = trigger.getAttribute('href') || '';
+    event.preventDefault();
+    if (trigger.hasAttribute('data-microsoft-reconnect')) {
+      if (!href) { return; }
+      var popup = window.open(href, 'mm-microsoft-reconnect', 'popup=yes,width=560,height=760,resizable=yes,scrollbars=yes');
+      if (!popup) { window.location.assign(href); return; }
+      var watch = window.setInterval(function () {
+        if (!popup.closed) { return; }
+        window.clearInterval(watch);
+        window.location.reload();
+      }, 1000);
+      return;
+    }
+    var inbox = trigger.getAttribute('data-inbox') || document.body.getAttribute('data-inbox') || '';
+    var csrf = document.querySelector('[name=_csrf]');
+    fetch('/ui/oauth/google/begin', {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: new URLSearchParams({ _csrf: csrf ? csrf.value : '', inbox_id: inbox })
+    }).then(function (response) {
+      if (!response.ok) { throw new Error('reconnect'); }
+      return response.json();
+    }).then(function (result) {
+      if (!result || !result.authorization_url) { throw new Error('reconnect'); }
+      window.location.assign(result.authorization_url);
+    }).catch(function () {
+      if (href) { window.location.assign(href); }
+    });
   });
 })();
 
