@@ -119,6 +119,34 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 	return out, nil
 }
 
+// reconnectInstruction is the durable operator message recorded when a provider
+// rejects the inbox's authorization. The UI reads it verbatim as the inbox's
+// reconnect prompt, so metadata sync and the cheap detection passes share it.
+const reconnectInstruction = "Reconnect this inbox to resume metadata sync"
+
+// reconnectRequired reports an authorization failure that only the operator can
+// clear by reconnecting the inbox; a retryable error is not one.
+func reconnectRequired(err error) bool {
+	var mb *model.MailboxError
+	return errors.As(err, &mb) && (mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden)
+}
+
+// recordReconnectVerdict makes an auth failure from a cheap detection pass the
+// same durable verdict a failed metadata sync records. Without it the reconnect
+// banner waits for the next deep reconcile (15 minutes by default) even though
+// the poll has been failing every minute, so a freshly broken inbox still looks
+// healthy. A later successful reconcile overwrites this state.
+func (m *RemoteMailboxService) recordReconnectVerdict(ctx context.Context, account, inbox string) {
+	if snapshot, err := m.Service.Store.MetadataSyncSnapshot(ctx, account, inbox); err == nil && snapshot.State == "error" {
+		return
+	}
+	phase := "initial"
+	if index, err := m.Service.Store.GetRemoteIndexStatus(ctx, account, inbox); err == nil && index.Status == store.RemoteIndexComplete {
+		phase = "refresh"
+	}
+	_ = m.Service.Store.SaveMetadataSyncState(ctx, account, inbox, "error", phase, reconnectInstruction)
+}
+
 func (m *RemoteMailboxService) beginMetadataSync(ctx context.Context, account, inbox string) string {
 	phase := "initial"
 	if index, err := m.Service.Store.GetRemoteIndexStatus(ctx, account, inbox); err == nil && index.Status == store.RemoteIndexComplete {
@@ -149,7 +177,7 @@ func (m *RemoteMailboxService) finishMetadataSync(ctx context.Context, account, 
 			case model.ErrKindRetryable:
 				state, message = "waiting", "Waiting to retry provider request"
 			case model.ErrKindAuth, model.ErrKindForbidden:
-				message = "Reconnect this inbox to resume metadata sync"
+				message = reconnectInstruction
 			}
 		}
 	}

@@ -159,6 +159,51 @@ func TestInboxViewReconnectBannerForDisconnectedOneInbox(t *testing.T) {
 	}
 }
 
+// TestInboxViewReconnectBannerForDisconnectedGoogleInbox proves the Gmail
+// reconnect banner carries the in-place control: app.js starts the OAuth round
+// trip from the saved app credentials, while the wizard href stays the no-JS
+// fallback and the path to different credentials.
+func TestInboxViewReconnectBannerForDisconnectedGoogleInbox(t *testing.T) {
+	t.Parallel()
+	svc, _, u, _, _, _ := standaloneFixture(t)
+	ctx := context.Background()
+	box, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "banner-gmail@example.net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
+	if err = rm.SaveGoogleGrant(ctx, u.AccountID, box.ID, "client", "secret", gmail.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: gmail.Scope}); err != nil {
+		t.Fatal(err)
+	}
+	// Present a finished index: an unindexed inbox makes the mailbox page schedule
+	// a background reconcile, which would rewrite the durable sync state under
+	// the assertion.
+	if _, err = svc.Store.ReconcileRemoteFolders(ctx, u.AccountID, box.ID, []store.RemoteFolderSync{{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Store.ReconcileRemoteFolderBatch(ctx, u.AccountID, box.ID, "INBOX", 1, nil, nil, false, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetRemoteIndexStatus(ctx, u.AccountID, box.ID, store.RemoteIndexComplete, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SaveMetadataSyncState(ctx, u.AccountID, box.ID, "error", "refresh", "Reconnect this inbox to resume metadata sync"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	cookie, _ := uiSession(t, svc, u.ID)
+	body := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(body, `href="/ui/inboxes/standalone/new?google_inbox=`+box.ID+`" data-google-reconnect-now data-inbox="`+box.ID+`"`) {
+		t.Fatalf("Gmail reconnect banner missing the in-place reconnect control: %s", body)
+	}
+	if !strings.Contains(body, ">Reconnect Google / Gmail</a>") {
+		t.Fatal("Gmail reconnect banner must name the connection on its control")
+	}
+}
+
 // TestRemoteConfigViewCarriesConnectionState proves the Identity tab's embedded
 // remote config reports the provider connection state, so the client can render
 // the reconnect prompt without a second request.

@@ -19,6 +19,11 @@ func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) {
 		result.status = "error"
 	}
 	w.remote.logRemoteSync(ctx, inbox.AccountID, inbox.ID, result)
+	// A rejected grant is durable: record it now instead of waiting for the next
+	// deep reconcile, so the inbox's reconnect banner is accurate on open.
+	if reconnectRequired(err) {
+		w.remote.recordReconnectVerdict(ctx, inbox.AccountID, inbox.ID)
+	}
 }
 
 // detectGooglePass is the timed body of a Gmail history detection pass. status is
