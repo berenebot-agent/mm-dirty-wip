@@ -877,6 +877,9 @@ type pageData struct {
 	DraftCounts  map[string]int
 	SendRequests []SendRequestRow
 	ReviewDraft  *model.Draft
+	// ReviewInvalidReply is the newest invalid approval reply for the pending
+	// request shown on the review page, if any.
+	ReviewInvalidReply *store.ControlMessage
 
 	TrashRetentionDays int
 

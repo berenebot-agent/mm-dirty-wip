@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Email approval replies now work when the approver's provider rewrites the SMTP
+  envelope sender (for example Brevo). A decision binds to the message `From:`
+  address and the one-time token; the envelope sender is kept as relay metadata
+  but no longer has to match (`D140`). A reply that still cannot be applied is
+  shown on the pending request and draft review page with its reason, not only
+  in the domain receiving log.
 - The no-allow-list acknowledgement in the Add Connector dialog is visible again.
   A page-wide `[hidden]{display:none!important}` rule silently defeated the inline
   `display:flex` the checkbox row carried, so the warning appeared with no way to

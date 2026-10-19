@@ -937,6 +937,28 @@ func (s *Store) ListControlMessages(ctx context.Context, accountID, inboxID stri
 	return scanControlMessages(rows)
 }
 
+// LatestInvalidReply returns the newest consumed control message that failed
+// validation for a request, so the pending-request surface can show that a
+// reply arrived and was not applied.
+func (s *Store) LatestInvalidReply(ctx context.Context, accountID, inboxID, requestID string) (ControlMessage, bool, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return ControlMessage{}, false, nil
+	}
+	rows, err := s.read.QueryContext(ctx, controlMessageSelect+` WHERE account_id=? AND inbox_id=? AND request_id=? AND outcome='invalid' ORDER BY created_at DESC LIMIT 1`, accountID, inboxID, requestID)
+	if err != nil {
+		return ControlMessage{}, false, err
+	}
+	defer rows.Close()
+	msgs, err := scanControlMessages(rows)
+	if err != nil {
+		return ControlMessage{}, false, err
+	}
+	if len(msgs) == 0 {
+		return ControlMessage{}, false, nil
+	}
+	return msgs[0], true, nil
+}
+
 // ListAccountControlMessages returns an account's consumed control messages,
 // newest first, for the admin dashboard's Recent messages list.
 func (s *Store) ListAccountControlMessages(ctx context.Context, accountID string, limit int) ([]ControlMessage, error) {

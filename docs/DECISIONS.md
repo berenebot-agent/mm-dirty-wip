@@ -142,6 +142,9 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D135: The public database baseline replaces the pre-release migration lineage](#d135-the-public-database-baseline-replaces-the-pre-release-migration-lineage)
 - [D136: Retire the completed developer database transition](#d136-retire-the-completed-developer-database-transition)
 - [D137: Published image names, and one edge image for both modes](#d137-published-image-names-and-one-edge-image-for-both-modes)
+- [D138: Relay replies carry their trigger; slow handlers heartbeat; remote metadata accounting is incremental](#d138-relay-replies-carry-their-trigger-slow-handlers-heartbeat-remote-metadata-accounting-is-incremental)
+- [D139: Relay replies resolve the wire form a stock Hermes gateway sends](#d139-relay-replies-resolve-the-wire-form-a-stock-hermes-gateway-sends)
+- [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
 
 ---
 
@@ -640,6 +643,10 @@ request header (`X-MailMoose-Envelope-From`), so on both the transport is
 authenticated while the sender **content** is caller-controlled. A consumer that
 needs an attested sender must require a provenance flag, not the provider name
 (round-2 retest, finding A).
+
+**Superseded in part by D140:** the envelope-sender equality was removed from the
+approval decision. The token, nominated-approver, expiry and content-fingerprint
+binding stand; the sender is now the message `From:` address alone.
 
 ## D030 — Inbox aliases: inbound address routing (migration 021)
 
@@ -5651,3 +5658,38 @@ failed, and the gateway stored remote notifications with an empty body.
 existing lookup, and the inbox boundary check still applies to every resolved
 target. A notification whose RFC Message-ID is not in the cache yet still
 cannot be answered by that gateway, which sees the failure as before.
+
+## D140 — Email approval binds to the message From, not the provider envelope
+
+**Context:** A nominated approver replying to an approval-request email through an
+ESP (for example Brevo) is received and token-matched, but the ESP rewrites the
+SMTP envelope sender to its own bounce address. The approval handler required both
+`transport.InboundMessage.EnvelopeFrom` and the MIME `From:` to equal the stored
+approver (`D029`), so the reply was consumed and recorded `invalid` with no
+decision. The pending request stayed open and neither party was told.
+
+**Decision:** A webhook approval decision binds to the message's RFC 5322 `From:`
+address plus the live single-use token. The transport envelope sender is still
+persisted, forwarded and logged as relay metadata, but it is no longer an
+approval input. The sender check fails closed on an empty or non-matching `From:`.
+The MX edge keeps its trusted SPF/DKIM/DMARC `authenticated` gate, and the
+standalone path already matched `From:` only (`D097`).
+
+**Reason:** The envelope comparison never authenticated the sender: it is
+caller-asserted on Mailgun, Cloudflare and Postmark and only Resend-signed for
+Resend (`D058`/`D059`/`D133`), so comparing it with `From:` compared the same
+asserted identity twice. Requiring it rejected legitimate replies from ESPs that
+rewrite bounce senders while adding no protection beyond the token. The remaining
+exposure is unchanged: the correct live 128-bit token is still required, and the
+decision is bound to the frozen draft content.
+
+**Feedback:** The pending-request card and the draft review page show the newest
+invalid reply's action, reason and time from `inbound_control_messages`; the
+per-domain receiving log already recorded it. No outbound bounce is sent, because
+the rejected sender may be forged and replying would be backscatter.
+
+**Supersedes:** `D029` in part — its envelope-equality requirement only. The
+token, nominated-approver, expiry and content-fingerprint binding stand.
+
+**Complexity:** One condition removed from the control handler, one indexed store
+read and two UI lines. No schema, dependency or runtime service change.

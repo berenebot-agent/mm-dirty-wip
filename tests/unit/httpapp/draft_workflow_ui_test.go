@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func uiPost(t *testing.T, h http.Handler, cookie *http.Cookie, path, form string) *httptest.ResponseRecorder {
@@ -146,5 +147,43 @@ func TestUIDraftRejectAndCancel(t *testing.T) {
 	got, err := svc.Store.GetDraft(ctx, admin, draft2.ID)
 	if err != nil || got.Status != model.DraftStatusDraft {
 		t.Fatalf("draft after cancel %+v err=%v", got, err)
+	}
+}
+
+// TestUIPendingRequestShowsRejectedReply proves a consumed reply that failed
+// the sender check is visible on the pending request and review page, not only
+// in the domain receiving log.
+func TestUIPendingRequestShowsRejectedReply(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	admin := model.Principal{AccountID: u.AccountID, Admin: true}
+	draft, err := svc.Store.CreateDraft(ctx, admin, model.Draft{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Proposal", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(ctx, admin, draft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, admin, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Store.RecordControlMessage(ctx, store.ControlMessageRecord{
+		AccountID: u.AccountID, InboxID: box.ID, Provider: "mailgun", ProviderDeliveryID: "ctl-rejected-1",
+		FromAddress: "someone@outside.test", RequestID: sr.ID, Action: "approve", Outcome: "invalid",
+		Reason: "sender does not match approver", Subject: "Proposal", Source: "Mailgun",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	rr := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "approval reply rejected: sender does not match approver") {
+		t.Fatalf("inbox send-request card missing rejected reply %d", rr.Code)
+	}
+	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts/"+draft.ID+"/edit")
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, "Reply rejected") || !strings.Contains(body, "sender does not match approver") {
+		t.Fatalf("review page missing rejected reply %d", rr.Code)
 	}
 }

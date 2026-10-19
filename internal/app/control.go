@@ -273,8 +273,7 @@ func stripTags(s string) string {
 }
 
 // canonicalSender normalizes an address for comparison, stripping any display
-// name and lowercasing it. It is applied to both the transport-supplied envelope
-// sender and the message header sender.
+// name and lowercasing it. It is applied to the message header sender.
 func canonicalSender(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -308,7 +307,7 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 		// delivery, so this INFO line is the only terminal record of it on the
 		// container stream. Every outcome (approve/reject/invalid/error) is
 		// logged, mirroring the delivered and blocked paths.
-		s.Log.Info("inbound control mail", "from", parsed.From.Address, "to", msg.Recipient, "provider", msg.Source, "action", action, "outcome", outcome, "reason", reason, "request_id", requestID)
+		s.Log.Info("inbound control mail", "from", parsed.From.Address, "envelope_from", msg.EnvelopeFrom, "to", msg.Recipient, "provider", msg.Source, "action", action, "outcome", outcome, "reason", reason, "request_id", requestID)
 	}
 	if !ok {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_invalid", "malformed approval control subject")
@@ -343,17 +342,14 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 		record(r.ID, action, "invalid", "sender not authenticated")
 		return transport.ErrInboundIgnored
 	}
-	// Both reported sender values must match; webhook sender provenance is an
-	// accepted risk (D058/D059/D133), not proof of sender authentication.
+	// The decision binds to the message's RFC5322 From address. The transport
+	// envelope sender is recorded metadata, not an approval input: ESPs rewrite
+	// it on the way out (D140), and every webhook adapter's value is caller-
+	// asserted rather than attested (D058/D059/D133), so requiring it only fails
+	// legitimate replies.
 	approver := strings.ToLower(strings.TrimSpace(r.ApproverEmail))
-	envelopeFrom := canonicalSender(msg.EnvelopeFrom)
 	mimeFrom := canonicalSender(parsed.From.Address)
-	if envelopeFrom == "" {
-		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval envelope sender missing")
-		record(r.ID, action, "invalid", "approval envelope sender missing")
-		return transport.ErrInboundIgnored
-	}
-	if envelopeFrom != approver || mimeFrom != approver {
+	if mimeFrom == "" || mimeFrom != approver {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval sender does not match nominated approver")
 		record(r.ID, action, "invalid", "sender does not match approver")
 		return transport.ErrInboundIgnored
