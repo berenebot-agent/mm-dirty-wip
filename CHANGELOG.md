@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Creating a Hermes relay connection now shows the setup steps alongside the
+  credentials: which `.env` file the gateway reads, that the `GATEWAY_RELAY_*`
+  lines are replaced rather than duplicated, that the gateway only picks them up
+  after a restart, and the log lines that confirm it connected.
+
 - The in-app Feedback panel is now a wide panel with a Back button, headed
   "MailMoose is in active development", and points at the public repository
   (`github.com/dellarb/mailmoose`) alongside the feedback address.
