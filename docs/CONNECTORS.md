@@ -108,7 +108,67 @@ Each delivery carries `X-MailMoose-Event`, `X-MailMoose-Delivery`, and `X-MailMo
 
 Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-MailMoose-Signature`. Verify it at your endpoint.
 
-A 2xx response acknowledges the event. Other responses are retried for the configured window (seven days by default). **Deduplicate on `X-MailMoose-Delivery`**, because retries can repeat an event. Spam, internal, and deleted mail is skipped.
+### Verify the signature
+
+The signing key is the connector secret itself, used as UTF-8 bytes. It looks like base64url but is not encoded: do not base64-decode it. MailMoose signs the Unix timestamp, a literal `.`, then the exact request body it sends:
+
+```text
+v1 = hex(HMAC-SHA256(secret, t + "." + body))
+```
+
+This example uses only the Python standard library and applies to both payload modes:
+
+```python
+import hashlib
+import hmac
+import time
+
+
+def verify(secret: str, header: str, body: bytes, tolerance: int = 300) -> bool:
+    fields = {}
+    for part in header.split(","):
+        name, sep, value = part.strip().partition("=")
+        if not sep or name in fields:
+            return False  # malformed: missing '=' or repeated field
+        fields[name] = value
+
+    ts, sig = fields.get("t", ""), fields.get("v1", "")
+    if not ts.isascii() or not ts.isdigit() or not sig.isascii():
+        return False
+    try:
+        fresh = abs(time.time() - int(ts)) <= tolerance
+    except ValueError:
+        return False
+    if not fresh:
+        return False  # stale, or too far in the future
+
+    expected = hmac.new(secret.encode(), ts.encode() + b"." + body, hashlib.sha256).digest()
+    try:
+        return hmac.compare_digest(expected, bytes.fromhex(sig))
+    except ValueError:
+        return False  # v1 is not hex
+```
+
+Verify before parsing anything, because the signature covers the raw bytes, not a re-serialised form:
+
+```python
+# Notify: body is JSON.
+if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+    return 401
+event = json.loads(request.body)
+
+# Forward: body is the original MIME message (message/rfc822).
+if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+    return 401
+```
+
+A receiver that rejects a timestamp older than its tolerance also rejects replayed deliveries; the tolerance is your choice.
+
+### Delivery order and retries
+
+Deliveries are strictly ordered per connector. The oldest undelivered event is attempted first, and while it waits for a retry, later events for that connector wait behind it. It stops blocking only when it is delivered with a 2xx, terminally failed once the retry window is exhausted, or skipped because the message is Spam, internal, or deleted. Other connectors are not blocked, including another webhook on the same inbox.
+
+A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-MailMoose-Delivery`**, because a retry repeats the same event and delivery ID.
 
 For exact header encoding and the request contract, see [the webhook contract](integrations/BILLBOT_WEBHOOK_CONTRACT.md) and [API.md](API.md).
 
