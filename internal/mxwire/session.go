@@ -16,9 +16,15 @@ import (
 )
 
 const (
-	V1Protocol      = "mx-v1"
-	SessionPath     = "/mx/v1/session"
-	AuthLifetime    = 5 * time.Minute
+	V1Protocol   = "mx-v1"
+	SessionPath  = "/mx/v1/session"
+	AuthLifetime = 5 * time.Minute
+	// Authentication has separate bounded DNS, response, and verification phases.
+	AuthLookupTimeout = 30 * time.Second
+	AuthChallengeTTL  = 10 * time.Second
+	AuthVerifyTimeout = 30 * time.Second
+	// Allow two ten-second frame writes plus network scheduling around DNS work.
+	AuthResultGrace = 25 * time.Second
 	MaxFramePayload = 64 << 10
 	ChunkSize       = 32 << 10
 	FrameHeaderSize = 24

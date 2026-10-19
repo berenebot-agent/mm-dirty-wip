@@ -1579,8 +1579,14 @@ func (s *session) authenticateAll() error {
 		// authentications outstanding, and the manager never exceeds its global
 		// budget. Anything that cannot be started now is retried on the next
 		// tick, after an outstanding challenge completes.
+		if ad := s.auths[name]; ad != nil && ad.state == authPending {
+			if err := s.writeJSON(mxwire.FrameDomainUnregister, 0, ad.channel, mxwire.DomainNotice{Domain: name, Reason: "authentication_timeout"}); err != nil {
+				return err
+			}
+			s.retire(name)
+		}
 		if s.authInflight >= s.authLimit || !s.m.acquireAuthSlot() {
-			break
+			continue
 		}
 		s.retire(name)
 		s.nextCh++
@@ -1589,7 +1595,7 @@ func (s *session) authenticateAll() error {
 			channel:    s.nextCh,
 			generation: keyFingerprint(d),
 			state:      authPending,
-			deadline:   now.Add(10 * time.Second),
+			deadline:   now.Add(mxwire.AuthLookupTimeout + mxwire.AuthResultGrace),
 			holdsSlot:  true,
 		}
 		s.authInflight++
@@ -1668,7 +1674,7 @@ func (s *session) challenge(f mxwire.Frame) error {
 	// Record the exact challenge we signed; only a matching AuthResult issued
 	// after local signing may activate the binding.
 	ad.proofNonce = c.Nonce
-	ad.deadline = time.Now().Add(10 * time.Second)
+	ad.deadline = time.Now().Add(mxwire.AuthVerifyTimeout + mxwire.AuthResultGrace)
 	return s.writeJSON(mxwire.FrameChallengeResponse, 0, f.ChannelID, mxwire.ChallengeResponse{Domain: c.Domain, KeyID: c.KeyID, Nonce: c.Nonce, Signature: sig})
 }
 
@@ -1788,8 +1794,7 @@ func (s *session) notice(f mxwire.Frame, revoked bool) error {
 		// The receiver holds a newer binding from another connection. Park the
 		// pin: no new resolve and no re-auth reclaim, but already-pinned
 		// transactions may still ingest DATA until the old authorization
-		// expires. Log it: this instance stops receiving on that connector and
-		// will not recover without a restart, so it must not be silent.
+		// expires. Log it because this session will not reclaim the binding.
 		slog.Warn("mxdial domain replaced by another connection",
 			"domain", n.Domain, "receiver", s.url, "key_id", ad.domain.KeyID,
 			"receiver_id", s.ready.ReceiverID, "connection_id", s.ready.ConnectionID)
