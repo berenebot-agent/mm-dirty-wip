@@ -385,6 +385,8 @@ func dialMXStatusLabel(st mxdialStatusView) string {
 		return "receiver protocol mismatch"
 	case "destination_not_allowed":
 		return "blocked — receiver destination not allowed"
+	case "replaced":
+		return "replaced by another connection"
 	}
 	switch st.State {
 	case mxdial.StatusActive:
