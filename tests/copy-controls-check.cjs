@@ -73,11 +73,21 @@ for (const [id, value] of [
 }
 
 const notices = [];
+const secret = new Element('PRE');
+secret.textContent = 'mmm_one-time-secret';
+const secretCopy = new Element('BUTTON');
+secretCopy.textContent = 'Copy';
+secretCopy.setAttribute('data-copy-value', secret.textContent);
+secretCopy.previousElementSibling = secret;
+let selected = null;
 const document = {
   body: { appendChild: node => notices.push(node) },
   createElement: tag => new Element(tag.toUpperCase()),
-  querySelectorAll(selector) { return selector === '[data-copy]' ? controls.flatMap(c => [c.name, c.button]) : []; },
-  createRange() { return { selectNodeContents() {}, selectNode() {} }; },
+  querySelectorAll(selector) {
+    if (selector === '[data-copy-value]') return [secretCopy];
+    return selector === '[data-copy]' ? controls.flatMap(c => [c.name, c.button]) : [];
+  },
+  createRange() { return { selectNodeContents(node) { selected = node; }, selectNode() {} }; },
   querySelector() { return null; }
 };
 const navigator = {
@@ -100,6 +110,8 @@ const context = vm.createContext({ window, document, navigator, Promise });
 
 vm.runInContext(extractIIFE(helperStart, helperEnd), context);
 vm.runInContext(extractIIFE(dataCopyStart, dataCopyEnd), context);
+const valueCopyStart = source.lastIndexOf('(function () {', source.indexOf("document.querySelectorAll('[data-copy-value]')"));
+vm.runInContext(extractIIFE(valueCopyStart, source.length), context);
 
 async function flushPromises() {
   await new Promise(resolve => setImmediate(resolve));
@@ -129,6 +141,26 @@ async function run() {
   assert.equal(copied.at(-1), 'ordinary copy value', 'ordinary copy control writes its value');
   assert.equal(ordinaryButton.textContent, 'Copied!', 'ordinary copy control keeps its label feedback');
   assert.equal(notices.at(-1).textContent, 'Copied to clipboard', 'ordinary copy control announces success');
+
+  secretCopy.dispatch('click');
+  await flushPromises();
+  assert.equal(copied.at(-1), secret.textContent, 'secret Copy button copies only the displayed value');
+
+  window.isSecureContext = false;
+  const writes = copied.length;
+  secretCopy.dispatch('click');
+  await flushPromises();
+  assert.equal(copied.length, writes, 'HTTP fallback does not attempt a clipboard write');
+  assert.equal(selected, secret, 'HTTP fallback selects the adjacent secret');
+  assert.match(notices.at(-1).textContent, /value is selected.*Ctrl\+C/, 'HTTP fallback gives manual copy guidance');
+
+  window.isSecureContext = true;
+  selected = null;
+  navigator.clipboard.writeText = () => Promise.reject(new Error('permission denied'));
+  secretCopy.dispatch('click');
+  await flushPromises();
+  assert.equal(selected, secret, 'refused clipboard write selects the secret');
+  assert.match(notices.at(-1).textContent, /value is selected.*Ctrl\+C/, 'refused write gives manual copy guidance');
 
   console.log('copy-controls-check: all checks passed');
 }
