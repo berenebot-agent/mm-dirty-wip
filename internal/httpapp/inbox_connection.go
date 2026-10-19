@@ -32,7 +32,10 @@ type inboxConnectionState struct {
 	// Detail is a short, safe operator description shown as the flag/prompt text.
 	Detail string `json:"detail,omitempty"`
 	// Reconnect is the reconnect affordance: "one" opens the in-place API-key
-	// dialog, "oauth" follows the provider's wizard flow, and "" has no action.
+	// dialog, "google" and "microsoft" follow that provider's wizard flow,
+	// "imap" opens the inbox's connector settings, and "" has no action. The
+	// kind names the provider, so each one gets its own control rather than
+	// sharing a generic OAuth one.
 	Reconnect string `json:"reconnect,omitempty"`
 }
 
@@ -59,9 +62,24 @@ func (s *Server) inboxConnectionStates(ctx context.Context, p model.Principal, b
 	return out
 }
 
+// connectionStatesFor reports the same per-inbox connection health for every
+// inbox the principal can see, for the /ui/actions poll. The browser renders the
+// reconnect banner the server renders from this payload, so an inbox whose
+// authorization is rejected while its page is already open gets the prompt and
+// its reconnect control without a page load. The map is never nil, so the JSON
+// field is a stable object.
+func (s *Server) connectionStatesFor(ctx context.Context, p model.Principal) map[string]inboxConnectionState {
+	out := map[string]inboxConnectionState{}
+	boxes, err := s.Service.Store.ListInboxes(ctx, p)
+	if err != nil {
+		return out
+	}
+	return s.inboxConnectionStates(ctx, p, boxes)
+}
+
 // inboxConnectionState returns the connection health of one inbox. The second
-// result is false when the inbox has no provider connection to report (a domain
-// inbox, or a standalone inbox that is IMAP-only), so no traffic light renders.
+// result is false when the inbox has no connection to report (a domain inbox, or
+// a standalone inbox with no remote connector), so no traffic light renders.
 func (s *Server) inboxConnectionState(ctx context.Context, accountID string, box model.Inbox) (inboxConnectionState, bool) {
 	if box.Kind != model.InboxKindStandalone {
 		return inboxConnectionState{}, false
@@ -72,12 +90,15 @@ func (s *Server) inboxConnectionState(ctx context.Context, accountID string, box
 	case s.Service.Store.IsOne(ctx, accountID, box.ID):
 		provider, label, action, reconnect = "one", "One", "Reconnect with One", "one"
 	case rm.IsGoogle(ctx, accountID, box.ID):
-		provider, label, action, reconnect = "google", "Google / Gmail", "Reconnect Google / Gmail", "oauth"
+		provider, label, action, reconnect = "google", "Google / Gmail", "Reconnect Google / Gmail", "google"
 	case rm.IsMicrosoft(ctx, accountID, box.ID):
-		provider, label, action, reconnect = "microsoft", "Microsoft / Outlook", "Reconnect Microsoft / Outlook", "oauth"
+		provider, label, action, reconnect = "microsoft", "Microsoft / Outlook", "Reconnect Microsoft / Outlook", "microsoft"
+	case box.RemoteConfigured && box.Remote != nil:
+		// A hand-configured connector has no OAuth grant, but a rejected
+		// credential still needs the operator: the repair is the connector
+		// settings page, where the password or app password is stored.
+		provider, label, action, reconnect = "imap", "IMAP", "Reconnect IMAP", "imap"
 	default:
-		// A hand-configured IMAP connector is not an OAuth grant; there is no
-		// reauthorize flow to offer, so it reports no connection light.
 		return inboxConnectionState{}, false
 	}
 	snapshot, _ := s.Service.Store.MetadataSyncSnapshot(ctx, accountID, box.ID)

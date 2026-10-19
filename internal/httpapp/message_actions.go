@@ -231,11 +231,14 @@ func (s *Server) uiActionQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	// The same response carries the live metadata-sync status so a single poll
-	// drives both the action-queue popup and the standalone mailbox banner.
+	// drives both the action-queue popup and the standalone mailbox banner, plus
+	// the connection health so the reconnect banner and its control appear
+	// without a page load when a provider rejects an authorization.
 	writeJSON(w, 200, map[string]any{
-		"items": actions,
-		"syncs": s.metadataSyncStatuses(r.Context(), principal(r)),
-		"csrf":  csrf(r),
+		"items":       actions,
+		"syncs":       s.metadataSyncStatuses(r.Context(), principal(r)),
+		"connections": s.connectionStatesFor(r.Context(), principal(r)),
+		"csrf":        csrf(r),
 	})
 }
 

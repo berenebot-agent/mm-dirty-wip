@@ -14,6 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 	"github.com/dellarb/mailmoose/tests/support/onefixture"
 )
 
@@ -541,5 +542,154 @@ func TestDashboardRendersOneReconnectDialog(t *testing.T) {
 	inboxBody := uiGet(t, h, cookie, "/").Body.String()
 	if strings.Count(inboxBody, `id="one-reconnect-dialog"`) != 1 {
 		t.Fatal("page shell must render exactly one reconnect dialog")
+	}
+}
+
+// reconnectBannerFixture connects one standalone inbox to the named provider, so
+// a test can record the durable reconnect verdict and assert what the mailbox
+// pages render for a disconnected connection.
+func reconnectBannerFixture(t *testing.T, svc *app.Service, u model.User, rm *app.RemoteMailboxService, kind, address string) model.Inbox {
+	t.Helper()
+	ctx := context.Background()
+	box, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch kind {
+	case "google":
+		err = rm.SaveGoogleGrant(ctx, u.AccountID, box.ID, "client", "secret", gmail.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: gmail.Scope})
+	case "microsoft":
+		c := store.MicrosoftConnection{AccountID: u.AccountID, InboxID: box.ID, ClientID: "client", Tenant: "common", IdentityID: "identity", Mailbox: address}
+		err = rm.SaveMicrosoftGrant(ctx, c, microsoft.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: microsoft.Scope(false)})
+	default:
+		t.Fatalf("unknown provider %q", kind)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return box
+}
+
+// TestInboxViewReconnectBannerForEveryProvider proves a disconnected inbox shows
+// the reconnect banner with that provider's own control on the inbox page and on
+// the custom-folder page — the page whose hand-rolled data used to drop the
+// banner entirely. IMAP is included: a rejected connector credential is repaired
+// in the connector settings, so it must offer that route too.
+func TestInboxViewReconnectBannerForEveryProvider(t *testing.T) {
+	t.Parallel()
+	const verdict = "Reconnect this inbox to resume metadata sync"
+	for _, tc := range []struct {
+		kind, action, address, control string
+	}{
+		{"google", "Reconnect Google / Gmail", "banner-gmail@example.net", "data-google-reconnect-now"},
+		{"microsoft", "Reconnect Microsoft / Outlook", "banner-ms@example.net", "data-microsoft-reconnect"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			t.Parallel()
+			svc, _, u, _, _, _ := standaloneFixture(t)
+			ctx := context.Background()
+			rm := app.NewRemoteMailboxService(svc)
+			t.Cleanup(rm.Stop)
+			box := reconnectBannerFixture(t, svc, u, rm, tc.kind, tc.address)
+			// Present a finished index: an unindexed inbox makes the mailbox page
+			// schedule a background reconcile, which rewrites the durable state
+			// under the assertion.
+			folders, err := svc.Store.ReconcileRemoteFolders(ctx, u.AccountID, box.ID, []store.RemoteFolderSync{{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 1}})
+			if err != nil || len(folders) != 1 {
+				t.Fatalf("folders: %+v %v", folders, err)
+			}
+			if _, err = svc.Store.ReconcileRemoteFolderBatch(ctx, u.AccountID, box.ID, "INBOX", 1, nil, nil, false, 0, true); err != nil {
+				t.Fatal(err)
+			}
+			if err = svc.Store.SetRemoteIndexStatus(ctx, u.AccountID, box.ID, store.RemoteIndexComplete, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err = svc.Store.SaveMetadataSyncState(ctx, u.AccountID, box.ID, "error", "refresh", verdict); err != nil {
+				t.Fatal(err)
+			}
+			srv := httpapp.New(svc, nil)
+			srv.SetRemoteMailbox(rm)
+			cookie, _ := uiSession(t, svc, u.ID)
+			body := uiGet(t, srv.Handler(), cookie, "/ui/inboxes/"+box.ID).Body.String()
+			if !strings.Contains(body, `data-inbox-reconnect`) || !strings.Contains(body, verdict) {
+				t.Fatalf("%s inbox page missing the reconnect banner: %s", tc.kind, body)
+			}
+			if !strings.Contains(body, tc.control) || !strings.Contains(body, ">"+tc.action+"</a>") {
+				t.Fatalf("%s banner missing its in-place reconnect control: %s", tc.kind, body)
+			}
+
+			// The custom-folder page is a separate body template that used to omit
+			// the connection state altogether.
+			folderBody := uiGet(t, srv.Handler(), cookie, "/ui/inboxes/"+box.ID+"/folder?folder="+folders[0].ID).Body.String()
+			if !strings.Contains(folderBody, `data-inbox-reconnect`) || !strings.Contains(folderBody, tc.control) {
+				t.Fatalf("%s folder page missing the reconnect banner: %s", tc.kind, folderBody)
+			}
+		})
+	}
+
+	t.Run("imap", func(t *testing.T) {
+		t.Parallel()
+		svc, h, u, _, standalone, _ := standaloneFixture(t)
+		ctx := context.Background()
+		// Same finished-index setup as above: the fixture's connector is already
+		// configured, so only its index and the verdict are needed.
+		folders, err := svc.Store.ReconcileRemoteFolders(ctx, u.AccountID, standalone.ID, []store.RemoteFolderSync{{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 1}})
+		if err != nil || len(folders) != 1 {
+			t.Fatalf("folders: %+v %v", folders, err)
+		}
+		if _, err = svc.Store.ReconcileRemoteFolderBatch(ctx, u.AccountID, standalone.ID, "INBOX", 1, nil, nil, false, 0, true); err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.Store.SetRemoteIndexStatus(ctx, u.AccountID, standalone.ID, store.RemoteIndexComplete, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.Store.SaveMetadataSyncState(ctx, u.AccountID, standalone.ID, "error", "refresh", verdict); err != nil {
+			t.Fatal(err)
+		}
+		cookie, _ := uiSession(t, svc, u.ID)
+		body := uiGet(t, h, cookie, "/ui/inboxes/"+standalone.ID).Body.String()
+		if !strings.Contains(body, `data-inbox-reconnect`) || !strings.Contains(body, verdict) {
+			t.Fatalf("IMAP inbox page missing the reconnect banner: %s", body)
+		}
+		// A hand-configured connector has no OAuth round trip; the fix lives in
+		// its connector settings.
+		if !strings.Contains(body, `href="/ui/inboxes/`+standalone.ID+`/remote">Reconnect IMAP</a>`) {
+			t.Fatalf("IMAP banner missing its connector-settings control: %s", body)
+		}
+	})
+}
+
+// TestActionQueuePollCarriesConnectionState proves the poll that drives the sync
+// strip also reports the connection health the reconnect banner renders, so a
+// verdict recorded while a page is already open becomes actionable without a
+// reload.
+func TestActionQueuePollCarriesConnectionState(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SaveMetadataSyncState(ctx, u.AccountID, standalone.ID, "error", "initial", "Reconnect this inbox to resume metadata sync"); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	var payload struct {
+		Connections map[string]struct {
+			State       string `json:"state"`
+			Provider    string `json:"provider"`
+			ActionLabel string `json:"action_label"`
+			Detail      string `json:"detail"`
+			Reconnect   string `json:"reconnect"`
+		} `json:"connections"`
+	}
+	body := uiGet(t, h, cookie, "/ui/actions").Body.Bytes()
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode actions payload: %v", err)
+	}
+	conn, ok := payload.Connections[standalone.ID]
+	if !ok {
+		t.Fatalf("poll payload has no connection state for the standalone inbox: %s", body)
+	}
+	if conn.State != "disconnected" || conn.Provider != "imap" || conn.Reconnect != "imap" ||
+		conn.ActionLabel != "Reconnect IMAP" || conn.Detail != "Reconnect this inbox to resume metadata sync" {
+		t.Fatalf("IMAP connection state = %+v", conn)
 	}
 }
