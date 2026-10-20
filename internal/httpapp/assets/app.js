@@ -101,13 +101,13 @@
 
 // Shared copy-to-clipboard helper. The async Clipboard API only exists in a
 // secure context (HTTPS or localhost), so a page served over plain HTTP cannot
-// copy. Every copy control routes through here: a secure context copies the
-// value; any other origin, or a refused write, selects the value where it can
-// and shows one shared message telling the operator how to copy it manually.
+// copy. Every copy control routes through here: a copy control is offered only
+// where copying works, and a refused write selects the value where it can and
+// shows one shared message telling the operator how to copy it manually.
 (function () {
   'use strict';
-  var SELECTED_MESSAGE = 'Copying to the clipboard needs HTTPS. The value is selected — press Ctrl+C (⌘C on Mac) to copy it.';
-  var PLAIN_MESSAGE = 'Copying to the clipboard needs HTTPS. Select the value and copy it manually.';
+  var SELECTED_MESSAGE = 'Copying to the clipboard was refused. The value is selected — press Ctrl+C (⌘C on Mac) to copy it.';
+  var PLAIN_MESSAGE = 'Copying to the clipboard was refused. Select the value and copy it manually.';
   var message = null;
   var messageTimer = null;
 
@@ -122,15 +122,36 @@
     window.setTimeout(function () { node.remove(); }, 300);
   }
 
+  // toastHost picks where the message is mounted. A modal dialog is painted in
+  // the top layer, above every ordinary element, so a message mounted in the
+  // body would sit behind the dialog's grey backdrop and never be seen. The
+  // :modal pseudo-class names the topmost open dialog; without it (a browser
+  // too old for the top layer) the body is the best host there is.
+  function toastHost() {
+    var dialog = null;
+    try {
+      dialog = document.querySelector('dialog:modal');
+    } catch (e) {
+      dialog = null;
+    }
+    return dialog || document.body;
+  }
+
   // announce shows the shared transient message. tone 'ok' is the green success
-  // toast; the default warns that the clipboard is unavailable without HTTPS.
+  // toast; the default warns that the clipboard write was refused.
   function announce(text, tone) {
     if (!message) {
       message = document.createElement('div');
       message.setAttribute('role', 'status');
       message.setAttribute('aria-live', 'polite');
       message.addEventListener('click', hideMessage);
-      document.body.appendChild(message);
+    }
+    // Mount the message in the current host, moving it only when the host
+    // changed: a toast left inside a closed dialog would be invisible, and a
+    // live region that is re-inserted may not be announced again.
+    var host = toastHost();
+    if (message.parentNode !== host) {
+      host.appendChild(message);
     }
     message.className = tone === 'ok' ? 'ok notice' : 'notice warn';
     message.textContent = text;
@@ -141,8 +162,15 @@
     messageTimer = window.setTimeout(hideMessage, 5000);
   }
 
+  // canCopy reports whether this origin can write to the clipboard at all. The
+  // async Clipboard API exists only in a secure context (HTTPS or localhost),
+  // so a page served over plain HTTP cannot copy.
+  function canCopy() {
+    return !!(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText);
+  }
+
   function copyText(text) {
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    if (canCopy()) {
       return navigator.clipboard.writeText(text);
     }
     return Promise.reject(new Error('clipboard unavailable'));
@@ -173,6 +201,20 @@
   // overrides the label restored after the flash.
   function wire(btn, opts) {
     if (!btn) {
+      return;
+    }
+    if (!canCopy()) {
+      // A control that cannot copy must not be offered: hide the button, and
+      // for an inline value keep the text but drop the click-to-copy
+      // affordance, so nothing looks copyable that is not.
+      if ((btn.tagName || '').toLowerCase() === 'button') {
+        btn.hidden = true;
+      } else {
+        btn.removeAttribute('role');
+        btn.removeAttribute('tabindex');
+        btn.removeAttribute('title');
+        btn.style.cursor = 'text';
+      }
       return;
     }
     opts = opts || {};

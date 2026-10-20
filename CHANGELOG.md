@@ -6,6 +6,15 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Copy buttons in the web interface are hidden when the interface is served over
+  plain HTTP. A browser only exposes the clipboard API in a secure context
+  (HTTPS or `localhost`), so a copy that cannot work is no longer offered — the
+  value stays visible and selectable by hand.
+- The shared copy message is now shown in front of an open dialog's backdrop
+  instead of behind it.
+
 ## [0.1.0-beta.1] - 2026-10-20
 
 Initial release of MailMoose: self-hosted email infrastructure for people and
