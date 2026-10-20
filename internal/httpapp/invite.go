@@ -24,6 +24,10 @@ func (s *Server) inviteGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
+	if s.registerLimiter != nil && !s.registerLimiter.Allow(rateLimitKey(clientIP(r, s.Service.Config))) {
+		http.Error(w, "too many registration attempts", http.StatusTooManyRequests)
+		return
+	}
 	token := r.PathValue("token")
 	_ = r.ParseForm()
 	password := r.Form.Get("password")

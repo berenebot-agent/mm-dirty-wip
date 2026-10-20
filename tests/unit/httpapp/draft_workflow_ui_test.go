@@ -89,6 +89,24 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 			t.Fatalf("review page missing %q", want)
 		}
 	}
+	// A stale compose form must not bypass approval or change the frozen content.
+	form, contentType := multipartBody(t, map[string]string{"action": "send", "to": "attacker@example.net", "subject": "Changed", "text": "pay 10000"}, "", "")
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/drafts/"+draft.ID+"/save?_csrf="+csrf, form)
+	req.Header.Set("Content-Type", contentType)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("pending form send = %d %s", rr.Code, rr.Body.String())
+	}
+	pending, err := svc.Store.GetSendRequestByDraft(ctx, admin, draft.ID)
+	if err != nil || pending.Status != model.SendRequestPending || pending.MessageID != "" {
+		t.Fatalf("form send changed approval: %+v, %v", pending, err)
+	}
+	outbox, err := svc.Store.ListOutbox(ctx, admin, box.ID, 10)
+	if err != nil || len(outbox) != 0 {
+		t.Fatalf("form send queued mail: %+v, %v", outbox, err)
+	}
 	// Approve via the UI.
 	rr = uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts/"+draft.ID+"/approve", "_csrf="+csrf)
 	if rr.Code != 303 {
@@ -100,6 +118,10 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	sr, err := svc.Store.GetSendRequestByDraft(ctx, admin, draft.ID)
 	if err != nil || sr.Status != model.SendRequestApproved || sr.DecisionMethod != model.DecisionMethodUI {
 		t.Fatalf("send request after UI approve %+v err=%v", sr, err)
+	}
+	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, sr.MessageID)
+	if err != nil || sent.Text != draft.Text || sent.Subject != draft.Subject || len(sent.To) != 1 || sent.To[0] != draft.To[0] {
+		t.Fatalf("approval used changed content: %+v, %v", sent, err)
 	}
 }
 

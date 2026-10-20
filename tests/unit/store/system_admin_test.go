@@ -269,6 +269,67 @@ func TestAccountAdminInviteRedeemsSeparateAccount(t *testing.T) {
 	}
 }
 
+func TestRedeemInviteRejectsUnavailableTokenBeforePasswordWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _, _, _ := testStore(t)
+	if _, err := s.RedeemInvite(ctx, "unknown", "short"); !errors.Is(err, store.ErrInviteExpired) {
+		t.Fatalf("unknown token reached password validation: %v", err)
+	}
+	for _, state := range []string{"expired", "revoked", "accepted"} {
+		t.Run(state, func(t *testing.T) {
+			inv, token, err := s.CreateInvite(ctx, store.InviteInput{Email: state + "@example.com", Kind: model.InviteKindAccountAdmin, Quota: 50 << 20, TTL: time.Hour})
+			if err != nil {
+				t.Fatal(err)
+			}
+			db := rawDB(t, s.Path())
+			defer db.Close()
+			column := map[string]string{"expired": "expires_at", "revoked": "revoked_at", "accepted": "accepted_at"}[state]
+			if _, err := db.ExecContext(ctx, `UPDATE invites SET `+column+`=? WHERE id=?`, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), inv.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.RedeemInvite(ctx, token, "short"); !errors.Is(err, store.ErrInviteExpired) {
+				t.Fatalf("%s token reached password validation: %v", state, err)
+			}
+		})
+	}
+}
+
+func TestConcurrentInviteRedemptionIsSingleUse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _, _, _ := testStore(t)
+	_, token, err := s.CreateInvite(ctx, store.InviteInput{Email: "concurrent@example.com", Kind: model.InviteKindAccountAdmin, Quota: 50 << 20, TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			_, err := s.RedeemInvite(ctx, token, "correct horse battery staple")
+			results <- err
+		}()
+	}
+	close(start)
+	var successes, expired int
+	for i := 0; i < 2; i++ {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, store.ErrInviteExpired):
+			expired++
+		default:
+			t.Fatalf("redeem: %v", err)
+		}
+	}
+	if successes != 1 || expired != 1 {
+		t.Fatalf("redemption successes=%d expired=%d", successes, expired)
+	}
+}
+
 func TestCreateInviteRejectsEmailConflictsWithoutSideEffects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

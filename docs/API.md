@@ -695,6 +695,10 @@ GET  /v1/send-requests?inbox={id}&active=true
 - `approve` authorizes the exact frozen draft and enqueues it through the
   normal outbound flow. `reject` stores optional feedback and leaves the draft
   editable.
+- An Owner's direct `POST /v1/drafts/{id}/send` on a pending request follows the
+  same fingerprint-checked approval flow and sends only the stored draft. The
+  web compose/save Send action returns `409` for a pending draft; use its Review
+  Draft approval action instead. Unsaved edits cannot authorize different content.
 - Approval and delivery are separate: approval enqueues a pending message;
   `delivery_status` moves `none` → `pending` → `sent`/`failed`.
 - If the inbox has a configured `approver_email`, `request-send` is external:

@@ -89,6 +89,10 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		if err != nil {
 			return model.Message{}, model.Event{}, err
 		}
+		// A request may have frozen the draft since the sender last read it.
+		if d.Status == model.DraftStatusPendingApproval && r.SendRequestID == "" {
+			return model.Message{}, model.Event{}, ErrConflict
+		}
 		_, attTotal, err := draftAttachmentPathsTx(ctx, tx, r.DraftID)
 		if err != nil {
 			return model.Message{}, model.Event{}, err

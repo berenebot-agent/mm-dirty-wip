@@ -84,6 +84,7 @@ type fakeHandoff struct {
 	appends         []fakeAppend
 	lookups         int
 	failAppend      bool
+	failInbox       string
 	seenHeader      string
 }
 
@@ -95,7 +96,7 @@ type fakeAppend struct {
 }
 
 func (f *fakeHandoff) Append(_ context.Context, inboxID string, raw []byte, messageID, handoffID string) (app.HandoffOutcome, error) {
-	if f.failAppend {
+	if f.failAppend && (f.failInbox == "" || f.failInbox == inboxID) {
 		return app.HandoffOutcome{}, f.appendErr
 	}
 	f.appends = append(f.appends, fakeAppend{inboxID: inboxID, raw: append([]byte(nil), raw...), messageID: messageID, handoffID: handoffID})
@@ -636,6 +637,9 @@ func TestRemoteDraftHandoffTransientFailureRetriesNextPass(t *testing.T) {
 	if got.Publication != model.HandoffPending {
 		t.Fatalf("transient failure state=%q want pending", got.Publication)
 	}
+	if got.Attempts != 1 {
+		t.Fatalf("one pass counted %d attempts", got.Attempts)
+	}
 	// The record is still claimable and a subsequent pass publishes it.
 	fake.failAppend = false
 	fake.confirmed = true
@@ -644,6 +648,46 @@ func TestRemoteDraftHandoffTransientFailureRetriesNextPass(t *testing.T) {
 	got, _ = svc.Store.GetAssistantHandlingInternal(ctx, u.AccountID, h.ID)
 	if got.Publication != model.HandoffPublished || got.RemoteUID != 42 {
 		t.Fatalf("retry did not publish: %+v", got)
+	}
+}
+
+func TestHandoffFailureDoesNotBlockAnotherAccount(t *testing.T) {
+	t.Parallel()
+	svc, u, _, _ := testService(t)
+	ctx := context.Background()
+	broken := standaloneInbox(t, svc, u.AccountID, "broken@remote.example")
+	draft := standaloneDraft(t, svc, u.AccountID, broken)
+	if _, err := svc.RequestSend(ctx, assistantPrincipal(u.AccountID, broken.ID), draft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Store.CreateAccountAndAdmin(ctx, "Other", "other@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy := standaloneInbox(t, svc, other.AccountID, "healthy@remote.example")
+	otherDraft := standaloneDraft(t, svc, other.AccountID, healthy)
+	if _, err := svc.RequestSend(ctx, assistantPrincipal(other.AccountID, healthy.ID), otherDraft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeHandoff{failAppend: true, failInbox: broken.ID, appendErr: errors.New("temporary network fault"), confirmed: true, remoteUID: 42}
+	svc.SetHandoffPublisher(fake)
+	for pass := 1; pass <= 8; pass++ {
+		svc.PublishHandoffs(ctx)
+		failed, err := svc.Store.LatestAssistantHandlingForDraft(ctx, u.AccountID, draft.ID)
+		if err != nil || failed == nil {
+			t.Fatalf("broken handoff: %+v, %v", failed, err)
+		}
+		want := model.HandoffPending
+		if pass == 8 {
+			want = model.HandoffFailed
+		}
+		if failed.Attempts != pass || failed.Publication != want {
+			t.Fatalf("pass %d: attempts=%d publication=%s, want %s", pass, failed.Attempts, failed.Publication, want)
+		}
+		published, err := svc.Store.LatestAssistantHandlingForDraft(ctx, other.AccountID, otherDraft.ID)
+		if err != nil || published == nil || published.Publication != model.HandoffPublished || published.Attempts != 1 {
+			t.Fatalf("healthy account blocked on pass %d: %+v, %v", pass, published, err)
+		}
 	}
 }
 

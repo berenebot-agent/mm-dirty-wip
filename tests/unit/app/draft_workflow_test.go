@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
@@ -128,6 +129,30 @@ func TestApproveDraftRejectsTamperedFingerprint(t *testing.T) {
 	}
 	if _, err = svc.ApproveDraft(ctx, admin, draft.ID, "", model.DecisionMethodUI, ""); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("tampered approve err=%v", err)
+	}
+	if _, err = svc.SendDraft(ctx, admin, draft.ID, app.SendInput{InboxID: box.ID, To: draft.To, Subject: draft.Subject, Text: draft.Text}, ""); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("direct send bypassed fingerprint: %v", err)
+	}
+}
+
+func TestDirectSendPendingDraftUsesFrozenContent(t *testing.T) {
+	t.Parallel()
+	svc, u, _, box := testService(t)
+	ctx := context.Background()
+	p := ownerPrincipal(u.AccountID, box.ID)
+	draft, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "reviewed", Text: "pay 100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(ctx, p, draft.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.SendDraft(ctx, p, draft.ID, app.SendInput{InboxID: box.ID, To: []string{"attacker@y.test"}, Subject: "changed", Text: "pay 10000"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Message.Subject != draft.Subject || res.Message.Text != draft.Text || len(res.Message.To) != 1 || res.Message.To[0] != draft.To[0] {
+		t.Fatalf("direct approval sent unsaved edits: %+v", res.Message)
 	}
 }
 

@@ -371,6 +371,10 @@ transient scope/`LIST` shortfall or a generation flip.
   handoff stays pending and the next pass re-verifies by lookup (never a blind
   re-append), bounded by `maxHandoffAppendAttempts`. A retry of a missing frozen
   file verifies by lookup instead of re-appending different bytes.
+- **A failed handoff does not block the rest of the queue.** Each worker pass
+  visits pending handoffs in `(requested_at, id)` order, including tied timestamps,
+  and counts one attempt per visited handoff. Transient failures wait until the
+  next pass while later handoffs, including other accounts' handoffs, proceed.
 - **Effective-mode controls.** `GET /v1/inboxes/{id}/authoring` reports the
   effective `mode`, the kind `default_mode`, whether the inbox `standalone`, and
   `approver_enabled` — which is true exactly when the effective mode is
