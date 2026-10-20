@@ -66,6 +66,16 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	if !strings.Contains(body, "/drafts/"+draft.ID+"/approve") {
 		t.Fatalf("inbox missing quick approve action")
 	}
+	// The quick approve action is a green tick, not the mark-read envelope.
+	approveAt := strings.Index(body, `class="secondary icon-btn approve" title="Approve and send"`)
+	if approveAt < 0 {
+		t.Fatalf("inbox approve button is not the green tick")
+	}
+	btn := body[approveAt : approveAt+strings.Index(body[approveAt:], "</button>")]
+	// The mark-read envelope is two paths; the tick is one.
+	if paths := strings.Count(btn, "<path"); paths != 1 {
+		t.Fatalf("inbox approve button glyph has %d paths, want a single tick: %s", paths, btn)
+	}
 	// Send-request row uses inbox-like columns: To, subject + body start,
 	// request date and size.
 	for _, want := range []string{"friend@example.net", "Proposal", "body", ">Size</span>", ">To</span>"} {
@@ -75,8 +85,22 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	}
 	// Drafts list flags it pending.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts")
-	if !strings.Contains(rr.Body.String(), "Pending Send") || !strings.Contains(rr.Body.String(), `class="draft-status pending"`) {
+	drafts := rr.Body.String()
+	if !strings.Contains(drafts, "Pending Send") || !strings.Contains(drafts, `class="draft-status pending"`) {
 		t.Fatalf("drafts list missing pending badge")
+	}
+	// The drafts list uses the same green tick to approve, and a dash to
+	// cancel the approval request and keep the draft.
+	if !strings.Contains(drafts, `class="secondary icon-btn approve" title="Approve and send"`) {
+		t.Fatalf("drafts list approve action is not the green tick")
+	}
+	cancelAt := strings.Index(drafts, `title="Cancel approval and edit"`)
+	if cancelAt < 0 || !strings.Contains(drafts, "/drafts/"+draft.ID+"/cancel-send-request") {
+		t.Fatalf("drafts list missing the cancel-approval action")
+	}
+	cancelBtn := drafts[cancelAt : cancelAt+strings.Index(drafts[cancelAt:], "</button>")]
+	if paths := strings.Count(cancelBtn, "<path"); paths != 1 {
+		t.Fatalf("drafts cancel glyph has %d paths, want a single dash: %s", paths, cancelBtn)
 	}
 	if strings.Contains(rr.Body.String(), "Request send") {
 		t.Fatalf("drafts list should not offer request-send to the UI user")
