@@ -1,0 +1,2066 @@
+package receiver
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/mxwire"
+)
+
+const (
+	challengeTTL = mxwire.AuthChallengeTTL
+
+	// Bounds for source-IP behaviour. The per-IP connection cap stops one
+	// sender consuming every connection slot; the per-IP connection window
+	// bounds how many sessions one source may open per minute so short-lived
+	// cycling cannot evade the concurrent cap; the auth window bounds how many
+	// challenges a source may start per minute so a burst of DomainAuth frames
+	// cannot turn into unbounded DNS work. A failed proof arms a short cooldown
+	// for only the domain that failed, applied during AUTH, so a domain's
+	// transient DNS/key failure neither denies a core's other domains nor
+	// punishes a legitimate sender for opening many short connections.
+	perIPConnLimit       = 16
+	perIPConnWindow      = time.Minute
+	perIPConnWindowMax   = 128
+	perIPAuthWindow      = time.Minute
+	perIPAuthWindowMax   = 256
+	perIPAuthConcurrent  = 16
+	ipMapCap             = 4096
+	ipFailureCooldown    = 5 * time.Second
+	maxChallengesPerConn = 16
+	dnsJobs              = 32
+
+	// defaultMaxTransactions is the global ceiling on pending transaction
+	// groups across every connection, independent of the SMTP edge's own
+	// MaxConnections. It is a safety net against unbounded group growth, not a
+	// policy knob an operator normally tunes.
+	defaultMaxTransactions = 128
+
+	// authProofLifetime is the receiver's ceiling for a freshly proved binding.
+	// The dialer must not cache a binding past 5 minutes (mxwire.AuthLifetime).
+	authProofLifetime = mxwire.AuthLifetime
+
+	// readDeadline bounds one idle read after the handshake.
+	readDeadline = 90 * time.Second
+	// writeDeadline bounds one frame write; a stuck peer cannot wedge a session.
+	writeDeadline = 10 * time.Second
+
+	// defaultSummaryInterval is the heartbeat period. Long enough that a quiet
+	// receiver is not chatty, short enough to see mail flowing while watching
+	// a deployment come up.
+	defaultSummaryInterval = 5 * time.Minute
+)
+
+// Config is the standalone receiver configuration. The SMTP edge settings
+// (hostname, message/staging/connection bounds, verification toggles, DNS
+// resolver and timeouts) live in the embedded mxagent.Config so the receiver
+// and the SMTP edge share one operator surface. TXT and MX lookups are the
+// receiver's own DNS calls — the TXT proof of domain authority and the MX check
+// that this receiver is actually routed for the domain; when nil the system
+// resolver is used.
+type Config struct {
+	// Mode selects single-core bearer authentication or shared DNS authentication.
+	Mode    string
+	CoreKey string
+	SMTP    mxagent.Config
+
+	// LookupTXT resolves the _mailmoose-mx.<domain> TXT records proving domain
+	// authority. It is separate from mxagent's resolver because the proof is a
+	// receiver concern, not an email-verification one.
+	LookupTXT func(context.Context, string) ([]string, error)
+
+	// LookupMX resolves the domain's published MX records for the routing gate:
+	// a receiver authorizes a domain only when its own SMTP hostname is among
+	// them. It is separate from LookupTXT because routing and authority are
+	// distinct checks.
+	LookupMX func(context.Context, string) ([]*net.MX, error)
+
+	// MaxDomainsPerConnection bounds distinct domains admitted on one session.
+	MaxDomainsPerConnection int
+	// MaxTransactionsPerConnection bounds concurrent transaction groups on one
+	// session; MaxTransactionsPerDomain bounds them per domain across all
+	// sessions. Both are enforced below the global mxagent MaxConnections.
+	MaxTransactionsPerConnection int
+	MaxTransactionsPerDomain     int
+	// MaxTransactions bounds concurrent pending groups globally, across all
+	// connections. It is deliberately separate from the SMTP edge's
+	// MaxConnections so the receiver is bounded on its own terms.
+	MaxTransactions int
+
+	// AuthTimeout bounds each DNS lookup within the protocol's separate 30-second
+	// initial-lookup and verification budgets. ResolveTimeout bounds one recipient
+	// resolve and IngestTimeout one staged message handoff.
+	AuthTimeout, ResolveTimeout, IngestTimeout time.Duration
+	// RevalidateInterval is the nominal renewal period. A binding is renewed
+	// when its renewAt deadline passes, which is derived from the grant rather
+	// than from a fixed per-connection tick, so a late-authenticated binding is
+	// not expired early. Tests may set it below one second.
+	RevalidateInterval time.Duration
+
+	// MaxConnsPerIP bounds concurrent sessions from one source IP. Zero selects
+	// perIPConnLimit.
+	MaxConnsPerIP int
+	// ConnWindowMax bounds how many sessions one source IP may open per minute.
+	// Zero selects perIPConnWindowMax.
+	ConnWindowMax int
+
+	// MaxAuthConcurrent bounds authentication jobs running concurrently for one
+	// source IP. Zero selects perIPAuthConcurrent.
+	MaxAuthConcurrent int
+	// AuthWindowMax bounds how many authentication jobs one source IP may start
+	// per minute. Zero selects perIPAuthWindowMax.
+	AuthWindowMax int
+
+	// TrustedProxies lists the peers allowed to open a cleartext (non-TLS)
+	// session in shared mode. A cleartext session is admitted only from
+	// loopback or one of these prefixes; an empty list means every shared
+	// session must be TLS. It lets a TLS-terminating reverse proxy front the
+	// session listener without the receiver holding a certificate. In single
+	// mode the bearer key is the control and cleartext is not peer-gated unless
+	// RequireTLS is set.
+	TrustedProxies []netip.Prefix
+	// RequireTLS refuses cleartext sessions from any peer that is not loopback
+	// or a trusted proxy, in both single and shared mode. It defaults to false:
+	// self-hosting is the primary model and an operator may deliberately run a
+	// cleartext receiver on their own LAN. When false the receiver logs a
+	// startup warning for a non-loopback cleartext listener, because the bearer
+	// key and mail then cross the wire unencrypted.
+	RequireTLS bool
+	// MaxRenewalsInFlight bounds receiver-driven renewal challenges outstanding
+	// on one session at once. Zero selects the effective auth-concurrency limit.
+	// Raising it lets tests observe paced renewals without changing production
+	// defaults.
+	MaxRenewalsInFlight int
+
+	// BrowserRedirectURL, when set, is where an ordinary browser visiting the
+	// receiver's root is redirected (302). API and health routes are unchanged;
+	// only GET / with an HTML Accept header is served a redirect.
+	BrowserRedirectURL string
+
+	// SummaryInterval is how often the receiver emits its INFO heartbeat: a
+	// single line of totals plus the delta since the previous tick. Zero
+	// selects defaultSummaryInterval. A negative value disables it, which is
+	// what a test that asserts on an exact record set wants.
+	SummaryInterval time.Duration
+}
+
+func (c *Config) maxAuthConcurrent() int {
+	if c.MaxAuthConcurrent > 0 {
+		return c.MaxAuthConcurrent
+	}
+	return perIPAuthConcurrent
+}
+
+func (c *Config) maxConnsPerIP() int {
+	if c.MaxConnsPerIP > 0 {
+		return c.MaxConnsPerIP
+	}
+	return perIPConnLimit
+}
+
+func (c *Config) connWindowMax() int {
+	if c.ConnWindowMax > 0 {
+		return c.ConnWindowMax
+	}
+	return perIPConnWindowMax
+}
+
+func (c *Config) authWindowMax() int {
+	if c.AuthWindowMax > 0 {
+		return c.AuthWindowMax
+	}
+	return perIPAuthWindowMax
+}
+
+func (c *Config) maxRenewalsInFlight() int {
+	if c.MaxRenewalsInFlight > 0 {
+		return c.MaxRenewalsInFlight
+	}
+	return c.maxAuthConcurrent()
+}
+
+func (c *Config) applyDefaults() {
+	if c.Mode == "" {
+		c.Mode = "single"
+	}
+	s := &c.SMTP
+	if s.Hostname == "" {
+		s.Hostname = "localhost"
+	}
+	if s.MaxMessageBytes < 1 {
+		s.MaxMessageBytes = mxwire.DefaultMaxBodyBytes
+	}
+	if s.MaxStagingBytes < s.MaxMessageBytes+1 {
+		s.MaxStagingBytes = s.MaxMessageBytes + 1
+	}
+	if s.MaxConnections < 1 {
+		s.MaxConnections = 128
+	}
+	if s.MaxRecipients < 1 {
+		s.MaxRecipients = 100
+	}
+	if s.ReadTimeout <= 0 {
+		s.ReadTimeout = 60 * time.Second
+	}
+	if s.WriteTimeout <= 0 {
+		s.WriteTimeout = 60 * time.Second
+	}
+	if s.DataTimeout <= 0 {
+		s.DataTimeout = 5 * time.Minute
+	}
+	if s.DNSTimeout <= 0 {
+		s.DNSTimeout = 10 * time.Second
+	}
+	if c.MaxDomainsPerConnection < 1 {
+		c.MaxDomainsPerConnection = 128
+	}
+	if c.MaxTransactionsPerConnection < 1 {
+		c.MaxTransactionsPerConnection = 16
+	}
+	if c.MaxTransactionsPerDomain < 1 {
+		c.MaxTransactionsPerDomain = 8
+	}
+	if c.MaxTransactions < 1 {
+		c.MaxTransactions = defaultMaxTransactions
+	}
+	if c.AuthTimeout <= 0 {
+		c.AuthTimeout = 10 * time.Second
+	}
+	if c.ResolveTimeout <= 0 {
+		c.ResolveTimeout = 10 * time.Second
+	}
+	if c.IngestTimeout <= 0 {
+		c.IngestTimeout = 3 * time.Minute
+	}
+	if c.RevalidateInterval <= 0 || c.RevalidateInterval > 4*time.Minute {
+		c.RevalidateInterval = 4 * time.Minute
+	}
+	if c.LookupTXT == nil {
+		c.LookupTXT = net.DefaultResolver.LookupTXT
+		if s.DNSResolver != "" {
+			resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: s.DNSTimeout}).DialContext(ctx, network, s.DNSResolver)
+			}}
+			c.LookupTXT = resolver.LookupTXT
+		}
+	}
+	if c.LookupMX == nil {
+		c.LookupMX = net.DefaultResolver.LookupMX
+		if s.DNSResolver != "" {
+			resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: s.DNSTimeout}).DialContext(ctx, network, s.DNSResolver)
+			}}
+			c.LookupMX = resolver.LookupMX
+		}
+	}
+}
+
+// bindState is the single lifecycle state of a domain binding. It replaces the
+// former pair of booleans: a binding is active (the registry's authority),
+// replaced (a newer binding owns the registry, but this one may still serve
+// pinned DATA until it expires) or revoked (unusable).
+type bindState uint8
+
+const (
+	bindActive bindState = iota
+	bindReplaced
+	bindRevoked
+)
+
+// Receiver is one logical MX receiver. All mutable state is guarded by mu;
+// network writes never happen while mu is held.
+type Receiver struct {
+	single *connection
+	cfg    Config
+	log    *slog.Logger
+
+	mu          sync.Mutex
+	domains     map[string]*binding
+	connections map[string]*connection
+	sem         chan struct{}
+	dnsSem      chan struct{}
+	ips         map[string]*ipState
+
+	// txGlobal and domainTx are the transaction accounting shared by every
+	// connection's pending groups.
+	txGlobal int
+	domainTx map[string]int
+
+	active   atomic.Int64
+	stopping atomic.Bool
+
+	// Counters for the periodic summary. They are plain totals since start, so
+	// the heartbeat can report both the running total and the delta since the
+	// previous tick. touched is set whenever a counter changes, so an idle
+	// receiver can stay quiet. lastSummary holds the previous tick's values.
+	statSessions         atomic.Int64
+	statProofs           atomic.Int64
+	statProofFails       atomic.Int64
+	statResolves         atomic.Int64
+	statMessages         atomic.Int64
+	statRejected         atomic.Int64
+	statActive           atomic.Int64
+	lastSummarySess      atomic.Int64
+	lastSummaryProof     atomic.Int64
+	lastSummaryProofFail atomic.Int64
+	lastSummaryResolve   atomic.Int64
+	lastSummaryMessage   atomic.Int64
+	lastSummaryReject    atomic.Int64
+	summaryStarted       atomic.Bool
+	summaryRun           atomic.Bool
+	summaryOnce          sync.Once
+	summaryDone          chan struct{}
+}
+
+type ipState struct {
+	conns int
+	// connWindow/connCount bound how many sessions one source may open per
+	// minute, so a source cannot cycle short-lived connections to evade the
+	// concurrent cap.
+	connWindow time.Time
+	connCount  int
+	// auths is the number of in-flight authentication jobs; authCount is the
+	// number started in the current window beginning at authWindow.
+	auths      int
+	authCount  int
+	authWindow time.Time
+	// domainCooldown is the per-domain failure cooldown. A failed proof cools
+	// down only the domain that failed — never the whole source IP — so one
+	// domain's transient DNS failure cannot deny registration of a core's
+	// other domains. Entries are pruned when observed expired.
+	domainCooldown map[string]time.Time
+}
+
+// coolingDown reports whether domain is within its failure cooldown as of now.
+// Callers hold r.mu.
+func (st *ipState) coolingDown(domain string, now time.Time) bool {
+	return now.Before(st.domainCooldown[domain])
+}
+
+// anyCooldown reports whether any domain cooldown is still in effect as of now.
+// Callers hold r.mu.
+func (st *ipState) anyCooldown(now time.Time) bool {
+	for _, until := range st.domainCooldown {
+		if now.Before(until) {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneCooldowns drops expired per-domain cooldowns so the map cannot grow
+// without bound. Callers hold r.mu.
+func (st *ipState) pruneCooldowns(now time.Time) {
+	for domain, until := range st.domainCooldown {
+		if !now.Before(until) {
+			delete(st.domainCooldown, domain)
+		}
+	}
+}
+
+// clearCooldown drops a domain's failure cooldown once it proves successfully,
+// so a recovered domain is immediately eligible again. Callers hold r.mu.
+func (st *ipState) clearCooldown(domain string) {
+	delete(st.domainCooldown, domain)
+}
+
+// binding is one connection's authority over a domain. registry membership is
+// not implied: only the active binding is in Receiver.domains. ContactEmail and
+// SetupID are the optional Antler MX registration metadata supplied on
+// DomainAuth; they are logged for usage accounting and are never credentials.
+type binding struct {
+	c             *connection
+	channel       uint64
+	domain, keyID string
+	pub           []byte
+	state         bindState
+	expires       time.Time
+	// renewAt is when maintenance should begin a renewal. It is derived from
+	// the grant so a binding that authenticated late is not renewed (or
+	// expired) on the connection's fixed tick.
+	renewAt      time.Time
+	contactEmail string
+	setupID      string
+}
+
+// challenge is one in-flight challenge. binding is nil for an initial
+// authentication and non-nil for a maintenance renewal.
+type challenge struct {
+	value     mxwire.Challenge
+	expires   time.Time
+	keyID     string
+	domain    string
+	binding   *binding
+	verifying bool
+	// contactEmail/setupID are the optional registration metadata echoed from
+	// the DomainAuth that started this challenge.
+	contactEmail string
+	setupID      string
+}
+
+type connection struct {
+	id, receiver string
+	// transportID is the HTTPS transport connection id assigned at accept time
+	// by the transport tracker, when the listener provided one.
+	transportID string
+	ip          string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	writer      *lockedWriter
+
+	domains     map[uint64]*binding
+	challenges  map[uint64]challenge
+	lastChannel uint64
+	pending     map[uint64]*pending
+	txid        atomic.Uint64
+	jobs        sync.WaitGroup
+
+	// closing is set before the writer is closed and jobs are waited for, so a
+	// racing spawn is rejected instead of adding to a zero WaitGroup.
+	closing bool
+}
+
+type pending struct {
+	tx        uint64
+	ch        uint64
+	expected  mxwire.FrameType
+	result    chan mxwire.Frame
+	bindings  map[string]*binding
+	domain    string
+	domains   []string
+	counted   map[string]bool
+	released  bool
+	cancelled bool
+}
+
+type lockedWriter struct {
+	mu     sync.Mutex
+	w      http.ResponseWriter
+	ctl    *http.ResponseController
+	closed bool
+}
+
+func (w *lockedWriter) write(f mxwire.Frame) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return io.ErrClosedPipe
+	}
+	_ = w.ctl.SetWriteDeadline(time.Now().Add(writeDeadline))
+	// Bound this frame's write/flush only. Leaving an HTTP/2 stream deadline
+	// armed also terminates an idle session after a successful write.
+	defer w.ctl.SetWriteDeadline(time.Time{})
+	if e := mxwire.WriteFrame(w.w, f); e != nil {
+		return e
+	}
+	return w.ctl.Flush()
+}
+
+func (w *lockedWriter) close() {
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+}
+
+func New(cfg Config, l *slog.Logger) *Receiver {
+	if l == nil {
+		l = slog.Default()
+	}
+	cfg.applyDefaults()
+	r := &Receiver{
+		cfg:         cfg,
+		log:         l,
+		domains:     map[string]*binding{},
+		connections: map[string]*connection{},
+		sem:         make(chan struct{}, cfg.SMTP.MaxConnections),
+		dnsSem:      make(chan struct{}, dnsJobs),
+		ips:         map[string]*ipState{},
+		domainTx:    map[string]int{},
+		summaryDone: make(chan struct{}),
+	}
+	return r
+}
+
+// Handler serves the HTTP/2 session endpoint and minimal health.
+func (r *Receiver) Handler() http.Handler {
+	m := http.NewServeMux()
+	m.HandleFunc("POST "+mxwire.SessionPath, r.serve)
+	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	// Readiness reflects the receiver process, not domain registration: an MX
+	// receiver with no domains registered is still ready to accept sessions.
+	m.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if r.stopping.Load() {
+			http.Error(w, "stopping", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(200)
+	})
+	// A regular browser that visits the receiver's root is sent to the
+	// operator's landing page. Only an HTML navigation is redirected; a client
+	// that accepts anything (or has no Accept header) gets the plain 404 so
+	// health probes and tooling keep their expected behaviour.
+	m.HandleFunc("GET /{$}", r.browserRoot)
+	return m
+}
+
+// browserRoot serves GET / for browsers: a 302 to the configured landing page,
+// or 404 when no redirect is configured. The URL is validated at load time, so
+// it is never an open redirect target chosen by a request.
+func (r *Receiver) browserRoot(w http.ResponseWriter, req *http.Request) {
+	if r.cfg.BrowserRedirectURL == "" || !wantsBrowserHTML(req) {
+		http.NotFound(w, req)
+		return
+	}
+	http.Redirect(w, req, r.cfg.BrowserRedirectURL, http.StatusFound)
+}
+
+// wantsBrowserHTML reports whether the request is a browser navigation:
+// text/html is explicitly an acceptable type. It is a positive check, not a
+// user-agent guess, so API clients are unaffected.
+func wantsBrowserHTML(req *http.Request) bool {
+	for _, part := range strings.Split(req.Header.Get("Accept"), ",") {
+		media, _, _ := strings.Cut(part, ";")
+		if strings.EqualFold(strings.TrimSpace(media), "text/html") {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
+	ip, _, _ := net.SplitHostPort(q.RemoteAddr)
+	peer := ip
+	if r.log != nil {
+		if host, _, err := net.SplitHostPort(q.RemoteAddr); err == nil {
+			peer = host
+		}
+	}
+	if q.ProtoMajor != 2 {
+		r.logRejected(peer, "not_h2")
+		http.Error(w, "HTTP/2 required", 426)
+		return
+	}
+	// Shared mode requires TLS unless the immediate peer is a trusted local
+	// proxy (or loopback): the receiver then holds no certificate and a
+	// TLS-terminating proxy fronts the listener. In single mode cleartext is
+	// allowed by default (self-hosting), but RequireTLS applies the same peer
+	// gate there too.
+	cleartext := q.TLS == nil
+	cleartextTrusted := false
+	if cleartext && (r.cfg.Mode == "shared" || r.cfg.RequireTLS) {
+		if !r.cleartextPeerAllowed(ip) {
+			r.logRejected(peer, "cleartext_not_trusted")
+			http.Error(w, "TLS HTTP/2 required", 426)
+			return
+		}
+		cleartextTrusted = true
+	}
+	if r.cfg.Mode == "single" && !r.authenticateCore(q) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.stopping.Load() {
+		r.logRejected(peer, "stopping")
+		http.Error(w, "stopping", 503)
+		return
+	}
+	r.mu.Lock()
+	st := r.ips[ip]
+	now := time.Now()
+	if st == nil {
+		if len(r.ips) >= ipMapCap {
+			for key, entry := range r.ips {
+				if entry.conns == 0 && entry.auths == 0 && !entry.anyCooldown(now) && time.Since(entry.authWindow) >= perIPAuthWindow {
+					delete(r.ips, key)
+				}
+			}
+			if len(r.ips) >= ipMapCap {
+				r.mu.Unlock()
+				r.logRejected(peer, "ip_map_full")
+				http.Error(w, "limited", 429)
+				return
+			}
+		}
+		st = &ipState{}
+		r.ips[ip] = st
+	}
+	// The failure cooldown is enforced during AUTH, not on connection open, so
+	// a source is not punished for opening a short connection. The concurrent
+	// cap and the per-minute connection window both bound connection churn.
+	if now.Sub(st.connWindow) >= perIPConnWindow {
+		st.connWindow = now
+		st.connCount = 0
+	}
+	if st.conns >= r.cfg.maxConnsPerIP() || st.connCount >= r.cfg.connWindowMax() {
+		r.mu.Unlock()
+		r.logRejected(peer, "ip_limit")
+		http.Error(w, "limited", 429)
+		return
+	}
+	st.conns++
+	st.connCount++
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		st.conns--
+		if st.conns == 0 && st.auths == 0 && !st.anyCooldown(time.Now()) && time.Since(st.authWindow) >= perIPAuthWindow {
+			delete(r.ips, ip)
+		}
+		r.mu.Unlock()
+	}()
+	select {
+	case r.sem <- struct{}{}:
+		defer func() { <-r.sem }()
+	default:
+		r.logRejected(peer, "connection_limit")
+		http.Error(w, "limited", 503)
+		return
+	}
+	ctl := http.NewResponseController(w)
+	if ctl.EnableFullDuplex() != nil {
+		r.logRejected(peer, "full_duplex_unavailable")
+		http.Error(w, "full duplex unavailable", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(200)
+	if ctl.Flush() != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(q.Context())
+	defer cancel()
+	var rid, cid [16]byte
+	if _, err := rand.Read(rid[:]); err != nil {
+		return
+	}
+	if _, err := rand.Read(cid[:]); err != nil {
+		return
+	}
+	c := &connection{
+		id: hex.EncodeToString(cid[:]), receiver: hex.EncodeToString(rid[:]), ip: ip,
+		ctx: ctx, cancel: cancel, writer: &lockedWriter{w: w, ctl: ctl},
+		domains: map[uint64]*binding{}, challenges: map[uint64]challenge{}, pending: map[uint64]*pending{},
+	}
+	if st, ok := transportFromContext(q.Context()); ok {
+		c.transportID = st.id
+	}
+	r.mu.Lock()
+	r.connections[c.id] = c
+	r.mu.Unlock()
+	r.active.Add(1)
+	r.statActive.Add(1)
+	started := time.Now()
+	var tlsVersion, tlsCipher uint16
+	if q.TLS != nil {
+		tlsVersion, tlsCipher = q.TLS.Version, q.TLS.CipherSuite
+	}
+	r.logSession(c, "opened", "active_connections", r.active.Load(), "cleartext", cleartext, "cleartext_trusted", cleartextTrusted, "tls_version", tlsVersion, "tls_cipher", tlsCipher, "protocol", q.Proto, "peer_address", q.RemoteAddr)
+	var closeReason string
+	defer func() {
+		cancel()
+		// Stop accepting new jobs, close the writer so no job can write after
+		// the handler returns, then wait for jobs to drain and release state.
+		r.mu.Lock()
+		c.closing = true
+		if r.single == c {
+			r.single = nil
+		}
+		r.mu.Unlock()
+		c.writer.close()
+		c.jobs.Wait()
+		r.mu.Lock()
+		domains := make([]string, 0, len(c.domains))
+		for ch, b := range c.domains {
+			b.state = bindRevoked
+			domains = append(domains, b.domain)
+			if r.domains[b.domain] == b {
+				delete(r.domains, b.domain)
+			}
+			delete(c.domains, ch)
+		}
+		delete(r.connections, c.id)
+		pending := make([]*pending, 0, len(c.pending))
+		for _, p := range c.pending {
+			pending = append(pending, p)
+		}
+		r.mu.Unlock()
+		for _, p := range pending {
+			r.release(c, p)
+		}
+		r.active.Add(-1)
+		r.statActive.Add(-1)
+		r.logSession(c, "closed",
+			"duration_ms", time.Since(started).Milliseconds(),
+			"reason", closeReason,
+			"active_connections", r.active.Load(),
+		)
+		// The operator-facing disconnect record: INFO, so an established-then-
+		// lost core session is visible without enabling debug. It carries the
+		// domains the connection held authority for, which is what makes
+		// "which receiver stopped serving which domain" answerable.
+		r.logConnClosed(c, time.Since(started), closeReason, domains)
+	}()
+	if !r.spawn(c, func() { r.maintenance(c) }) {
+		closeReason = "spawn_failed"
+		return
+	}
+	// When the connection context is cancelled (maintenance saw an external
+	// write failure, or the handler is winding down), force any blocked read to
+	// return immediately instead of waiting out the 90s read deadline. The
+	// handler waits for the watcher to exit before returning, so it never
+	// touches the response controller after the handler is done.
+	stopWatch := make(chan struct{})
+	watchExited := make(chan struct{})
+	go func() {
+		defer close(watchExited)
+		defer r.recoverJob("read-deadline-watcher")
+		select {
+		case <-c.ctx.Done():
+			_ = ctl.SetReadDeadline(time.Now())
+		case <-stopWatch:
+		}
+	}()
+	defer func() { close(stopWatch); <-watchExited }()
+
+	// The handshake read is bounded by AuthTimeout; the session read loop then
+	// uses a per-read deadline and honours context cancellation so a dropped
+	// client cannot wedge a read.
+	_ = ctl.SetReadDeadline(time.Now().Add(r.cfg.AuthTimeout))
+	f, e := mxwire.ReadFrame(q.Body)
+	if e != nil || f.Type != mxwire.FrameHello {
+		closeReason = "handshake"
+		return
+	}
+	var h mxwire.Hello
+	if mxwire.DecodeFrame(f, &h) != nil || h.Version != mxwire.V1Protocol {
+		closeReason = "protocol_mismatch"
+		return
+	}
+	// core_label is the dialer's self-declared instance label. It is a display
+	// string ("gatehouse" for every core) and is deliberately NOT unique:
+	// correlation keys are connection_id and receiver_id, never this label.
+	r.logSession(c, "hello", "version", h.Version, "core_label", h.Instance)
+	r.mu.Lock()
+	if r.cfg.Mode == "single" {
+		r.single = c
+	}
+	r.mu.Unlock()
+	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{
+		Mode:              r.cfg.Mode,
+		Version:           mxwire.V1Protocol,
+		ReceiverID:        c.receiver,
+		ConnectionID:      c.id,
+		SMTPHostname:      r.cfg.SMTP.Hostname,
+		MaxMessageBytes:   r.cfg.SMTP.MaxMessageBytes,
+		MaxDomains:        r.cfg.MaxDomainsPerConnection,
+		MaxAuthInflight:   r.cfg.maxAuthConcurrent(),
+		RevalidateSeconds: int(r.cfg.RevalidateInterval / time.Second),
+	})
+	// The session is admitted: count it and emit the operator-facing INFO
+	// record. This is after Ready is written, so the line never claims a
+	// session the core has not actually been granted.
+	r.statSessions.Add(1)
+	r.logConnEstablished(c, cleartext, cleartextTrusted, tlsVersion, q.Proto)
+	for {
+		if c.ctx.Err() != nil {
+			closeReason = "canceled"
+			return
+		}
+		_ = ctl.SetReadDeadline(time.Now().Add(readDeadline))
+		f, e = mxwire.ReadFrame(q.Body)
+		if e != nil {
+			if closeReason == "" {
+				closeReason = boundedReason(e)
+			}
+			return
+		}
+		if r.handle(c, f) != nil {
+			closeReason = "protocol_error"
+			return
+		}
+	}
+}
+
+// logSession emits a session lifecycle event (opened/hello/closed) with the
+// receiver and connection identity. These are DEBUG: for a managed one-core
+// receiver the transport/session chatter is noise, so it is hidden unless
+// DIALMX_LOG_LEVEL=debug. It is safe to log: the event carries no protocol
+// bytes, only ids, bounded facts and a duration.
+func (r *Receiver) logSession(c *connection, stage string, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	event := ""
+	switch stage {
+	case "opened":
+		event = eventSessionOpened
+	case "hello":
+		event = eventSessionHello
+	case "closed":
+		event = eventSessionClosed
+	default:
+		return
+	}
+	args := []any{"stage", stage}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+		args = append(args, "peer", c.ip)
+	}
+	args = append(args, extra...)
+	r.log.Debug(event, args...)
+}
+
+// logConnEstablished emits the operator-facing INFO record for a session that
+// completed its handshake and can now carry mail. The DEBUG session/transport
+// events describe each protocol step; this one answers "did a core connect?"
+// at the default log level, which is the question an operator actually asks.
+// It is emitted after Ready is written, so it never claims a session that has
+// not been admitted.
+func (r *Receiver) logConnEstablished(c *connection, cleartext, cleartextTrusted bool, tlsVersion uint16, proto string) {
+	if r.log == nil {
+		return
+	}
+	transport := "tls"
+	if cleartext {
+		transport = "cleartext"
+	}
+	args := []any{
+		"core_connection_id", c.id,
+		"receiver_id", c.receiver,
+		"peer", c.ip,
+		"transport", transport,
+		"cleartext_trusted", cleartextTrusted,
+		"protocol", proto,
+		"tls_version", tlsVersion,
+		"active_connections", r.active.Load(),
+	}
+	if c.transportID != "" {
+		args = append(args, "transport_id", c.transportID)
+	}
+	r.log.Info(eventConnEstablished, args...)
+}
+
+// logConnClosed emits the operator-facing INFO record for a session that has
+// ended, with how long it lived, why it ended, and the domains it had authority
+// for. domains may be empty (a session that authenticated nothing), which is
+// itself useful: it means the core connected but never proved a domain.
+func (r *Receiver) logConnClosed(c *connection, uptime time.Duration, reason string, domains []string) {
+	if r.log == nil {
+		return
+	}
+	sort.Strings(domains)
+	args := []any{
+		"core_connection_id", c.id,
+		"receiver_id", c.receiver,
+		"peer", c.ip,
+		"uptime_ms", uptime.Milliseconds(),
+		"reason", reason,
+		"domains", len(domains),
+		"active_connections", r.active.Load(),
+	}
+	if len(domains) > 0 {
+		args = append(args, "domain_list", boundedList(domains))
+	}
+	r.log.Info(eventConnClosed, args...)
+}
+
+// boundedList renders up to a handful of domains for a log line, so one
+// connection holding many domains cannot inflate the record.
+func boundedList(in []string) string {
+	const max = 8
+	if len(in) > max {
+		in = in[:max]
+		return "[" + strings.Join(in, " ") + " +" + strconv.Itoa(len(in)) + "]"
+	}
+	return "[" + strings.Join(in, " ") + "]"
+}
+
+// logSummary emits the periodic INFO heartbeat: totals since start and the
+// delta since the previous tick. lastSummary* holds the previous values, so a
+// steady-state receiver reports "0 new" rather than repeating a growing total
+// with no sense of rate. It is a single line, deliberately.
+func (r *Receiver) logSummary(interval time.Duration) {
+	if r.log == nil {
+		return
+	}
+	sess := r.statSessions.Load()
+	proofs := r.statProofs.Load()
+	proofFails := r.statProofFails.Load()
+	resolves := r.statResolves.Load()
+	messages := r.statMessages.Load()
+	rejected := r.statRejected.Load()
+
+	prevSess := r.lastSummarySess.Swap(sess)
+	prevProof := r.lastSummaryProof.Swap(proofs)
+	prevProofFail := r.lastSummaryProofFail.Swap(proofFails)
+	prevResolve := r.lastSummaryResolve.Swap(resolves)
+	prevMessage := r.lastSummaryMessage.Swap(messages)
+	prevReject := r.lastSummaryReject.Swap(rejected)
+
+	first := !r.summaryStarted.Swap(true)
+	if first {
+		// The first tick reports no rate: there is no previous window to
+		// compare against, and a delta measured from process start would be
+		// misleading.
+		prevSess, prevProof, prevProofFail = sess, proofs, proofFails
+		prevResolve, prevMessage, prevReject = resolves, messages, rejected
+
+		r.log.Info(eventSummary,
+			"interval_s", int(interval/time.Second),
+			"active_connections", r.active.Load(),
+			"sessions_total", sess,
+			"proofs_total", proofs,
+			"proof_failures_total", proofFails,
+			"resolves_total", resolves,
+			"messages_total", messages,
+			"session_rejections_total", rejected,
+		)
+		return
+	}
+
+	// Later ticks keep a stable line shape: totals plus the delta for this
+	// window, so a monitor can parse one format and still see the rate.
+	r.log.Info(eventSummary,
+		"interval_s", int(interval/time.Second),
+		"active_connections", r.active.Load(),
+		"sessions_total", sess,
+		"proofs_total", proofs,
+		"proof_failures_total", proofFails,
+		"resolves_total", resolves,
+		"messages_total", messages,
+		"session_rejections_total", rejected,
+		"sessions", sess-prevSess,
+		"proofs", proofs-prevProof,
+		"proof_failures", proofFails-prevProofFail,
+		"resolves", resolves-prevResolve,
+		"messages", messages-prevMessage,
+		"session_rejections", rejected-prevReject,
+	)
+}
+
+// proofTrace accumulates the bounded per-step outcomes of one domain proof
+// attempt so the INFO summary can report them as a compact "steps" string
+// ("dns_lookup=ok,parse_key=ok,signature=ok,grant=ok") without emitting a record
+// per step. A step whose result is not "ok" records "phase=result(reason)".
+type proofTrace struct {
+	steps []string
+}
+
+// add appends one step outcome. It is called for every phase the DEBUG records
+// also carry, so the summary and the detail never drift.
+func (t *proofTrace) add(phase, result, reason string) {
+	if t == nil {
+		return
+	}
+	step := phase + "=" + result
+	if reason != "" {
+		step += "(" + reason + ")"
+	}
+	t.steps = append(t.steps, step)
+}
+
+// String renders the accumulated steps, joined by commas.
+func (t *proofTrace) String() string {
+	if t == nil || len(t.steps) == 0 {
+		return ""
+	}
+	return strings.Join(t.steps, ",")
+}
+
+// logProof records one step of the domain-ownership proof at DEBUG. The default
+// INFO stream carries a single dialmx domain auth summary per attempt; these
+// per-step records are the detail behind it. phase is a bounded token; the
+// record never carries a raw TXT record, signature or key material. The
+// heartbeat counters are still accumulated here (at the terminal phases), so
+// demoting the step records to DEBUG does not change the periodic summary.
+func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason string, d time.Duration, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	// Count at the terminal proof phases only, so the heartbeat reflects real
+	// proofs rather than each step of one. "grant", "renewal", "registration"
+	// and "revocation" are the outcomes; the walk-through phases are steps.
+	switch phase {
+	case "registration":
+		if result == "active" {
+			r.statProofs.Add(1)
+		} else {
+			r.statProofFails.Add(1)
+		}
+	case "renewal":
+		if result == "renewed" {
+			r.statProofs.Add(1)
+		} else {
+			r.statProofFails.Add(1)
+		}
+	case "revocation":
+		r.statProofs.Add(1)
+	case "grant":
+		if result != "accepted" && result != "true" {
+			r.statProofFails.Add(1)
+		}
+	}
+	args := []any{
+		"phase", phase,
+		"domain", domain,
+		"key_id", keyID,
+		"result", result,
+	}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+	}
+	if reason != "" {
+		args = append(args, "reason", reason)
+	}
+	if phase == "dns_lookup" {
+		resolver := r.cfg.SMTP.DNSResolver
+		if resolver == "" {
+			resolver = "system"
+		}
+		args = append(args, "query_name", "_mailmoose-mx."+domain, "resolver", resolver)
+	}
+	if d > 0 {
+		args = append(args, "duration_ms", d.Milliseconds())
+	}
+	args = append(args, extra...)
+	r.log.Debug(eventDomainProof, args...)
+}
+
+// logDomainAuth records the single INFO summary for one domain proof attempt:
+// its terminal phase, result, the bounded steps that produced it, and the
+// attempt duration. It carries the same identity fields as the per-step DEBUG
+// records so a reader can pivot between levels. It never carries a raw TXT
+// record, signature or key material.
+func (r *Receiver) logDomainAuth(c *connection, phase, domain, keyID, result, reason, steps string, d time.Duration, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	args := []any{
+		"phase", phase,
+		"domain", domain,
+		"key_id", keyID,
+		"result", result,
+	}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+	}
+	if reason != "" {
+		args = append(args, "reason", reason)
+	}
+	if steps != "" {
+		args = append(args, "steps", steps)
+	}
+	if d > 0 {
+		args = append(args, "duration_ms", d.Milliseconds())
+	}
+	args = append(args, extra...)
+	r.log.Info(eventDomainAuth, args...)
+}
+
+// logRejected records a session that was refused before it was ever admitted.
+// The reason is a bounded classifier; no request content is logged. It is
+// emitted before any core connection exists, so it carries no core id.
+func (r *Receiver) logRejected(peer, reason string) {
+	if r.log == nil {
+		return
+	}
+	r.statRejected.Add(1)
+	args := []any{"reason", reason}
+	if peer != "" {
+		args = append(args, "peer", peer)
+	}
+	r.log.Info(eventSessionRejected, args...)
+}
+
+func (r *Receiver) send(c *connection, t mxwire.FrameType, tx, ch uint64, v any) error {
+	f, e := mxwire.JSONFrame(t, tx, ch, v)
+	if e != nil {
+		return e
+	}
+	return c.writer.write(f)
+}
+
+// spawn runs a bounded background job tied to the connection lifetime. It
+// refuses to add once the connection is closing, so jobs.Wait can never be
+// raced by an Add after it returns.
+func (r *Receiver) spawn(c *connection, fn func()) bool {
+	r.mu.Lock()
+	if c.closing {
+		r.mu.Unlock()
+		return false
+	}
+	c.jobs.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer c.jobs.Done()
+		// A panic in a per-connection job must not take down the whole receiver
+		// (and every other session with it): contain it, log it, and let the
+		// connection's normal close path release the job.
+		defer r.recoverJob("connection")
+		fn()
+	}()
+	return true
+}
+
+// recoverJob is the deferred panic guard for background goroutines that are not
+// tied to a connection's spawn (the read-deadline watcher, the summary ticker
+// and the mxdial-style workers). It logs and contains a panic so one bad job
+// cannot crash the process.
+func (r *Receiver) recoverJob(scope string) {
+	if rec := recover(); rec != nil {
+		if r.log != nil {
+			r.log.Error("dialmx receiver job panic recovered", "scope", scope, "type", fmt.Sprintf("%T", rec))
+		}
+	}
+}
+
+// maintenance drives keepalive pings, challenge expiry and binding renewals on
+// one 1-second tick plus a ping counter. The tick is min(1s, RevalidateInterval)
+// so tests can drive renewals quickly without a fixed per-connection revalidate
+// ticker that misfires under late authentication.
+func (r *Receiver) maintenance(c *connection) {
+	defer c.cancel()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	if r.cfg.RevalidateInterval < time.Second {
+		tick.Reset(r.cfg.RevalidateInterval)
+	}
+	ping := time.NewTicker(30 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-tick.C:
+			r.expireConn(c)
+			r.revalidateConn(c)
+		case <-ping.C:
+			if c.writer.write(mxwire.Frame{Type: mxwire.FramePing}) != nil {
+				// A failed keepalive means the peer is gone: cancel so the read
+				// loop is released and both halves of the session stop together.
+				return
+			}
+		}
+	}
+}
+
+func (r *Receiver) handle(c *connection, f mxwire.Frame) error {
+	if r.cfg.Mode == "single" && (f.Type == mxwire.FrameDomainAuth || f.Type == mxwire.FrameChallengeResponse || f.Type == mxwire.FrameDomainUnregister) {
+		return errors.New("domain authentication unavailable in single mode")
+	}
+	switch f.Type {
+	case mxwire.FramePong:
+		return nil
+	case mxwire.FramePing:
+		return r.send(c, mxwire.FramePong, 0, 0, struct{}{})
+	case mxwire.FrameDomainAuth:
+		return r.auth(c, f)
+	case mxwire.FrameChallengeResponse:
+		return r.proof(c, f)
+	case mxwire.FrameDomainUnregister:
+		return r.unregister(c, f)
+	case mxwire.FrameResolveResult, mxwire.FrameIngestResult:
+		return r.dispatch(c, f)
+	default:
+		return errors.New("unexpected frame")
+	}
+}
+
+func (r *Receiver) authenticateCore(q *http.Request) bool {
+	if r.cfg.CoreKey == "" {
+		return false
+	}
+	want := sha256.Sum256([]byte("Bearer " + r.cfg.CoreKey))
+	got := sha256.Sum256([]byte(q.Header.Get("Authorization")))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+
+// cleartextPeerAllowed reports whether a non-TLS session may be admitted from
+// the given peer IP. Loopback is always allowed (the included receiver dials
+// 127.0.0.1); other peers must be in the configured trusted-proxy allowlist.
+// With no allowlist the result is false, so shared mode keeps requiring TLS.
+func (r *Receiver) cleartextPeerAllowed(ip string) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return false
+	}
+	if addr.IsLoopback() {
+		return true
+	}
+	for _, p := range r.cfg.TrustedProxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// auth starts an initial authentication. The DNS check runs asynchronously, so
+// the read loop never blocks on resolution.
+func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
+	var a mxwire.DomainAuth
+	if mxwire.DecodeFrame(f, &a) != nil {
+		return errors.New("invalid auth")
+	}
+	d, e := mxwire.CanonicalDomain(a.Domain)
+	if e != nil || d != a.Domain || a.KeyID == "" {
+		return errors.New("invalid domain")
+	}
+	// Registration metadata is optional and validated when present. A malformed
+	// value is dropped rather than rejecting the proof: it is accounting
+	// metadata, not authority.
+	contactEmail, setupID := "", ""
+	if a.ContactEmail != "" || a.SetupID != "" {
+		if mxwire.ValidContactEmail(a.ContactEmail) && mxwire.ValidSetupID(a.SetupID) {
+			contactEmail, setupID = a.ContactEmail, a.SetupID
+		} else {
+			r.logProof(c, "registration_metadata", d, a.KeyID, "rejected", "invalid_metadata", 0)
+		}
+	}
+	now := time.Now()
+	r.mu.Lock()
+	if f.ChannelID <= c.lastChannel {
+		r.mu.Unlock()
+		return errors.New("domain channel reused")
+	}
+	c.lastChannel = f.ChannelID
+	if b, used := c.domains[f.ChannelID]; used {
+		// A channel already assigned to this connection must not be
+		// re-authenticated. A replaced binding is parked for pinned DATA
+		// until it expires and must not be reclaimed on a new channel either.
+		reason := "channel_assigned"
+		if b != nil && b.state == bindReplaced {
+			reason = "replaced"
+		}
+		r.mu.Unlock()
+		return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, reason, time.Time{}, &proofTrace{})
+	}
+	if _, ok := c.challenges[f.ChannelID]; ok {
+		r.mu.Unlock()
+		return errors.New("pending auth")
+	}
+	if len(c.domains)+len(c.challenges) >= r.cfg.MaxDomainsPerConnection || len(c.challenges) >= maxChallengesPerConn {
+		r.mu.Unlock()
+		return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, "domain_limit", time.Time{}, &proofTrace{})
+	}
+	// A binding this connection already holds (and lost to another connection)
+	// must not be reclaimed by a fresh initial auth on a new channel; old
+	// pinned DATA is still served until the replaced binding expires.
+	for _, b := range c.domains {
+		if b.domain == d && b.state == bindReplaced {
+			r.mu.Unlock()
+			return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, "replaced", time.Time{}, &proofTrace{})
+		}
+	}
+	// A newer attempt on this connection supersedes unfinished work for the domain.
+	for ch, pending := range c.challenges {
+		if pending.domain == d {
+			delete(c.challenges, ch)
+		}
+	}
+	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(mxwire.AuthLookupTimeout), contactEmail: contactEmail, setupID: setupID}
+	r.mu.Unlock()
+	if !r.spawn(c, func() { r.initialAuth(c, f.ChannelID, d, a.KeyID) }) {
+		r.dropChallenge(c, f.ChannelID)
+		return nil
+	}
+	return nil
+}
+
+func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
+	started := time.Now()
+	trace := &proofTrace{}
+	if ok, reason := r.acquireAuth(c, d); !ok {
+		r.dropChallenge(c, ch)
+		r.logProof(c, "start", d, keyID, "rejected", reason, time.Since(started))
+		trace.add("start", "rejected", reason)
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, reason, time.Time{}, trace)
+		return
+	}
+	defer r.releaseAuth(c)
+	ctx, cancel := context.WithTimeout(c.ctx, min(r.cfg.AuthTimeout, mxwire.AuthLookupTimeout))
+	defer cancel()
+	txt, err := r.lookupTXT(ctx, d)
+	r.logProof(c, "dns_lookup", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
+	trace.add("dns_lookup", resultWord(err == nil), boundedReason(err))
+	if err != nil {
+		r.dropChallenge(c, ch)
+		r.failDomain(c, d)
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, "dns_unavailable", time.Time{}, trace)
+		return
+	}
+	_, err = mxwire.ParseDomainTXT(txt, keyID)
+	r.logProof(c, "parse_key", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
+	trace.add("parse_key", resultWord(err == nil), boundedReason(err))
+	if err != nil {
+		r.dropChallenge(c, ch)
+		r.failDomain(c, d)
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, "key_unavailable", time.Time{}, trace)
+		return
+	}
+	nonce := make([]byte, 32)
+	if _, err = rand.Read(nonce); err != nil {
+		r.dropChallenge(c, ch)
+		return
+	}
+	issued := mxwire.Challenge{Domain: d, KeyID: keyID, ReceiverID: c.receiver, ConnectionID: c.id, Nonce: base64.RawURLEncoding.EncodeToString(nonce)}
+	r.mu.Lock()
+	ent, ok := c.challenges[ch]
+	if !ok || ent.keyID != keyID || ent.binding != nil || !time.Now().Before(ent.expires) {
+		r.mu.Unlock()
+		return
+	}
+	ent.value = issued
+	ent.expires = time.Now().Add(challengeTTL)
+	c.challenges[ch] = ent
+	r.mu.Unlock()
+	_ = r.send(c, mxwire.FrameChallenge, 0, ch, issued)
+}
+
+func (r *Receiver) dropChallenge(c *connection, ch uint64) {
+	r.mu.Lock()
+	delete(c.challenges, ch)
+	r.mu.Unlock()
+}
+
+// authReply sends the AuthResult frame and emits the single INFO summary for
+// the attempt. phase is the terminal attempt phase (registration/renewal/
+// rejected); trace carries the bounded per-step outcomes collected along the
+// way. The grant is folded into the summary as the accepted/expires_at fields
+// and a grant=... step, rather than emitted as its own INFO line. The DEBUG
+// per-step record is still emitted so the heartbeat counter is unchanged.
+func (r *Receiver) authReply(c *connection, ch uint64, phase, d, k string, ok bool, reason string, exp time.Time, trace *proofTrace, extra ...any) error {
+	r.logProof(c, "grant", d, k, resultWord(ok), reason, 0, "domain_channel_id", ch, "accepted", ok, "expires_at", exp)
+	trace.add("grant", resultWord(ok), reason)
+	result := "rejected"
+	switch {
+	case !ok:
+		result = "rejected"
+	case phase == "registration":
+		result = "active"
+	case phase == "renewal":
+		result = "renewed"
+	default:
+		result = phase
+	}
+	args := []any{"domain_channel_id", ch, "accepted", ok, "expires_at", exp}
+	args = append(args, extra...)
+	r.logDomainAuth(c, phase, d, k, result, reason, trace.String(), 0, args...)
+	return r.send(c, mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: d, KeyID: k, Accepted: ok, Reason: reason, ExpiresAt: exp})
+}
+
+// proof consumes a challenge response and verifies the signature with fresh DNS,
+// asynchronously, so the read loop never blocks on resolution.
+func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
+	var x mxwire.ChallengeResponse
+	if mxwire.DecodeFrame(f, &x) != nil {
+		return errors.New("invalid proof")
+	}
+	now := time.Now()
+	r.mu.Lock()
+	issued, ok := c.challenges[f.ChannelID]
+	if !ok || issued.verifying || !now.Before(issued.expires) || issued.value.Nonce == "" || issued.domain != x.Domain || issued.keyID != x.KeyID || issued.value.Nonce != x.Nonce {
+		r.mu.Unlock()
+		// Damp only the domain that was actually challenged; a mismatched
+		// response's own domain is attacker-chosen and must not seed cooldown
+		// entries for arbitrary names.
+		if issued.domain != "" {
+			r.failDomain(c, issued.domain)
+		}
+		return r.authReply(c, f.ChannelID, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, &proofTrace{})
+	}
+	// Freshness was checked on receipt; DNS verification has its own deadline.
+	issued.verifying = true
+	issued.expires = now.Add(mxwire.AuthVerifyTimeout)
+	c.challenges[f.ChannelID] = issued
+	r.mu.Unlock()
+	if !r.spawn(c, func() { r.verifyProof(c, f.ChannelID, issued, x) }) {
+		r.dropChallenge(c, f.ChannelID)
+		return nil
+	}
+	return nil
+}
+
+func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxwire.ChallengeResponse) {
+	defer func() {
+		r.mu.Lock()
+		if pending := c.challenges[ch]; pending.value.Nonce == issued.value.Nonce {
+			delete(c.challenges, ch)
+		}
+		r.mu.Unlock()
+	}()
+	verifyCtx, verifyCancel := context.WithDeadline(c.ctx, issued.expires)
+	defer verifyCancel()
+	started := time.Now()
+	trace := &proofTrace{}
+	if ok, reason := r.acquireAuth(c, x.Domain); !ok {
+		if issued.binding != nil {
+			// A renewal that could not start because the source is at its
+			// temporary authentication capacity, or the domain is in its own
+			// failure cooldown, is NOT a failed proof: the existing grant is
+			// still valid. Leave the binding untouched and let revalidateConn
+			// re-issue the renewal on a later tick, before the grant expires.
+			// Only the grant's own expiry fails the binding.
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", reason, time.Since(started))
+			trace.add("renewal", "deferred", reason)
+			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", reason, trace.String(), time.Since(started))
+			return
+		}
+		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", reason, time.Since(started))
+		trace.add("start", "rejected", reason)
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, reason, time.Time{}, trace)
+		return
+	}
+	defer r.releaseAuth(c)
+	ctx, cancel := context.WithTimeout(verifyCtx, r.cfg.AuthTimeout)
+	txt, e := r.lookupTXT(ctx, x.Domain)
+	cancel()
+	r.logProof(c, "dns_lookup", x.Domain, x.KeyID, resultWord(e == nil), boundedReason(e), time.Since(started))
+	trace.add("dns_lookup", resultWord(e == nil), boundedReason(e))
+	pub, e2 := mxwire.ParseDomainTXT(txt, x.KeyID)
+	r.logProof(c, "parse_key", x.Domain, x.KeyID, resultWord(e2 == nil), boundedReason(e2), time.Since(started))
+	trace.add("parse_key", resultWord(e2 == nil), boundedReason(e2))
+	sigOK := e == nil && e2 == nil && mxwire.VerifyChallenge(pub, issued.value, x.Signature)
+	r.logProof(c, "signature", x.Domain, x.KeyID, resultWord(sigOK), "", time.Since(started))
+	trace.add("signature", resultWord(sigOK), "")
+	if e != nil || e2 != nil || !sigOK {
+		r.failDomain(c, x.Domain)
+		if issued.binding != nil {
+			// A failed renewal invalidates the domain fail-closed: the proof
+			// could not be completed against fresh DNS.
+			r.revoke(issued.binding, "reauth_failed")
+		}
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "proof_invalid", time.Time{}, trace)
+		return
+	}
+	// Routing gate: authority is proven, but this receiver only accepts the
+	// domain when its own SMTP hostname is published in the domain's MX. A
+	// resolver failure here is transient and deferrable — it must not revoke a
+	// healthy binding — so only a definitive answer that omits this receiver is
+	// the not_mx verdict. Checked at every proof so a repointed MX takes effect
+	// at the next renewal.
+	//
+	// "Definitive" covers both shapes a routed-away domain produces: a lookup
+	// that succeeds with MX records naming someone else, and a lookup that
+	// definitively finds no MX at all (NODATA, or NXDOMAIN). The latter arrives
+	// as a not-found error rather than empty records, so it is treated as the
+	// not_mx verdict too — otherwise deleting the record would be deferred
+	// forever and the binding would never fail closed. Only an error that
+	// leaves the question unanswered (timeout, SERVFAIL, refused) defers.
+	mxCtx, mxCancel := context.WithTimeout(verifyCtx, r.cfg.AuthTimeout)
+	mxs, mxErr := r.lookupMX(mxCtx, x.Domain)
+	mxCancel()
+	r.logProof(c, "mx_lookup", x.Domain, x.KeyID, resultWord(mxErr == nil), boundedReason(mxErr), time.Since(started))
+	trace.add("mx_lookup", resultWord(mxErr == nil), boundedReason(mxErr))
+	if mxErr != nil && !mxNotFound(mxErr) {
+		if issued.binding != nil {
+			// Leave the existing grant untouched; the next renewal tick retries.
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "dns_unavailable", time.Since(started))
+			trace.add("renewal", "deferred", "dns_unavailable")
+			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", "dns_unavailable", trace.String(), time.Since(started))
+			return
+		}
+		r.failDomain(c, x.Domain)
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "dns_unavailable", time.Time{}, trace)
+		return
+	}
+	if !routedForDomain(mxs, r.cfg.SMTP.Hostname) {
+		r.failDomain(c, x.Domain)
+		r.logProof(c, "mx_routing", x.Domain, x.KeyID, "rejected", reasonNotMX, time.Since(started))
+		trace.add("mx_routing", "rejected", reasonNotMX)
+		if issued.binding != nil {
+			// Genuinely not routed: fail the binding closed, but do not send a
+			// DomainRevoked notice — the AuthResult below is the authoritative
+			// rejected/not_mx verdict and a notice would overwrite it.
+			r.revokeNotify(issued.binding, reasonNotMX, false)
+		}
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, reasonNotMX, time.Time{}, trace)
+		return
+	}
+	now := time.Now()
+	if issued.binding != nil {
+		// Renewal: only the exact binding identity may be extended. The grant
+		// is capped at AuthLifetime from now (never extended past a cached
+		// ceiling) and the new renewAt is derived from the fresh grant.
+		r.mu.Lock()
+		b := issued.binding
+		if _, ok := c.challenges[ch]; !ok || !time.Now().Before(issued.expires) || c.closing || b.state != bindActive || b.c != c || b.channel != ch || c.domains[ch] != b || r.domains[b.domain] != b {
+			r.mu.Unlock()
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "rejected", "superseded", time.Since(started))
+			trace.add("renewal", "rejected", "superseded")
+			_ = r.authReply(c, ch, "renewal", x.Domain, x.KeyID, false, "superseded", time.Time{}, trace)
+			return
+		}
+		b.pub = pub
+		b.expires = now.Add(authProofLifetime)
+		// Renew on the configured cadence measured from the fresh grant, so a
+		// renewal always starts before expiry even when auth completed late.
+		b.renewAt = now.Add(r.cfg.RevalidateInterval)
+		delete(c.challenges, ch)
+		exp := b.expires
+		expiresIn := time.Until(exp)
+		email, setupID := b.contactEmail, b.setupID
+		r.mu.Unlock()
+		r.clearDomainCooldown(c, x.Domain)
+		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
+		_ = r.authReply(c, ch, "renewal", x.Domain, x.KeyID, true, "", exp, trace,
+			"expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
+		return
+	}
+	// Initial authentication: install a new binding, superseding any other.
+	r.mu.Lock()
+	if _, ok := c.challenges[ch]; !ok || !time.Now().Before(issued.expires) || c.closing {
+		r.mu.Unlock()
+		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "closing", time.Since(started))
+		trace.add("registration", "rejected", "closing")
+		r.logDomainAuth(c, "registration", x.Domain, x.KeyID, "rejected", "closing", trace.String(), time.Since(started))
+		return
+	}
+	if len(c.domains) >= r.cfg.MaxDomainsPerConnection && c.domains[ch] == nil {
+		r.mu.Unlock()
+		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "domain_limit", time.Since(started))
+		trace.add("registration", "rejected", "domain_limit")
+		_ = r.authReply(c, ch, "registration", x.Domain, x.KeyID, false, "domain_limit", time.Time{}, trace)
+		return
+	}
+	var replaced *binding
+	if old := r.domains[x.Domain]; old != nil && !(old.c == c && old.channel == ch) {
+		// Retain the old binding on its own connection as "replaced" so its
+		// already-pinned DATA stays valid until it expires. It is removed from
+		// the registry and this connection must not reclaim it.
+		old.state = bindReplaced
+		replaced = old
+	}
+	b := &binding{c: c, channel: ch, domain: x.Domain, keyID: x.KeyID, state: bindActive, expires: now.Add(authProofLifetime), renewAt: now.Add(r.cfg.RevalidateInterval), pub: pub, contactEmail: issued.contactEmail, setupID: issued.setupID}
+	c.domains[ch] = b
+	delete(c.challenges, ch)
+	r.domains[x.Domain] = b
+	r.mu.Unlock()
+	r.clearDomainCooldown(c, x.Domain)
+	r.logProof(c, "registration", x.Domain, x.KeyID, "active", "", time.Since(started), "contact_email", b.contactEmail, "setup_id", b.setupID)
+	if replaced != nil && replaced.c != c {
+		sc := replaced.c
+		sdomain := replaced.domain
+		sch := replaced.channel
+		oldKeyID := replaced.keyID
+		newKeyID := b.keyID
+		r.logProof(replaced.c, "replacement", sdomain, oldKeyID, "replaced", "", 0,
+			"old_key_id", oldKeyID, "new_key_id", newKeyID, "old_channel", sch, "new_channel", ch, "old_core_connection_id", replaced.c.id, "new_core_connection_id", c.id)
+		r.spawn(c, func() {
+			_ = r.send(sc, mxwire.FrameDomainRevoked, 0, sch, mxwire.DomainNotice{Domain: sdomain, Reason: "replaced"})
+		})
+	}
+	_ = r.authReply(c, ch, "registration", x.Domain, x.KeyID, true, "", b.expires, trace,
+		"contact_email", b.contactEmail, "setup_id", b.setupID)
+}
+
+func (r *Receiver) unregister(c *connection, f mxwire.Frame) error {
+	var n mxwire.DomainNotice
+	if mxwire.DecodeFrame(f, &n) != nil {
+		return errors.New("invalid unregister")
+	}
+	r.mu.Lock()
+	b := c.domains[f.ChannelID]
+	delete(c.challenges, f.ChannelID)
+	delete(c.domains, f.ChannelID)
+	if b != nil {
+		b.state = bindRevoked
+		// Pointer compare: a replacement's newer binding must never be removed
+		// by the old connection.
+		if r.domains[b.domain] == b {
+			delete(r.domains, b.domain)
+		}
+	}
+	var pending []*pending
+	for _, p := range c.pending {
+		if b != nil && p.bindings[b.domain] == b {
+			pending = append(pending, p)
+		}
+	}
+	var domain, keyID string
+	if b != nil {
+		domain, keyID = b.domain, b.keyID
+	}
+	r.mu.Unlock()
+	if b != nil {
+		r.statProofs.Add(1)
+		r.logDomainAuth(c, "revocation", domain, keyID, "revoked", "unregistered", "", 0)
+	}
+	for _, p := range pending {
+		r.release(c, p)
+	}
+	return nil
+}
+
+func (r *Receiver) dispatch(c *connection, f mxwire.Frame) error {
+	r.mu.Lock()
+	p := c.pending[f.TxID]
+	if p == nil || p.cancelled {
+		r.mu.Unlock()
+		return nil
+	}
+	expected, ch := p.expected, p.ch
+	r.mu.Unlock()
+	if expected != f.Type || (expected == mxwire.FrameResolveResult && ch != f.ChannelID) || (expected == mxwire.FrameIngestResult && f.ChannelID != 0) {
+		return errors.New("mismatched result")
+	}
+	select {
+	case p.result <- f:
+		return nil
+	default:
+		return errors.New("duplicate result")
+	}
+}
+
+// expireConn drops expired challenges and revokes bindings whose renewal never
+// completed or whose lifetime lapsed. Replaced bindings are dropped silently
+// once they expire: the connection was already told the domain was replaced.
+func (r *Receiver) expireConn(c *connection) {
+	now := time.Now()
+	type revokeItem struct {
+		b   *binding
+		why string
+	}
+	var itemReasons []revokeItem
+	r.mu.Lock()
+	for ch, chl := range c.challenges {
+		if now.Before(chl.expires) {
+			continue
+		}
+		delete(c.challenges, ch)
+		if b := chl.binding; b != nil && b.state == bindActive && c.domains[ch] == b && r.domains[b.domain] == b {
+			itemReasons = append(itemReasons, revokeItem{b, "reauth_failed"})
+		}
+	}
+	for _, b := range c.domains {
+		if b.state == bindRevoked || now.Before(b.expires) {
+			continue
+		}
+		itemReasons = append(itemReasons, revokeItem{b, "auth_expired"})
+	}
+	r.mu.Unlock()
+	for _, it := range itemReasons {
+		r.revoke(it.b, it.why)
+	}
+}
+
+// revalidateConn starts renewal challenges for bindings whose renewAt deadline
+// has passed. Renewals are paced: only enough are issued to keep at most
+// maxRenewalsInFlight outstanding on the connection, in deterministic domain
+// order. A renewal that cannot start (source capacity) is simply retried on a
+// later tick while its grant is still valid; it is never revoked early.
+func (r *Receiver) revalidateConn(c *connection) {
+	now := time.Now()
+	type due struct {
+		channel uint64
+		binding *binding
+	}
+	limit := r.cfg.maxRenewalsInFlight()
+	var ready []due
+	r.mu.Lock()
+	inflight := 0
+	for _, chl := range c.challenges {
+		if chl.binding != nil {
+			inflight++
+		}
+	}
+	for ch, b := range c.domains {
+		if b.state != bindActive || r.domains[b.domain] != b || now.Before(b.renewAt) {
+			continue
+		}
+		if _, ok := c.challenges[ch]; ok {
+			continue
+		}
+		ready = append(ready, due{channel: ch, binding: b})
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		if ready[i].binding.domain != ready[j].binding.domain {
+			return ready[i].binding.domain < ready[j].binding.domain
+		}
+		return ready[i].channel < ready[j].channel
+	})
+	type renewal struct {
+		channel uint64
+		value   mxwire.Challenge
+	}
+	var issued []renewal
+	for _, item := range ready {
+		if inflight >= limit {
+			break
+		}
+		nonce := make([]byte, 32)
+		if _, err := rand.Read(nonce); err != nil {
+			continue
+		}
+		challengeValue := mxwire.Challenge{Domain: item.binding.domain, KeyID: item.binding.keyID, ReceiverID: c.receiver, ConnectionID: c.id, Nonce: base64.RawURLEncoding.EncodeToString(nonce)}
+		c.challenges[item.channel] = challenge{keyID: item.binding.keyID, domain: item.binding.domain, expires: now.Add(challengeTTL), binding: item.binding, value: challengeValue}
+		issued = append(issued, renewal{item.channel, challengeValue})
+		inflight++
+	}
+	r.mu.Unlock()
+	for _, item := range issued {
+		_ = r.send(c, mxwire.FrameChallenge, 0, item.channel, item.value)
+	}
+}
+
+// revoke marks a binding unusable. It sends a revocation notice only when the
+// binding was the registry authority; a replaced binding is retired silently.
+func (r *Receiver) revoke(b *binding, why string) {
+	r.revokeNotify(b, why, true)
+}
+
+// revokeNotify drops a binding and optionally tells the core it is gone. The
+// renewal gate-2 failure calls it with notify=false: the AuthResult already
+// carries the authoritative rejected/not_mx verdict, and a DomainRevoked notice
+// would overwrite it on the core with a generic "unavailable".
+func (r *Receiver) revokeNotify(b *binding, why string, notify bool) {
+	r.mu.Lock()
+	if b.state == bindRevoked {
+		r.mu.Unlock()
+		return
+	}
+	active := r.domains[b.domain] == b && b.state == bindActive
+	b.state = bindRevoked
+	delete(b.c.domains, b.channel)
+	if active {
+		delete(r.domains, b.domain)
+	}
+	var wake []*pending
+	for _, p := range b.c.pending {
+		if p.bindings[b.domain] == b {
+			wake = append(wake, p)
+		}
+	}
+	c := b.c
+	ch := b.channel
+	domain := b.domain
+	keyID := b.keyID
+	wasActive := active
+	r.mu.Unlock()
+	if wasActive && notify {
+		_ = r.send(c, mxwire.FrameDomainRevoked, 0, ch, mxwire.DomainNotice{Domain: domain, Reason: why})
+	}
+	r.statProofs.Add(1)
+	r.logDomainAuth(c, "revocation", domain, keyID, "revoked", why, "", 0, "active", wasActive)
+	for _, p := range wake {
+		r.release(c, p)
+	}
+}
+
+// lookup returns the active registry binding for a domain.
+func (r *Receiver) lookup(d string) (*binding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cfg.Mode == "single" {
+		if r.single == nil || r.single.closing || r.single.ctx.Err() != nil {
+			return nil, errors.New("unavailable")
+		}
+		return &binding{c: r.single, domain: d, channel: 1, state: bindActive}, nil
+	}
+	b := r.domains[d]
+	if b == nil || b.state != bindActive || !time.Now().Before(b.expires) {
+		return nil, errors.New("unavailable")
+	}
+	return b, nil
+}
+
+func (r *Receiver) nextTx(c *connection) uint64 { return c.txid.Add(1) }
+
+// slot creates one pending transaction group, enforcing the global, per-domain
+// and per-connection transaction caps.
+func (r *Receiver) slot(c *connection, id uint64, d string) (*pending, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.txGlobal >= r.cfg.MaxTransactions { // bounded global group count
+		return nil, errors.New("global transaction limit")
+	}
+	if len(c.pending) >= r.cfg.MaxTransactionsPerConnection {
+		return nil, errors.New("connection transaction limit")
+	}
+	if r.domainTx[d] >= r.cfg.MaxTransactionsPerDomain {
+		return nil, errors.New("domain transaction limit")
+	}
+	p := &pending{
+		tx: id, domain: d, result: make(chan mxwire.Frame, 1),
+		bindings: map[string]*binding{}, counted: map[string]bool{d: true},
+	}
+	c.pending[id] = p
+	r.txGlobal++
+	r.domainTx[d]++
+	return p, nil
+}
+
+// countDomain accounts one additional domain on an existing pending group, once.
+func (r *Receiver) countDomain(p *pending, d string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p.counted[d] {
+		return nil
+	}
+	if r.domainTx[d] >= r.cfg.MaxTransactionsPerDomain {
+		return errors.New("domain transaction limit")
+	}
+	p.counted[d] = true
+	r.domainTx[d]++
+	return nil
+}
+
+// release frees a pending group exactly once and wakes any waiter. The per-domain
+// counters are only released here, never on a denied RCPT, so a later accepted
+// recipient on the same connection cannot under-count (and a group is kept until
+// its transaction closes).
+func (r *Receiver) release(c *connection, p *pending) {
+	r.mu.Lock()
+	if p.released {
+		r.mu.Unlock()
+		return
+	}
+	p.released = true
+	p.cancelled = true
+	if c.pending[p.tx] == p {
+		delete(c.pending, p.tx)
+	}
+	if r.txGlobal > 0 {
+		r.txGlobal--
+	}
+	for d := range p.counted {
+		if r.domainTx[d] > 0 {
+			r.domainTx[d]--
+			if r.domainTx[d] == 0 {
+				delete(r.domainTx, d)
+			}
+		}
+	}
+	select {
+	case p.result <- mxwire.Frame{}:
+	default:
+	}
+	r.mu.Unlock()
+}
+
+// reasonDomainCooldown and reasonSourceLimit are the bounded tokens acquireAuth
+// returns when it refuses to start a job. domain_cooldown means this specific
+// domain is still in its failure cooldown; source_limit means the source IP is
+// at its concurrent or per-minute authentication capacity. They are distinct so
+// an operator can tell a single domain being damped from a source at capacity.
+const (
+	reasonDomainCooldown = "domain_cooldown"
+	reasonSourceLimit    = "source_limit"
+	// reasonNotMX is the routing-gate verdict: the TXT proof succeeded, but the
+	// domain's published MX records do not name this receiver, so it is not a
+	// delivery target. It is distinct from an authentication failure so the
+	// operator can tell a wrong-routing setup from a wrong-key one.
+	reasonNotMX = "not_mx"
+)
+
+// failDomain arms the failure cooldown for one domain on the source IP that
+// failed it. Only that domain is damped: a transient DNS or key failure for one
+// domain must not deny registration of any other domain from the same source.
+func (r *Receiver) failDomain(c *connection, domain string) {
+	now := time.Now()
+	r.mu.Lock()
+	if st := r.ips[c.ip]; st != nil {
+		if st.domainCooldown == nil {
+			st.domainCooldown = map[string]time.Time{}
+		}
+		st.domainCooldown[domain] = now.Add(ipFailureCooldown)
+	}
+	r.mu.Unlock()
+}
+
+// acquireAuth decides whether one authentication job may start for the given
+// domain from this source IP. It refuses when the domain is in its own failure
+// cooldown, when the source exceeded its per-minute auth window, or when the
+// source is at its concurrent-auth capacity. The returned reason is "" on
+// success, else reasonDomainCooldown or reasonSourceLimit.
+func (r *Receiver) acquireAuth(c *connection, domain string) (ok bool, reason string) {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.ips[c.ip]
+	if st == nil {
+		return false, reasonSourceLimit
+	}
+	st.pruneCooldowns(now)
+	if st.coolingDown(domain, now) {
+		return false, reasonDomainCooldown
+	}
+	if now.Sub(st.authWindow) >= perIPAuthWindow {
+		st.authWindow = now
+		st.authCount = 0
+	}
+	if st.authCount >= r.cfg.authWindowMax() || st.auths >= r.cfg.maxAuthConcurrent() {
+		return false, reasonSourceLimit
+	}
+	st.auths++
+	st.authCount++
+	return true, ""
+}
+
+func (r *Receiver) releaseAuth(c *connection) {
+	r.mu.Lock()
+	if st := r.ips[c.ip]; st != nil && st.auths > 0 {
+		st.auths--
+	}
+	r.mu.Unlock()
+}
+
+// clearDomainCooldown drops a domain's failure cooldown after a successful
+// proof, so a recovered domain is eligible again without waiting out the clock.
+func (r *Receiver) clearDomainCooldown(c *connection, domain string) {
+	r.mu.Lock()
+	if st := r.ips[c.ip]; st != nil {
+		st.clearCooldown(domain)
+	}
+	r.mu.Unlock()
+}
+
+// lookupTXT resolves with a bounded global DNS worker pool.
+func (r *Receiver) lookupTXT(ctx context.Context, d string) ([]string, error) {
+	select {
+	case r.dnsSem <- struct{}{}:
+		defer func() { <-r.dnsSem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return r.cfg.LookupTXT(ctx, absoluteName("_mailmoose-mx."+d))
+}
+
+// lookupMX resolves the domain's published MX records with the same bounded
+// worker pool as the TXT proof, so an authentication burst cannot turn into
+// unbounded resolver work.
+func (r *Receiver) lookupMX(ctx context.Context, d string) ([]*net.MX, error) {
+	select {
+	case r.dnsSem <- struct{}{}:
+		defer func() { <-r.dnsSem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return r.cfg.LookupMX(ctx, absoluteName(d))
+}
+
+// absoluteName makes a DNS name fully qualified by ensuring the root label.
+//
+// Both proofs must query absolute names. A relative name is subject to the
+// resolver's search list (/etc/resolv.conf `search`), so Go tries the name and
+// then <name>.<suffix> for each entry. When the bare name legitimately has no
+// such record but a search suffix fails, the search-list error is what
+// survives: a clean NODATA becomes IsTemporary ("server misbehaving") instead
+// of IsNotFound. The routing gate would then defer that as dns_unavailable and
+// never revoke a binding whose MX record was removed — the light would stay
+// green. The trailing dot skips search expansion and yields the real answer.
+func absoluteName(d string) string {
+	if d == "" || strings.HasSuffix(d, ".") {
+		return d
+	}
+	return d + "."
+}
+
+// mxNotFound reports whether a lookup error is a definitive "this domain has no
+// such records" answer (NODATA or NXDOMAIN) rather than a lookup that could not
+// be completed. It is the difference between a routing verdict and a transient
+// resolver fault, and only the latter may defer.
+func mxNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
+
+// routedForDomain reports whether this receiver's own SMTP hostname is among the
+// domain's published MX hosts. The comparison lower-cases and trims the trailing
+// dot, matching the core's published-record check, so the two agree on what
+// "routed here" means.
+func routedForDomain(records []*net.MX, hostname string) bool {
+	want := strings.ToLower(strings.TrimSuffix(hostname, "."))
+	if want == "" {
+		return false
+	}
+	for _, mx := range records {
+		if strings.ToLower(strings.TrimSuffix(mx.Host, ".")) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// Stop marks the receiver stopping so readiness fails and new sessions are
+// refused. It does not tear down existing sessions; the caller shuts down the
+// HTTP server.
+// Start begins the receiver's own background work: currently the periodic INFO
+// heartbeat. It is idempotent and safe to call from the entrypoint once the
+// listeners are bound. Stop ends it.
+func (r *Receiver) Start() {
+	if r.cfg.SummaryInterval < 0 {
+		return
+	}
+	if !r.summaryRun.CompareAndSwap(false, true) {
+		return
+	}
+	interval := r.cfg.SummaryInterval
+	if interval == 0 {
+		interval = defaultSummaryInterval
+	}
+	go func() {
+		defer r.recoverJob("summary")
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-r.summaryDone:
+				return
+			case <-t.C:
+				r.logSummary(interval)
+			}
+		}
+	}()
+}
+
+// Stop signals shutdown: it refuses new sessions and ends the heartbeat.
+// It is idempotent: the summary channel close is once-guarded so two
+// concurrent Stops cannot panic on close-of-closed-channel.
+func (r *Receiver) Stop() {
+	r.stopping.Store(true)
+	if r.summaryRun.Load() {
+		r.summaryOnce.Do(func() { close(r.summaryDone) })
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.connections {
+		c.cancel()
+	}
+}
+
+func (r *Receiver) Stats() map[string]int64 {
+	return map[string]int64{"active_connections": r.active.Load()}
+}
+
+// NewDelivery starts one SMTP transaction's delivery, grouping the recipients
+// it resolves across one or more receiver connections.
+func (r *Receiver) NewDelivery() mxagent.Delivery { return newTransaction(r) }

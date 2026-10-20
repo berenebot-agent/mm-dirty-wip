@@ -1,0 +1,80 @@
+# Standalone Dial MX receiver.
+#
+# This compose file lives in dialmx/ and builds from the repository root, so it
+# runs from either the repository root or this folder:
+#
+#   docker compose -f dialmx/compose.yml up -d --build
+#   # or, from dialmx/:
+#   docker compose up -d --build
+#
+# The receiver is one process with two listeners: the SMTP edge (host :25 ->
+# container :2525) and the HTTPS/2 dialer session endpoint (host :443 ->
+# container :8443). It holds no /data mount or database. Single mode uses a
+# shared bearer key and optional TLS; shared mode uses domain TXT proofs and TLS.
+#
+# Certificates: mount the receiver's TLS material read-only. Both listeners use
+# independent certificate settings for SMTP STARTTLS and core sessions.
+#
+#   mkdir -p dialmx/certs
+#   cp /path/to/fullchain.pem /path/to/privkey.pem dialmx/certs/
+#   # or point DIALMX_CERT_DIR at an existing directory
+#
+# See docs/REMOTE_MX.md for operator setup.
+
+services:
+  dialmx:
+    image: mailmoose-remote-mx:latest
+    build:
+      context: ..
+      dockerfile: dialmx/Dockerfile
+    restart: unless-stopped
+    # Docker-managed metadata history; size-based rotation, not age-based.
+    # Removed with the container, including when Compose recreates it.
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "10"
+    environment:
+      DIALMX_MODE: "${DIALMX_MODE:-single}"
+      DIALMX_CORE_KEY: "${DIALMX_CORE_KEY:-}"
+      # Optional browser landing redirect (https, no fragment).
+      DIALMX_BROWSER_REDIRECT_URL: "${DIALMX_BROWSER_REDIRECT_URL:-}"
+      # SMTP greeting hostname. Independent of the session listener address.
+      MX_HOSTNAME: "${MX_HOSTNAME:-mail.example.com}"
+      # Optional in single mode; shared mode requires the session pair.
+      DIALMX_TLS_CERT: "${DIALMX_TLS_CERT:-}"
+      DIALMX_TLS_KEY: "${DIALMX_TLS_KEY:-}"
+      MX_TLS_CERT: "${MX_TLS_CERT:-}"
+      MX_TLS_KEY: "${MX_TLS_KEY:-}"
+      # The SMTP edge reuses the documented MX_* surface. Defaults match the
+      # core's MX edge; MX_TLS_CERT/MX_TLS_KEY default to the listener pair.
+      MX_VERIFY_SPF: "${MX_VERIFY_SPF:-true}"
+      MX_VERIFY_DKIM: "${MX_VERIFY_DKIM:-true}"
+      MX_VERIFY_DMARC: "${MX_VERIFY_DMARC:-true}"
+      MX_DNS_RESOLVER: "${MX_DNS_RESOLVER:-}"
+      MAILMOOSE_DNS_FALLBACK_SERVERS: "${MAILMOOSE_DNS_FALLBACK_SERVERS:-}"
+      MX_MAX_MESSAGE_BYTES: "${MX_MAX_MESSAGE_BYTES:-31457280}"
+      MX_STAGING_BYTES: "${MX_STAGING_BYTES:-268435456}"
+      MX_MAX_RECIPIENTS: "${MX_MAX_RECIPIENTS:-100}"
+      MX_MAX_CONNECTIONS: "${MX_MAX_CONNECTIONS:-256}"
+      MX_MAX_DOMAINS_PER_CONNECTION: "${MX_MAX_DOMAINS_PER_CONNECTION:-128}"
+      MX_MAX_TRANSACTIONS: "${MX_MAX_TRANSACTIONS:-128}"
+      MX_MAX_TRANSACTIONS_PER_CONNECTION: "${MX_MAX_TRANSACTIONS_PER_CONNECTION:-16}"
+      MX_MAX_TRANSACTIONS_PER_DOMAIN: "${MX_MAX_TRANSACTIONS_PER_DOMAIN:-8}"
+      #MX_DNS_RESOLVER=1.1.1.1:53
+      #MX_MAX_MESSAGE_BYTES=31457280
+      #MX_MAX_CONNECTIONS=256
+    volumes:
+      # Read-only: the receiver writes nothing to disk (staging is in memory).
+      - "${DIALMX_CERT_DIR:-./certs}:/certs:ro"
+    ports:
+      - "0.0.0.0:25:2525"
+      - "0.0.0.0:443:8443"
+    # No writable filesystem, no extra capabilities. Inside the container both
+    # listeners are on unprivileged ports, so nothing is required.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

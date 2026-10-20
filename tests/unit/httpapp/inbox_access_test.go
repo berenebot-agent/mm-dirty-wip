@@ -1,0 +1,654 @@
+package httpapp_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+)
+
+// accessMember creates a non-admin account member (an owner of box) via the
+// invitation flow and returns the user.
+func accessMember(t *testing.T, svc *app.Service, accountID, ownerID, email string, inboxIDs ...string) model.User {
+	t.Helper()
+	ctx := context.Background()
+	inv, _, err := svc.Store.CreateInvite(ctx, store.InviteInput{
+		AccountID: accountID, Email: email, Kind: model.InviteKindOperator,
+		InboxIDs: inboxIDs, CreatedBy: ownerID, TTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := svc.Store.RotateInviteToken(ctx, accountID, inv.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.Store.RedeemInvite(ctx, token, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func TestDashboardRendersClientsAccessTab(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`data-inbox-tab="basic">Identity`,
+		`data-inbox-tab="access"`,
+		`Clients &amp; Access`,
+		`data-inbox-panel="access"`,
+		`id="inbox-access-keys"`,
+		`id="inbox-access-users"`,
+		`id="inbox-access-invites"`,
+		`id="access-add-key"`,
+		`id="access-add-user"`,
+		`data-inbox-subview="access-add"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	// The approver hint no longer states the approver is always allowed.
+	if strings.Contains(body, "always allowed") {
+		t.Fatal("allow-list hint should not mention the approver being always allowed")
+	}
+	// The key's binding must be embedded, secret-free, in the edit button.
+	if !strings.Contains(body, `data-access=`) || !strings.Contains(body, `"`+key.ID+`"`) {
+		t.Fatalf("access grant not embedded; body missing key id %s", key.ID)
+	}
+	if strings.Contains(body, "onclick=") {
+		t.Fatal("inline event handlers are blocked by CSP and must not be used")
+	}
+	// The new-key flow shows the one-time secret in the shared client result
+	// dialog, not a browser alert popup.
+	assetReq := httptest.NewRequest("GET", "/assets/app.js", nil)
+	assetRR := httptest.NewRecorder()
+	h.ServeHTTP(assetRR, assetReq)
+	asset := assetRR.Body.String()
+	if !strings.Contains(asset, "window.mailmooseShowKeyResult") {
+		t.Fatal("access tab must reuse the shared key result view")
+	}
+	if strings.Contains(asset, "window.alert((data.notice") {
+		t.Fatal("access key creation must not use a browser alert for the secret")
+	}
+}
+
+func TestInboxAccessCreateKey(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"name": {"Scoped"}, "role": {"read"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/keys", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rr.Body.String())
+	}
+	if got["notice"] != "API key created" || got["secret"] == "" {
+		t.Fatalf("unexpected response %#v", got)
+	}
+	keys, _ := svc.Store.ListAPIKeys(context.Background(), u.AccountID)
+	found := false
+	for _, k := range keys {
+		if k.Name == "Scoped" {
+			found = true
+			if k.Roles[box.ID] != "read" {
+				t.Fatalf("new key role = %#v", k.Roles)
+			}
+			if len(k.Roles) != 1 {
+				t.Fatalf("new key must be scoped to one inbox: %#v", k.Roles)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("new key not persisted")
+	}
+}
+
+func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "read", second.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Untouched", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// A role change is committed by the inbox settings Save (the access tab
+	// stages it as access_role_<keyID>), not a dedicated endpoint.
+	set := url.Values{"_csrf": {csrf}, "access_role_" + key.ID: {"assistant"}}
+	setReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(set.Encode()))
+	setReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setReq.AddCookie(cookie)
+	setRR := httptest.NewRecorder()
+	h.ServeHTTP(setRR, setReq)
+	if setRR.Code != http.StatusSeeOther {
+		t.Fatalf("set role = %d body=%s", setRR.Code, setRR.Body.String())
+	}
+
+	keys, _ := svc.Store.ListAPIKeys(context.Background(), u.AccountID)
+	for _, k := range keys {
+		if k.ID == key.ID {
+			if k.Roles[box.ID] != "assistant" {
+				t.Fatalf("role not updated: %#v", k.Roles)
+			}
+			if k.Roles[second.ID] != "owner" {
+				t.Fatalf("other inbox binding lost: %#v", k.Roles)
+			}
+		}
+		if k.ID == other.ID && k.Roles[box.ID] != "owner" {
+			t.Fatalf("untouched key must keep its role: %#v", k.Roles)
+		}
+	}
+
+	// Removing the binding for one inbox via the same save leaves the key and
+	// its other bindings intact.
+	clear := url.Values{"_csrf": {csrf}, "access_role_" + key.ID: {""}}
+	clearReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear role = %d body=%s", clearRR.Code, clearRR.Body.String())
+	}
+	keys, _ = svc.Store.ListAPIKeys(context.Background(), u.AccountID)
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if _, ok := k.Roles[box.ID]; ok {
+			t.Fatalf("binding for %s should be gone: %#v", box.ID, k.Roles)
+		}
+		if k.Roles[second.ID] != "owner" {
+			t.Fatalf("other inbox binding lost: %#v", k.Roles)
+		}
+	}
+}
+
+// TestInboxAccessDomainWideSending proves the "Domain-wide sending" control is a
+// staged binding change: the inbox settings Save sets the grant (forcing owner)
+// and the panel only offers it on the domain's catch-all inbox.
+func TestInboxAccessDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "Agent", false, map[string]string{box.ID: "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// The dashboard advertises the catch-all marker for this inbox, which is what
+	// makes the control appear.
+	dash := httptest.NewRequest("GET", "/", nil)
+	dash.AddCookie(cookie)
+	dashRR := httptest.NewRecorder()
+	h.ServeHTTP(dashRR, dash)
+	if dashRR.Code != http.StatusOK {
+		t.Fatalf("dashboard = %d", dashRR.Code)
+	}
+
+	// Ticking the control is committed by the same Save as the role ladder.
+	set := url.Values{"_csrf": {csrf}, "access_domain_send_" + key.ID: {"1"}}
+	setReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(set.Encode()))
+	setReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setReq.AddCookie(cookie)
+	setRR := httptest.NewRecorder()
+	h.ServeHTTP(setRR, setReq)
+	if setRR.Code != http.StatusSeeOther {
+		t.Fatalf("set domain-send = %d body=%s", setRR.Code, setRR.Body.String())
+	}
+	keys, _ := svc.Store.ListAPIKeys(ctx, u.AccountID)
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if !k.DomainSend[box.ID] {
+			t.Fatalf("grant not applied: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("grant did not force owner: %#v", k.Roles)
+		}
+	}
+
+	// Unticking clears the grant but leaves the role as owner.
+	clear := url.Values{"_csrf": {csrf}, "access_domain_send_" + key.ID: {"0"}}
+	clearReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear domain-send = %d body=%s", clearRR.Code, clearRR.Body.String())
+	}
+	keys, _ = svc.Store.ListAPIKeys(ctx, u.AccountID)
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if k.DomainSend[box.ID] {
+			t.Fatalf("grant not cleared: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("clearing the grant demoted the role: %#v", k.Roles)
+		}
+	}
+}
+
+// TestBootstrapExposesDomainWideSending proves an agent can discover the
+// domain-wide sending grant from GET /v1/bootstrap: the permission reports
+// send_any_in_domain and the domain it applies to, and a key without the grant
+// does not advertise it.
+func TestBootstrapExposesDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, grantedToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "granted", false, map[string]string{box.ID: "owner"}, map[string]bool{box.ID: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, plainToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "plain", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bootstrap := func(token string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/v1/bootstrap", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("bootstrap = %d body=%s", rr.Code, rr.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	perm := func(body map[string]any) map[string]any {
+		t.Helper()
+		perms, _ := body["permissions"].(map[string]any)
+		p, _ := perms[box.ID].(map[string]any)
+		if p == nil {
+			t.Fatalf("no permissions for %s: %#v", box.ID, perms)
+		}
+		return p
+	}
+
+	// The granted key advertises the capability and the domain it covers.
+	gp := perm(bootstrap(grantedToken))
+	if gp["send_any_in_domain"] != true {
+		t.Fatalf("granted key send_any_in_domain = %#v, want true", gp["send_any_in_domain"])
+	}
+	if gp["send_any_domain"] != d.Name {
+		t.Fatalf("granted key send_any_domain = %#v, want %q", gp["send_any_domain"], d.Name)
+	}
+	if gp["can_send"] != true {
+		t.Fatalf("granted key can_send = %#v, want true", gp["can_send"])
+	}
+
+	// An ordinary Owner of the same inbox does not.
+	pp := perm(bootstrap(plainToken))
+	if pp["send_any_in_domain"] != false {
+		t.Fatalf("plain key send_any_in_domain = %#v, want false", pp["send_any_in_domain"])
+	}
+	if _, present := pp["send_any_domain"]; present {
+		t.Fatalf("plain key advertised send_any_domain: %#v", pp)
+	}
+}
+
+// TestKeyDialogDomainWideSending proves the Clients tab's key dialog carries the
+// domain-wide sending control: the matrix renders the Domain send box only on
+// the domain's enabled catch-all inbox, the checkbox sets the grant (forcing
+// owner) on save, and the dashboard marks the catch-all inbox for the operator.
+func TestKeyDialogDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "other", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// The dashboard marks the catch-all inbox and only that inbox.
+	dash := httptest.NewRequest("GET", "/", nil)
+	dash.AddCookie(cookie)
+	dashRR := httptest.NewRecorder()
+	h.ServeHTTP(dashRR, dash)
+	if dashRR.Code != http.StatusOK {
+		t.Fatalf("dashboard = %d", dashRR.Code)
+	}
+	body := dashRR.Body.String()
+	if !strings.Contains(body, "domainsend_"+box.ID) {
+		t.Fatal("key matrix missing the domain-send control on the catch-all inbox")
+	}
+	// The control must submit an explicit value so unticking persists: an
+	// unchecked checkbox submits nothing, which is indistinguishable from
+	// "untouched" server-side.
+	if !strings.Contains(body, `type="hidden" name="domainsend_`+box.ID+`" value="0"`) {
+		t.Fatal("domain-send control must carry a hidden field that always submits a value")
+	}
+	if strings.Contains(body, "domainsend_"+other.ID) {
+		t.Fatal("key matrix offered the domain-send control on a non-catch-all inbox")
+	}
+	if !strings.Contains(body, "catchall-tag") {
+		t.Fatal("dashboard did not mark the catch-all inbox")
+	}
+
+	// Saving the key dialog's matrix checkbox sets the grant and forces owner.
+	form := url.Values{"_csrf": {csrf}, "name": {"Agent"}, "role_" + box.ID: {"read"}, "domainsend_" + box.ID: {"1"}}
+	req := httptest.NewRequest("POST", "/ui/keys", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated && rr.Code != http.StatusSeeOther {
+		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+	}
+	keys, err := svc.Store.ListAPIKeys(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key model.APIKey
+	for _, k := range keys {
+		if k.Name == "Agent" {
+			key = k
+		}
+	}
+	if key.ID == "" {
+		t.Fatal("created key not found")
+	}
+	if !key.DomainSend[box.ID] {
+		t.Fatalf("grant not applied from key dialog: %#v", key.DomainSend)
+	}
+	if key.Roles[box.ID] != "owner" {
+		t.Fatalf("grant did not force owner: %#v", key.Roles)
+	}
+
+	// Clearing it from the same dialog must actually persist. The control submits
+	// an explicit 0 rather than relying on an unchecked checkbox (which submits
+	// nothing), so this is the regression guard for "untick does not save".
+	clear := url.Values{"_csrf": {csrf}, "name": {"Agent"}, "role_" + box.ID: {"owner"}, "domainsend_" + box.ID: {"0"}}
+	clearReq := httptest.NewRequest("POST", "/ui/keys/"+key.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusCreated && clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear domain-send = %d body=%s", clearRR.Code, clearRR.Body.String())
+	}
+	keys, err = svc.Store.ListAPIKeys(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if k.DomainSend[box.ID] {
+			t.Fatalf("grant not cleared from key dialog: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("clearing the grant demoted the role: %#v", k.Roles)
+		}
+	}
+}
+
+func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	adminKey, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"_csrf": {csrf}, "access_role_" + adminKey.ID: {"owner"}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("admin key edit = %d, want 400 body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestInboxAccessAddUserMerges(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", second.ID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"user": {member.ID}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/users", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("add user = %d body=%s", rr.Code, rr.Body.String())
+	}
+	users, _ := svc.Store.ListAccountUsers(context.Background(), u.AccountID)
+	for _, m := range users {
+		if m.ID != member.ID {
+			continue
+		}
+		if m.Roles[box.ID] != "owner" || m.Roles[second.ID] != "owner" {
+			t.Fatalf("merged roles = %#v", m.Roles)
+		}
+	}
+}
+
+func TestInboxAccessInviteForwardsToAccount(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {"new@example.com"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	invites, _ := svc.Store.ListInvites(context.Background(), u.AccountID)
+	found := false
+	for _, inv := range invites {
+		if inv.Email == "new@example.com" {
+			found = true
+			if inv.Kind != model.InviteKindOperator {
+				t.Fatalf("invite kind = %q", inv.Kind)
+			}
+			hasInbox := false
+			for _, id := range inv.InboxIDs {
+				if id == box.ID {
+					hasInbox = true
+				}
+			}
+			if !hasInbox {
+				t.Fatalf("invite not scoped to inbox: %#v", inv.InboxIDs)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("invitation not created")
+	}
+}
+
+// TestInboxAccessInviteAutoRoutesExistingMember verifies that inviting the
+// email of an existing non-admin member who lacks access here grants access
+// directly instead of creating an invite (and never surfaces a raw conflict).
+func TestInboxAccessInviteAutoRoutesExistingMember(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", second.ID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {"member@example.com"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("auto-route invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	users, _ := svc.Store.ListAccountUsers(context.Background(), u.AccountID)
+	for _, m := range users {
+		if m.ID == member.ID && m.Roles[box.ID] != "owner" {
+			t.Fatalf("member not granted access: %#v", m.Roles)
+		}
+	}
+	invites, _ := svc.Store.ListInvites(context.Background(), u.AccountID)
+	now := time.Now().UTC()
+	for _, inv := range invites {
+		if strings.EqualFold(inv.Email, "member@example.com") && inv.Pending(now) {
+			t.Fatal("no pending invitation should be created for an existing member")
+		}
+	}
+}
+
+// TestInboxAccessInviteClassifiesAdmin verifies the account administrator is
+// reported as such rather than surfacing a raw email-conflict message.
+func TestInboxAccessInviteClassifiesAdmin(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {u.Email}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("admin invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "administrator") {
+		t.Fatalf("expected administrator message, got %q", body)
+	}
+}
+
+// TestInboxAccessInviteClassifiesPending verifies a duplicate pending invite is
+// reported clearly.
+func TestInboxAccessInviteClassifiesPending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	inv, _, err := svc.Store.CreateInvite(context.Background(), store.InviteInput{
+		AccountID: u.AccountID, Email: "pending@example.com", Kind: model.InviteKindOperator,
+		InboxIDs: []string{box.ID}, CreatedBy: u.ID, TTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = inv
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {"pending@example.com"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("pending invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "pending invitation") {
+		t.Fatalf("expected pending-invitation message, got %q", body)
+	}
+}
+
+// TestInboxAccessInviteClassifiesExistingAccess verifies a member who already
+// has a role here is reported as already having access.
+func TestInboxAccessInviteClassifiesExistingAccess(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", box.ID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {member.Email}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("existing-access invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "already has access") {
+		t.Fatalf("expected already-has-access message, got %q", body)
+	}
+}
+
+func TestInboxAccessRejectsForeignInbox(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/does-not-exist/access/keys/"+key.ID+"/remove", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("foreign inbox = %d, want 404 body=%s", rr.Code, rr.Body.String())
+	}
+}

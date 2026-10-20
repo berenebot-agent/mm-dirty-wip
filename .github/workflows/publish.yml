@@ -1,0 +1,185 @@
+name: publish
+
+# Publish runnable images to GitHub Container Registry without cutting a release.
+#
+# release.yml already publishes the same two images, but only for a
+# v…-alpha/beta/rc.N tag. This workflow is the "just give me something to pull
+# for testing" path: run it by hand and the image lands in GHCR with a `dev` tag
+# so it can never be mistaken for a release.
+#
+# Image names (the `dirty-wip-` prefix is the dev channel):
+#   ghcr.io/<owner>/dirty-wip-mailmoose-remote-mx   the MX edge (shared or single)
+#   ghcr.io/<owner>/dirty-wip-mailmoose             the core
+#
+# Tags applied to each:
+#   dev                     always, a moving pointer at the newest build
+#   dev-<short-sha>         immutable, so a host can pin an exact build
+#   dev-<branch>            a moving pointer per branch (slashes become dashes)
+#
+# Platforms: linux/arm64 and linux/amd64. arm64 costs QEMU emulation in the image
+# stage but the Go builds are cross-compiled, so it stays cheap for the edge
+# (CGO_ENABLED=0). The core needs cgo (SQLite), so its arm64 build is the slow one.
+#
+# Packages published from this public repository by the workflow come out
+# public. A package created out of band (an image pushed by hand) may default to
+# private; make it public in that package's settings, or authenticate on the host:
+#   echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this build (recorded in the run summary)"
+        required: false
+        default: "manual test build"
+      platforms:
+        description: "Build platforms"
+        required: false
+        default: "linux/amd64,linux/arm64"
+        type: choice
+        options:
+          - "linux/amd64,linux/arm64"
+          - "linux/arm64"
+          - "linux/amd64"
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # Reuse the project's own gate so a broken revision never reaches a registry.
+  # `dialmx` is included because it is the image most testing pulls.
+  gate:
+    name: Test gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install SQLite development library
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal tests dialmx)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: vet
+        run: go vet -mod=readonly ./...
+      - name: build
+        run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/...
+      - name: test
+        run: go test -mod=readonly -race -count=1 -timeout=60s ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
+      - name: OpenClaw build and tests
+        working-directory: plugins/openclaw/openclaw-plugin
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+  publish:
+    name: Publish images
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tags
+        id: meta
+        shell: bash
+        run: |
+          short="$(git rev-parse --short=12 HEAD)"
+          # A branch name can contain slashes, which are not valid in a tag.
+          branch="$(printf '%s' "${GITHUB_REF_NAME}" | tr '/' '-')"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Building dev-$short from ${GITHUB_REF_NAME}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- MX edge (shared or single mode) ------------------------------------
+      # The image a remote host pulls to run a receiver. `DIALMX_MODE` picks the
+      # mode; both modes are the same binary.
+      - name: MX edge — tags
+        id: mx_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose-remote-mx
+          tags: |
+            type=raw,value=dev
+            type=raw,value=dev-${{ steps.meta.outputs.short }}
+            type=raw,value=dev-${{ steps.meta.outputs.branch }}
+      - name: MX edge — build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dialmx/Dockerfile
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.mx_meta.outputs.tags }}
+          labels: ${{ steps.mx_meta.outputs.labels }}
+          cache-from: type=gha,scope=mx
+          cache-to: type=gha,mode=max,scope=mx
+
+      # --- Core ---------------------------------------------------------------
+      - name: Core — tags
+        id: core_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose
+          tags: |
+            type=raw,value=dev
+            type=raw,value=dev-${{ steps.meta.outputs.short }}
+            type=raw,value=dev-${{ steps.meta.outputs.branch }}
+      - name: Core — build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.core_meta.outputs.tags }}
+          labels: ${{ steps.core_meta.outputs.labels }}
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,mode=max,scope=core
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Published (dev channel)"
+            echo
+            echo '```'
+            echo "${{ steps.mx_meta.outputs.tags }}"
+            echo "${{ steps.core_meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Pull on the test host:"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${OWNER}/dirty-wip-mailmoose:dev-\$${{ steps.meta.outputs.short }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,1176 @@
+package httpapp
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/htmlsanitize"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+)
+
+// This file is the human-UI half of the common standalone mailbox surface: the
+// folder create/rename/delete routes (session-authenticated, CSRF-protected) and
+// the standalone setup form. It shares the mailboxBackend dispatch with the API,
+// so a folder mutation routes to the live remote server for a standalone inbox
+// and to the local store for a domain inbox. Every write is a POST with a CSRF
+// token, matching the rest of the UI.
+
+// uiInboxFolderCreate creates a folder in an inbox.
+func (s *Server) uiInboxFolderCreate(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	path := strings.TrimSpace(r.Form.Get("path"))
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if path == "" {
+		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder path is required"), 303)
+		return
+	}
+	var created model.Folder
+	if mb.routed {
+		created, err = mb.remote.CreateRemoteFolder(r.Context(), p, mb.inbox.ID, path, name)
+	} else {
+		created, err = s.Service.Store.CreateFolder(r.Context(), p, mb.inbox.ID, store.FolderCreate{Path: path, Name: name})
+	}
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if created.ID != "" {
+		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"/folder?folder="+url.QueryEscape(created.ID)+"&notice="+url.QueryEscape("Folder created"), 303)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder created"), 303)
+}
+
+// uiInboxFolderRename renames a folder.
+func (s *Server) uiInboxFolderRename(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if name == "" {
+		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder name is required"), 303)
+		return
+	}
+	folderID := r.PathValue("folderId")
+	if mb.routed {
+		if _, rerr := mb.remote.RenameRemoteFolder(r.Context(), p, mb.inbox.ID, folderID, name); rerr != nil {
+			s.uiError(w, rerr, 400)
+			return
+		}
+	} else if _, rerr := s.Service.Store.RenameFolder(r.Context(), p, mb.inbox.ID, folderID, name); rerr != nil {
+		s.uiError(w, rerr, 400)
+		return
+	}
+	// Return to the renamed folder rather than dropping the user in the Inbox.
+	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"/folder?folder="+url.QueryEscape(folderID)+"&notice="+url.QueryEscape("Folder renamed"), 303)
+}
+
+// uiInboxFolderDelete deletes a folder.
+func (s *Server) uiInboxFolderDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if mb.routed {
+		if derr := mb.remote.DeleteRemoteFolder(r.Context(), p, mb.inbox.ID, r.PathValue("folderId")); derr != nil {
+			s.uiError(w, derr, 400)
+			return
+		}
+	} else if derr := s.Service.Store.DeleteFolder(r.Context(), p, mb.inbox.ID, r.PathValue("folderId")); derr != nil {
+		s.uiError(w, derr, 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder deleted"), 303)
+}
+
+// uiCreateStandalone creates a standalone inbox from the dashboard's standalone
+// setup form. It requires an account Admin, matching the domain-inbox create
+// rule. The remote binding is optional at creation: an operator may create the
+// inbox now and configure the connector later from the inbox settings.
+func (s *Server) uiCreateStandalone(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	address := strings.TrimSpace(r.Form.Get("address"))
+	display := strings.TrimSpace(r.Form.Get("display"))
+	namespace := strings.TrimSpace(r.Form.Get("namespace"))
+	host := strings.TrimSpace(r.Form.Get("host"))
+	username := strings.TrimSpace(r.Form.Get("username"))
+	security := strings.TrimSpace(r.Form.Get("security"))
+	port, _ := parseIntForm(r.Form.Get("port"))
+	var remote *model.RemoteConnection
+	if host != "" {
+		remote = &model.RemoteConnection{Host: host, Port: port, Username: username, Security: security}
+		smtpHost := strings.TrimSpace(r.Form.Get("smtp_host"))
+		if smtpHost != "" {
+			smtpPort, _ := parseIntForm(r.Form.Get("smtp_port"))
+			remote.SMTP = &model.RemoteSMTP{Host: smtpHost, Port: smtpPort, Username: strings.TrimSpace(r.Form.Get("smtp_username")), Security: strings.TrimSpace(r.Form.Get("smtp_security"))}
+		}
+	}
+	box, err := s.Service.Store.CreateStandaloneInbox(r.Context(), p.AccountID, store.StandaloneCreate{
+		DisplayName: display, Address: address, Namespace: namespace, Remote: remote,
+	})
+	if err != nil {
+		http.Redirect(w, r, "/?notice="+url.QueryEscape(err.Error()), 303)
+		return
+	}
+	// If secrets were supplied, store them encrypted through the remote service so
+	// the inbox is immediately usable and testable. A stored plaintext SMTP/IMAP
+	// choice is persisted as a non-secret field, never downgraded.
+	if pw := r.Form.Get("imap_password"); strings.TrimSpace(pw) != "" || strings.TrimSpace(r.Form.Get("smtp_password")) != "" {
+		if _, cerr := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, box.ID, store.StandaloneRemoteUpdate{IMAPPassword: pw, SMTPPassword: r.Form.Get("smtp_password")}); cerr != nil {
+			s.Log.Warn("standalone inbox created but credentials were not stored", "inbox_id", box.ID, "error", cerr)
+		}
+	}
+	// An IMAP binding supplied at creation must authenticate before the inbox is
+	// kept: otherwise a bad or empty connector would be left as an active inbox.
+	// On failure the just-created inbox is removed so nothing is mislabeled.
+	if host != "" {
+		if _, terr := s.remoteMailbox().TestStandaloneRemote(r.Context(), p, box.ID, store.StandaloneRemoteUpdate{}); terr != nil {
+			ctx := store.WithInboxLogOperation(r.Context(), "standalone_create")
+			if paths, perr := s.Service.Store.PurgeInbox(store.WithInboxLogReason(ctx, "setup_rollback"), p.AccountID, box.ID); perr == nil {
+				for _, path := range paths {
+					s.removeDataFile(path)
+				}
+			}
+			http.Redirect(w, r, "/?error="+url.QueryEscape("IMAP connection failed: "+terr.Error()), 303)
+			return
+		}
+	}
+	http.Redirect(w, r, "/?inbox="+box.ID+"&notice="+url.QueryEscape("Standalone inbox created"), 303)
+}
+
+// remoteUpdateFromForm builds a standalone remote update from an inbox settings
+// form. A blank secret keeps it only for an unchanged endpoint; a blank SMTP host disables
+// outbound. The field names match the edit dialog's Identity-tab controls.
+func remoteUpdateFromForm(r *http.Request) store.StandaloneRemoteUpdate {
+	port, _ := parseIntForm(r.Form.Get("remote_port"))
+	smtpPort, _ := parseIntForm(r.Form.Get("smtp_port"))
+	return store.StandaloneRemoteUpdate{
+		Host:         r.Form.Get("remote_host"),
+		Port:         port,
+		Username:     r.Form.Get("remote_username"),
+		Security:     r.Form.Get("remote_security"),
+		SMTPHost:     r.Form.Get("smtp_host"),
+		SMTPPort:     smtpPort,
+		SMTPUsername: r.Form.Get("smtp_username"),
+		SMTPSecurity: r.Form.Get("smtp_security"),
+		ClearSMTP:    strings.TrimSpace(r.Form.Get("smtp_host")) == "",
+		Namespace:    r.Form.Get("namespace"),
+		IMAPPassword: r.Form.Get("imap_password"),
+		SMTPPassword: r.Form.Get("smtp_password"),
+	}
+}
+
+// standaloneRemoteChanged reports whether a submitted remote update would change
+// the stored binding: any non-secret field differs, the namespace changes, a new
+// secret is supplied, or outbound SMTP is being turned off. It gates the live
+// authentication test so a plain identity save never re-dials the connector.
+func standaloneRemoteChanged(box model.Inbox, in store.StandaloneRemoteUpdate) bool {
+	if strings.TrimSpace(in.IMAPPassword) != "" || strings.TrimSpace(in.SMTPPassword) != "" {
+		return true
+	}
+	var cur model.RemoteConnection
+	if box.Remote != nil {
+		cur = *box.Remote
+	}
+	var curSMTP model.RemoteSMTP
+	if cur.SMTP != nil {
+		curSMTP = *cur.SMTP
+	}
+	if strings.TrimSpace(in.Host) != strings.TrimSpace(cur.Host) ||
+		in.Port != cur.Port ||
+		strings.TrimSpace(in.Username) != strings.TrimSpace(cur.Username) ||
+		strings.TrimSpace(in.Security) != strings.TrimSpace(cur.Security) ||
+		strings.TrimSpace(in.Namespace) != strings.TrimSpace(box.Namespace) {
+		return true
+	}
+	if in.ClearSMTP && cur.SMTP != nil {
+		return true
+	}
+	if strings.TrimSpace(in.SMTPHost) != strings.TrimSpace(curSMTP.Host) ||
+		in.SMTPPort != curSMTP.Port ||
+		strings.TrimSpace(in.SMTPUsername) != strings.TrimSpace(curSMTP.Username) ||
+		strings.TrimSpace(in.SMTPSecurity) != strings.TrimSpace(curSMTP.Security) {
+		return true
+	}
+	return false
+}
+
+// parseIntForm parses an optional integer form field, returning 0 when blank or
+// unparseable (a zero port means "use the conventional default").
+func parseIntForm(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	n := 0
+	for _, ch := range raw {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		n = n*10 + int(ch-'0')
+		if n > 65535 {
+			return 0, false
+		}
+	}
+	return n, true
+}
+
+// folderSidebarItem is one custom (non-system) folder in the mailbox sidebar. It
+// carries the stable id the rename/delete forms post and a display count; system
+// folders keep their dedicated sidebar entries.
+type folderSidebarItem struct {
+	ID    string
+	Path  string
+	Name  string
+	Role  string
+	Count int64
+}
+
+// buildFolderSidebar returns the inbox's custom folders (role "folder") in
+// hierarchical order, for the common folder sidebar. System folders are excluded
+// because they already have their own sidebar entries.
+func (s *Server) buildFolderSidebar(ctx context.Context, accountID, inboxID string) []folderSidebarItem {
+	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
+	if err != nil {
+		return nil
+	}
+	var out []folderSidebarItem
+	for _, f := range folders {
+		if f.Role != model.FolderRoleFolder {
+			continue
+		}
+		out = append(out, folderSidebarItem{ID: f.ID, Path: f.Path, Name: f.Name, Role: f.Role, Count: f.MessageCount})
+	}
+	return out
+}
+
+// findInboxFolder resolves a custom folder id within one inbox. Both the local
+// bulk path and the remote bulk path use it to turn the folder id carried on the
+// folder view's bulk form into the folder's store row (id for the local filter,
+// path for the remote one). It returns false for an unknown id or a folder that
+// belongs to a different inbox, so a crafted id is refused rather than acted on.
+func (s *Server) findInboxFolder(ctx context.Context, accountID, inboxID, folderID string) (model.Folder, bool) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return model.Folder{}, false
+	}
+	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
+	if err != nil {
+		return model.Folder{}, false
+	}
+	for i := range folders {
+		if folders[i].ID == folderID {
+			return folders[i], true
+		}
+	}
+	return model.Folder{}, false
+}
+
+// folderMailboxView renders the messages in one custom folder of an inbox (both
+// kinds). A domain inbox lists the local messages whose mailbox_id is the folder;
+// a standalone inbox lists the cached remote messages in the folder's path. It
+// reuses the common message list page so the same UI, bulk actions and live
+// updates apply to both.
+func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	folderID := strings.TrimSpace(r.URL.Query().Get("folder"))
+	if folderID == "" {
+		http.Error(w, "folder is required", 400)
+		return
+	}
+	folders, err := s.Service.Store.ListFolders(r.Context(), p.AccountID, id)
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	var target *model.Folder
+	for i := range folders {
+		if folders[i].ID == folderID {
+			target = &folders[i]
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, "folder not found", 404)
+		return
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	unread := s.inboxUnreadCounts(r.Context(), p)
+	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
+	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
+	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
+	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
+	sidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
+	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
+
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	msgs, err := s.folderMessages(r, p, box, target, before)
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	hasMore := len(msgs) > inboxPageSize
+	if hasMore {
+		msgs = msgs[:inboxPageSize]
+	}
+	cursor := ""
+	if len(msgs) > 0 {
+		cursor = msgs[len(msgs)-1].ID
+	}
+	pagerURL := ""
+	if cursor != "" {
+		pagerURL = "/ui/inboxes/" + box.ID + "/folder?folder=" + url.QueryEscape(target.ID) + "&before=" + url.QueryEscape(cursor)
+	}
+	totalCount, _ := s.folderMessageCount(r, p, box, target)
+
+	data := pageData{
+		Title:            box.Address + " · " + target.Name,
+		Page:             "inbox",
+		ShowOneReconnect: true,
+		Principal:        p,
+		CSRF:             csrf(r),
+		Account:          acc,
+		Inbox:            &box,
+		Messages:         msgs,
+		Folder:           "folder",
+		ActiveFolderID:   target.ID,
+		Folders:          sidebar,
+		UnifiedLabels:    unifiedLabels,
+		UnreadCount:      unread[id],
+		SpamCount:        spamCount,
+		TrashCount:       trashCount,
+		DraftCount:       draftCount,
+		OutboxCount:      outboxCount,
+		HasMore:          hasMore,
+		Before:           cursor,
+		// CurrentPageBefore is the incoming `before` this custom-folder page was
+		// requested with; the reload control preserves that page.
+		CurrentPageBefore: before,
+		PagerURL:          pagerURL,
+		TotalCount:        totalCount,
+		Notice:            r.URL.Query().Get("notice"),
+	}
+	if box.Kind == model.InboxKindStandalone {
+		// The shared standalone decoration, not a hand-rolled copy: it also
+		// carries the provider connection state the reconnect banner needs, which
+		// this page used to omit entirely.
+		s.applyStandaloneMailbox(r, p, box, &data)
+	}
+	s.pendingMessageOverlay(r, &data)
+	s.renderMail(w, r, folderBody, data)
+}
+
+// folderMessages lists up to inboxPageSize+1 messages in a folder. A domain
+// inbox reads the local store scoped to the folder; a standalone inbox lists the
+// cached remote messages in the folder's path and projects them onto the common
+// message shape.
+func (s *Server) folderMessages(r *http.Request, p model.Principal, box model.Inbox, folder *model.Folder, before string) ([]model.Message, error) {
+	if box.Kind == model.InboxKindStandalone {
+		res, err := s.remoteMailbox().ListRemoteMessagesCached(r.Context(), p, box.ID, folder.Path, inboxPageSize+1, before)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]model.Message, 0, len(res.Items))
+		for _, v := range res.Items {
+			out = append(out, remoteMessageToModel(v, folder))
+		}
+		return out, nil
+	}
+	return s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{
+		InboxID:      box.ID,
+		MailboxID:    folder.ID,
+		FolderScoped: true,
+		Before:       before,
+		Limit:        inboxPageSize + 1,
+	})
+}
+
+// folderMessageCount returns the exact number of messages in a folder, for the
+// "select all N" banner.
+func (s *Server) folderMessageCount(r *http.Request, p model.Principal, box model.Inbox, folder *model.Folder) (int, error) {
+	if box.Kind == model.InboxKindStandalone {
+		msgs, err := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, box.ID, store.RemoteMessageFilter{FolderPath: folder.Path})
+		if err != nil {
+			return 0, err
+		}
+		return len(msgs), nil
+	}
+	return s.Service.Store.CountMessages(r.Context(), p, store.MessageFilter{
+		InboxID:      box.ID,
+		MailboxID:    folder.ID,
+		FolderScoped: true,
+	})
+}
+
+// remoteMessageToModel projects a cached remote message onto the common message
+// shape so the local message list template renders it unchanged.
+func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.Message {
+	if folder == nil {
+		folder = &model.Folder{Path: v.FolderPath}
+	}
+	m := model.Message{
+		ID:             v.ID,
+		InboxID:        v.InboxID,
+		ThreadID:       v.ThreadKey,
+		Direction:      v.Direction,
+		From:           v.From,
+		To:             v.To,
+		CC:             v.CC,
+		Subject:        v.Subject,
+		SizeBytes:      v.SizeBytes,
+		Read:           v.Read,
+		Labels:         v.Labels,
+		MailboxID:      folder.ID,
+		FolderPath:     folder.Path,
+		HasAttachments: v.HasAttach,
+		RFCMessageID:   v.RFCMessageID,
+		InReplyTo:      v.InReplyTo,
+		References:     v.References,
+		SentAt:         remoteTimestamp(v.SentAt),
+		ReadMetadata: &model.MessageReadMetadata{
+			Snippet: v.Snippet, Flagged: &v.Flagged, Answered: &v.Answered, Draft: &v.Draft,
+			Flags: v.Flags, InternalDate: remoteTimestamp(v.InternalDate),
+		},
+	}
+	if !v.IndexedAt.IsZero() {
+		m.ReadMetadata.IndexedAt = &v.IndexedAt
+	}
+	// A remote message's body lives only on the server; the list shows the cached
+	// snippet, so Text stays empty and the UI renders the snippet.
+	if v.ReceivedAt != nil {
+		if t, err := time.Parse(time.RFC3339Nano, *v.ReceivedAt); err == nil {
+			m.CreatedAt = t
+			m.ReceivedAt = &t
+		}
+	}
+	if m.CreatedAt.IsZero() && !v.IndexedAt.IsZero() {
+		m.CreatedAt = v.IndexedAt
+	}
+	return m
+}
+
+func remoteTimestamp(value *string) *time.Time {
+	if value == nil {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, *value)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// folderBody is the common custom-folder mailbox page. It reuses the shared
+// message list template and the mailbox sidebar (with custom folder management),
+// so a domain inbox and a standalone inbox render identically.
+const folderBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
+<div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button></form></div>
+<div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
+{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}` + syncBanner + reconnectBanner + `
+{{template "select-banner" .}}
+{{template "live-list-card" .}}</div></div>`
+
+// remoteMessagePage renders one standalone (remote) message in the common
+// message reader using cached metadata. The browser fetches the sanitized body
+// separately and posts the read-state change after loading. It returns false when id is not a
+// cached remote message of a standalone inbox, so the caller can fall back to the
+// local path.
+func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	// Find the owning standalone inbox by scanning the account's remote index for
+	// the metadata id. A remote id is opaque and not inbox-prefixed, so the inbox
+	// must be resolved first; only a standalone inbox holds remote rows.
+	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
+	if err != nil {
+		return false
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		rec, gerr := s.Service.Store.GetRemoteMessageWithLabels(r.Context(), p.AccountID, box.ID, id)
+		if gerr != nil {
+			continue
+		}
+		if !s.remoteMailbox().InScope(p.AccountID, box.ID, rec.FolderPath) {
+			continue
+		}
+		view := s.remoteMailbox().ViewOf(rec)
+		s.renderRemoteMessage(w, r, p, box, view)
+		return true
+	}
+	return false
+}
+
+// renderRemoteMessage renders one resolved remote message through the shared
+// reader, so a standalone inbox's message exposes exactly the same actions and
+// metadata as a local one. The body is fetched live by the browser (RemoteBody),
+// so the shell renders immediately from cached metadata and opening a message
+// never blocks on the IMAP server.
+func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, view app.RemoteMessageView) {
+	m := remoteMessageToModel(view, &model.Folder{ID: "", Path: view.FolderPath})
+	// A remote message's Trash/Spam state is its remote role folder, not a local
+	// flag. Set DeletedAt so the reader offers Restore/Delete-forever instead of
+	// Reply/Trash, matching the local reader.
+	folder := "inbox"
+	if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash); ok && f.Path == view.FolderPath {
+		now := time.Now()
+		m.DeletedAt = &now
+		folder = "trash"
+	} else if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSpam); ok && f.Path == view.FolderPath {
+		folder = "spam"
+	} else if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSent); ok && f.Path == view.FolderPath {
+		folder = "sent"
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	unread := s.inboxUnreadCounts(r.Context(), p)
+	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
+	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
+	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
+	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
+	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
+	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
+	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
+	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
+	unifiedLabels = selectedMailboxLabels(unifiedLabels, m)
+	// The conversation thread is read from the cached remote index only: opening
+	// a message must never block on IMAP. A thread with no cached ancestors is
+	// simply not shown.
+	var thread []model.Message
+	if view.ThreadKey != "" {
+		if recs, terr := s.Service.Store.ListRemoteThreadMessages(r.Context(), p.AccountID, box.ID, view.ThreadKey); terr == nil {
+			for _, rec := range recs {
+				v := s.remoteMailbox().ViewOf(rec)
+				thread = append(thread, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+			}
+		}
+	}
+	title := view.Subject
+	if title == "" {
+		title = "(no subject)"
+	}
+	data := pageData{
+		Title:            title,
+		Page:             "inbox",
+		ShowOneReconnect: true,
+		Principal:        p,
+		CSRF:             csrf(r),
+		Account:          acc,
+		Message:          &m,
+		Inbox:            &box,
+		Folder:           folder,
+		Folders:          folderSidebar,
+		UnifiedLabels:    unifiedLabels,
+		MessageLabels:    unifiedLabels,
+		Labels:           inboxLabels,
+		LabelUnread:      labelUnread,
+		UnreadCount:      unread[box.ID],
+		SpamCount:        spamCount,
+		TrashCount:       trashCount,
+		DraftCount:       draftCount,
+		OutboxCount:      outboxCount,
+		ThreadMessages:   thread,
+		RemoteBody:       true,
+		RemoteBodyURL:    "/ui/messages/" + view.ID + "/body",
+		RemoteHTMLURL:    "/ui/messages/" + view.ID + "/html",
+		RemoteReadURL:    "/ui/messages/" + view.ID + "/read",
+		Notice:           r.URL.Query().Get("notice"),
+	}
+	s.applyStandaloneMailbox(r, p, box, &data)
+	s.render(w, r, messageBody, data)
+}
+
+// remoteAttachmentView is one attachment of a remote message, addressed by its
+// MIME part path so the download can stream the part live from the server.
+type remoteAttachmentView struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	PartPath    string `json:"part_path"`
+}
+
+// uiRemoteMessageBody fetches only the live body, after the cached reader shell
+// has rendered. The same transient fetch also yields the message's attachment
+// list (parsed from the raw MIME), so the reader can offer downloads without a
+// second fetch. Read-state changes remain on the existing CSRF-protected POST.
+func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	}
+	mb := mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
+	path, _, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, box.ID, id)
+	if ferr != nil {
+		s.writeRemoteBodyError(w, r, p, box)
+		return
+	}
+	defer mb.remote.CleanupRemoteRaw(path)
+	parsed, perr := mailparse.ParseFile(path)
+	if perr != nil {
+		s.writeRemoteBodyError(w, r, p, box)
+		return
+	}
+	atts := make([]remoteAttachmentView, 0, len(parsed.Attachments))
+	for _, a := range parsed.Attachments {
+		if a.PartPath == "" {
+			continue
+		}
+		atts = append(atts, remoteAttachmentView{Filename: a.Filename, ContentType: a.ContentType, Size: a.Size, PartPath: a.PartPath})
+	}
+	html := htmlsanitize.Sanitize(parsed.HTML)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"text":          parsed.Text,
+		"html":          htmlsanitize.StripRemoteImages(html),
+		"remote_images": htmlsanitize.HasRemoteImages(html),
+		"attachments":   atts,
+	})
+}
+
+// writeRemoteBodyError answers a failed live body fetch. The reader paints the
+// server-rendered connection banner before the body is requested, so an
+// authorization failure discovered only by that fetch — a revoked One
+// connection, say — left the operator with a bare "Could not load the message
+// body" and no route to repair it. The payload therefore carries the same
+// durable connection verdict the banner uses, and the reader turns it into the
+// in-place reconnect prompt.
+func (s *Server) writeRemoteBodyError(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox) {
+	w.Header().Set("Cache-Control", "no-store")
+	payload := map[string]any{"error": "Message body is unavailable. Please retry."}
+	if conn, ok := s.inboxConnectionState(r.Context(), p.AccountID, box); ok && conn.State == connectionStateDisconnected {
+		payload["connection"] = conn
+	}
+	writeJSON(w, http.StatusServiceUnavailable, payload)
+}
+
+// remoteMessageActionBox finds the standalone inbox that owns a cached remote
+// message id, so a session-UI state change (trash/restore/purge/spam) can route
+// to the live remote server instead of the local store. A remote id is opaque and
+// not inbox-prefixed, so the owning inbox must be resolved by scanning the
+// account's remote index. It reports ok=false when the id is not a cached remote
+// message of any authorized standalone inbox, so the caller answers a genuine 404.
+// Read authority is the finder gate; the action itself enforces the stronger
+// role (Assistant/Owner), so a read-only principal gets the action's real error
+// rather than a misleading 404.
+func (s *Server) remoteMessageActionBox(ctx context.Context, p model.Principal, id string) (model.Inbox, bool) {
+	if strings.TrimSpace(id) == "" {
+		return model.Inbox{}, false
+	}
+	boxes, err := s.Service.Store.ListStandaloneInboxes(ctx, p.AccountID)
+	if err != nil {
+		return model.Inbox{}, false
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		if _, gerr := s.Service.Store.GetRemoteMessage(ctx, p.AccountID, box.ID, id); gerr != nil {
+			continue
+		}
+		return box, true
+	}
+	return model.Inbox{}, false
+}
+
+// remoteMessageHTML serves the sanitized HTML body of a standalone inbox's remote
+// message, fetched live. It applies the same remote-image policy as the local
+// reader (?remote=1 opts in) and never loads external images by default. It
+// returns false when id is not a cached remote message.
+func (s *Server) remoteMessageHTML(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
+	if err != nil {
+		return false
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id); gerr != nil {
+			continue
+		}
+		path, _, ferr := s.remoteMailbox().FetchRemoteRaw(r.Context(), p, box.ID, id)
+		if ferr != nil {
+			http.Error(w, "message unavailable", 503)
+			return true
+		}
+		defer s.remoteMailbox().CleanupRemoteRaw(path)
+		parsed, perr := mailparse.ParseFile(path)
+		if perr != nil {
+			http.Error(w, "message unavailable", 503)
+			return true
+		}
+		remote := r.URL.Query().Get("remote") == "1"
+		body := htmlsanitize.Sanitize(parsed.HTML)
+		if !remote {
+			body = htmlsanitize.StripRemoteImages(body)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		imgSrc := "img-src 'self' data:"
+		if remote {
+			imgSrc = "img-src 'self' https: http: data:"
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "+imgSrc+"; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, body)
+		return true
+	}
+	return false
+}
+
+// uiRemoteMessageAttachment serves one MIME part of a standalone inbox's remote
+// message over the session UI. The part is a path segment (an IMAP MIME part path
+// such as "1.2"), matching the reader's attachment links. It answers 404 for a
+// non-remote or unknown id.
+func (s *Server) uiRemoteMessageAttachment(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	part := r.PathValue("part")
+	if len(parsePartPath(part)) == 0 {
+		http.Error(w, "invalid part path", http.StatusBadRequest)
+		return
+	}
+	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
+	if err != nil {
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, r.PathValue("id")); gerr != nil {
+			continue
+		}
+		att, ferr := s.remoteMailbox().FetchRemoteAttachment(r.Context(), p, box.ID, r.PathValue("id"), parsePartPath(part), r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
+		if ferr != nil {
+			http.Error(w, "attachment unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer s.remoteMailbox().CleanupRemoteRaw(att.Path)
+		name := att.Filename
+		if name == "" {
+			name = "attachment"
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		f, oerr := os.Open(att.Path)
+		if oerr != nil {
+			http.Error(w, "attachment unavailable", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		_, _ = io.Copy(w, f)
+		return
+	}
+	http.Error(w, "message not found", http.StatusNotFound)
+}
+
+// uiInboxAuthoringSave saves an inbox's assistant authoring settings (mode and
+// notify override) from the Approvals tab. It requires Owner. The mode is
+// snapshotted onto each request at creation, so a change never affects an
+// in-flight request. A domain inbox cannot be set to remote_draft (the store
+// rejects it; remote_draft is a standalone-only mode).
+func (s *Server) uiInboxAuthoringSave(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	inboxID := r.PathValue("id")
+	if !p.CanOwn(inboxID) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	mode := strings.TrimSpace(r.Form.Get("mode"))
+	if mode != "" && !model.ValidAuthoringMode(mode) {
+		http.Redirect(w, r, "/?inbox="+inboxID+"&error="+url.QueryEscape("Unknown authoring mode"), 303)
+		return
+	}
+	if err := s.Service.Store.SetInboxAuthoringMode(r.Context(), p, inboxID, mode); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if r.Form.Has("notify_address") {
+		if err := s.Service.Store.SetInboxNotifyAddress(r.Context(), p, inboxID, strings.TrimSpace(r.Form.Get("notify_address"))); err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+	}
+	http.Redirect(w, r, "/?inbox="+inboxID+"&notice="+url.QueryEscape("Approval settings saved"), 303)
+}
+
+// authoringSettingsByInbox builds the per-inbox authoring payload embedded on the
+// dashboard's edit-inbox button so the Approvals tab loads and saves it. Only the
+// Account Admin reaches the dashboard, so every inbox is included. It is
+// secret-free.
+func (s *Server) authoringSettingsByInbox(ctx context.Context, boxes []model.Inbox) map[string]string {
+	out := make(map[string]string, len(boxes))
+	for _, box := range boxes {
+		settings, err := s.Service.Store.GetInboxAuthoringSettingsInternal(ctx, box.AccountID, box.ID)
+		if err != nil {
+			continue
+		}
+		payload := map[string]any{
+			"mode":         settings.Mode,
+			"default_mode": model.DefaultAuthoringMode(box.Kind),
+			// Approver is enabled by the EFFECTIVE mode, not the kind. A
+			// remote-draft inbox has no approver: its request to send just places
+			// the draft in the connected Drafts folder.
+			"approver_enabled": settings.Mode == model.AuthoringMailMooseApproval,
+			"standalone":       box.Kind == model.InboxKindStandalone,
+		}
+		b, merr := json.Marshal(payload)
+		if merr != nil {
+			continue
+		}
+		out[box.ID] = string(b)
+	}
+	return out
+}
+
+// inboxRemoteConfigByInbox embeds each standalone inbox's secret-free remote
+// connector view on its edit button, so the settings dialog's Remote IMAP /
+// Outbound SMTP tabs can populate from durable state. Domain inboxes have no
+// entry.
+func (s *Server) inboxRemoteConfigByInbox(ctx context.Context, p model.Principal, boxes []model.Inbox) map[string]string {
+	out := make(map[string]string)
+	for _, box := range boxes {
+		if box.Kind != model.InboxKindStandalone {
+			continue
+		}
+		view, err := s.remoteConfigView(ctx, p, box.ID)
+		if err != nil {
+			continue
+		}
+		b, merr := json.Marshal(view)
+		if merr != nil {
+			continue
+		}
+		out[box.ID] = string(b)
+	}
+	return out
+}
+
+// composeRemoteMessage builds the compose/reply form for a standalone inbox's
+// remote message from its cached metadata. The send itself is the app service's
+// reply flow (integrated by the app owner); this renders the form so the operator
+// can compose. It returns false when id is not a cached remote message.
+func (s *Server) composeRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, kind, id string) bool {
+	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
+	if err != nil {
+		return false
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		v, gerr := s.remoteMailbox().GetRemoteMessage(r.Context(), p, box.ID, id)
+		if gerr != nil {
+			continue
+		}
+		m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
+		acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+		data := pageData{Principal: p, CSRF: csrf(r), Account: acc, ComposeCancel: "/ui/messages/" + m.ID}
+		data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, "")
+		if m.Direction == model.DirectionUnknown && (kind == "reply" || kind == "reply-all") {
+			data.ComposeNote = "Message direction is unknown. Choose the reply recipients explicitly."
+		}
+		switch kind {
+		case "reply":
+			data.Title = "Reply"
+			data.ComposeTitle = "Reply"
+			data.ComposeTo = strings.Join(model.DefaultReplyRecipients(m), ", ")
+			data.ComposeSubject = app.ReplySubject(m.Subject)
+			data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply", csrf(r))
+		case "reply-all":
+			data.Title = "Reply all"
+			data.ComposeTitle = "Reply all"
+			data.ComposeTo, data.ComposeCC = replyAllRecipients(m, box)
+			data.ComposeSubject = app.ReplySubject(m.Subject)
+			data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply-all", csrf(r))
+		case "forward":
+			data.Title = "Forward"
+			data.ComposeTitle = "Forward"
+			data.ComposeSubject = app.ForwardSubject(m.Subject)
+			data.ComposeNote = "The original message is fetched live from the remote server when forwarded."
+			data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/forward", csrf(r))
+		}
+		s.render(w, r, composeBody, data)
+		return true
+	}
+	return false
+}
+
+// uiInboxRemoteSettings renders the standalone inbox connection-settings page:
+// the IMAP/SMTP bindings (secret-free; blank secrets keep the stored value) and
+// the special-folder role mappings, showing detected folders and offering an
+// explicit select-or-create for each missing role.
+// providerConnected reports whether a standalone inbox is bound through a
+// provider OAuth connection (Microsoft or Google) rather than a hand-configured
+// IMAP/SMTP binding. Such an inbox has no editable connector on the Identity tab
+// — it shows the provider's reconnect link — and ConfigureStandaloneRemote
+// refuses to update it.
+func (s *Server) providerConnected(ctx context.Context, accountID, inboxID string) bool {
+	rm := s.remoteMailbox()
+	return rm.IsMicrosoft(ctx, accountID, inboxID) || rm.IsGoogle(ctx, accountID, inboxID)
+}
+
+func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	// A provider-connected inbox has no editable IMAP/SMTP connector, and no
+	// separate settings page: its connection is managed on the inbox itself (One
+	// reconnects in place from the Identity tab; Google and Microsoft follow their
+	// OAuth wizard). Send the operator to the inbox rather than to a page that
+	// would only restate the same link.
+	if s.Service.Store.IsOne(r.Context(), p.AccountID, id) || s.providerConnected(r.Context(), p.AccountID, id) {
+		http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(id)+"?inbox_tab=basic", http.StatusSeeOther)
+		return
+	}
+	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	if box.Kind != model.InboxKindStandalone {
+		http.Error(w, "not a standalone inbox", 404)
+		return
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	view, verr := s.remoteConfigView(r.Context(), p, id)
+	if verr != nil {
+		s.uiError(w, verr, 400)
+		return
+	}
+	data := pageData{
+		Title:                box.Address + " · Connection",
+		Page:                 "inbox",
+		Principal:            p,
+		CSRF:                 csrf(r),
+		Account:              acc,
+		Inbox:                &box,
+		RemoteConfig:         view,
+		RemoteConnectorURL:   "/ui/inboxes/" + id + "/remote",
+		StandaloneMode:       true,
+		StandaloneConfigured: box.RemoteConfigured && box.Remote != nil,
+		StandalonePlain:      box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain,
+		Notice:               r.URL.Query().Get("notice"),
+	}
+	data.Folders = s.buildFolderSidebar(r.Context(), p.AccountID, id)
+	if folders, lerr := s.Service.Store.ListFolders(r.Context(), p.AccountID, id); lerr == nil {
+		items := make([]folderListResponse, 0, len(folders))
+		for _, f := range folders {
+			items = append(items, folderResponse(f))
+		}
+		data.RemoteFolders = items
+	}
+	data.RoleMappings = s.buildRoleMappings(r.Context(), p.AccountID, id)
+	s.render(w, r, remoteSettingsBody, data)
+}
+
+// uiInboxRemoteRoleCreate maps a special folder role either by creating its
+// conventional folder on the live server or by selecting an existing folder
+// (folder_id). It returns to the connection-settings page.
+func (s *Server) uiInboxRemoteRoleCreate(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	if !p.CanOwn(id) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	role := strings.TrimSpace(r.PathValue("role"))
+	if _, ok := roleFolderNames[role]; !ok {
+		http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Unknown folder role"), 303)
+		return
+	}
+	// Selecting an existing folder persists an explicit role_locked mapping and
+	// requires no provider call.
+	if folderID := strings.TrimSpace(r.Form.Get("folder_id")); folderID != "" {
+		if _, merr := s.remoteMailbox().SetRemoteFolderRole(r.Context(), p, id, folderID, role); merr != nil {
+			s.uiError(w, merr, 400)
+			return
+		}
+		http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Folder mapped to "+role), 303)
+		return
+	}
+	path := strings.TrimSpace(r.Form.Get("path"))
+	if path == "" {
+		http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Select a folder or a name to create"), 303)
+		return
+	}
+	folder, cerr := s.remoteMailbox().CreateRemoteFolder(r.Context(), p, id, path, path)
+	if cerr != nil {
+		s.uiError(w, cerr, 400)
+		return
+	}
+	// Lock the created folder's role explicitly so a later reconcile cannot reset
+	// it by re-inferring from the name.
+	if _, merr := s.remoteMailbox().SetRemoteFolderRole(r.Context(), p, id, folder.ID, role); merr != nil {
+		s.uiError(w, merr, 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Folder created and mapped"), 303)
+}
+
+// uiInboxRemoteSettingsSave saves the connection fields (session+CSRF). A blank
+// secret keeps the stored value; a plaintext choice is persisted as the non-secret
+// security field and never silently downgraded.
+func (s *Server) uiInboxRemoteSettingsSave(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	if !p.CanOwn(id) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	port, _ := parseIntForm(r.Form.Get("port"))
+	smtpPort, _ := parseIntForm(r.Form.Get("smtp_port"))
+	in := store.StandaloneRemoteUpdate{
+		Host: r.Form.Get("host"), Port: port, Username: r.Form.Get("username"), Security: r.Form.Get("security"),
+		SMTPHost: r.Form.Get("smtp_host"), SMTPPort: smtpPort, SMTPUsername: r.Form.Get("smtp_username"), SMTPSecurity: r.Form.Get("smtp_security"),
+		ClearSMTP: r.Form.Get("smtp_host") == "", Namespace: r.Form.Get("namespace"),
+		IMAPPassword: r.Form.Get("imap_password"), SMTPPassword: r.Form.Get("smtp_password"),
+	}
+	// A connector must authenticate before it is saved as active.
+	if verr := s.verifyRemoteUpdate(r.Context(), p, id, in); verr != nil {
+		s.uiError(w, verr, 400)
+		return
+	}
+	box, err := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, id, in)
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	// The Sent-copy switch is saved with the same form when present.
+	if r.Form.Has("sent_copy_enabled") {
+		enabled := r.Form.Get("sent_copy_enabled") == "1"
+		folder := box.RemoteSentCopyFolder
+		if strings.TrimSpace(r.Form.Get("sent_copy_folder")) != "" {
+			folder = r.Form.Get("sent_copy_folder")
+		}
+		if err := s.Service.Store.SetRemoteSentCopy(r.Context(), p, id, enabled, folder); err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Connection settings saved"), 303)
+}
+
+// remoteSettingsBody is the standalone connection-settings page. It shows the
+// secret-free bindings, warns about plaintext, and lists each special folder role
+// with its detected folder or an explicit create control. Nothing is invented: a
+// missing role shows a prompt, not a fabricate
+const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}">← Back to inbox</a></div>
+{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
+<section class="card"><h1>Connection settings</h1>
+{{if .StandalonePlain}}<div class="banner warn">This inbox connects over plaintext (no transport security). TLS is the default and is never downgraded automatically; plain is an explicit choice for a self-hosted server.</div>{{end}}
+<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/remote/settings" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<h3 class="section-head">Inbound IMAP</h3>
+<label>Host</label><input name="host" value="{{.RemoteConfig.Host}}" placeholder="imap.example.com">
+<label>Port</label><input name="port" type="number" min="1" max="65535" value="{{if .RemoteConfig.Port}}{{.RemoteConfig.Port}}{{end}}" placeholder="993">
+<label>Username</label><input name="username" value="{{.RemoteConfig.Username}}" placeholder="agent@example.com">
+<label>Password or app password{{if .RemoteConfig.IMAPPasswordSet}} <span class="muted small">(leave blank only if host, port, username and security are unchanged)</span>{{end}}</label><input name="imap_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.IMAPPasswordSet}}unchanged{{else}}app password{{end}}">
+<label>Security</label><select name="security"><option value="tls"{{if eq .RemoteConfig.Security "tls"}} selected{{end}}>TLS (implicit, default)</option><option value="starttls"{{if eq .RemoteConfig.Security "starttls"}} selected{{end}}>STARTTLS</option><option value="plain"{{if eq .RemoteConfig.Security "plain"}} selected{{end}}>Plain (no transport security)</option></select>
+<label>Sync root folder</label><input name="namespace" value="{{.RemoteConfig.Namespace}}" placeholder="INBOX">
+<h3 class="section-head">Outbound SMTP (optional)</h3>
+<p class="muted small">Without SMTP this inbox can receive and hand off drafts but cannot send. Leave the host blank to disable outbound.</p>
+<label>SMTP host</label><input name="smtp_host" value="{{.RemoteConfig.SMTPHost}}" placeholder="smtp.example.com">
+<label>SMTP port</label><input name="smtp_port" type="number" min="1" max="65535" value="{{if .RemoteConfig.SMTPPort}}{{.RemoteConfig.SMTPPort}}{{end}}" placeholder="465">
+<label>SMTP username</label><input name="smtp_username" value="{{.RemoteConfig.SMTPUsername}}" placeholder="agent@example.com">
+<label>SMTP password{{if .RemoteConfig.SMTPPasswordSet}} <span class="muted small">(leave blank only if host, port, username and security are unchanged)</span>{{end}}</label><input name="smtp_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.SMTPPasswordSet}}unchanged{{else}}app password{{end}}">
+<label>SMTP security</label><select name="smtp_security"><option value="tls"{{if eq .RemoteConfig.SMTPSecurity "tls"}} selected{{end}}>TLS (implicit, default)</option><option value="starttls"{{if eq .RemoteConfig.SMTPSecurity "starttls"}} selected{{end}}>STARTTLS</option><option value="plain"{{if eq .RemoteConfig.SMTPSecurity "plain"}} selected{{end}}>Plain (no transport security)</option></select>
+<h3 class="section-head">Sent copy</h3>
+<p class="muted small">When enabled, a message sent from this inbox is copied into the remote Sent folder. The destination is resolved from the Sent role unless a folder is set here.</p>
+<label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="sent_copy_enabled" value="1"{{if .RemoteConfig.SentCopyEnabled}} checked{{end}} style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Copy sent messages to the remote Sent folder</span></label>
+<label>Sent copy folder (optional override)</label><input name="sent_copy_folder" value="{{.RemoteConfig.SentCopyFolder}}" placeholder="Defaults to the Sent role folder">
+<div class="dialog-actions"><button type="submit">Save connection</button></div>
+</form>
+</section>
+<section class="card"><h2>Special folders</h2>
+<p class="muted small">Each well-known role is mapped to a folder on the remote server. A role is mapped only when a folder is selected for it; MailMoose never invents a mapping. Select an existing folder or create the conventional one.</p>
+<table class="dense"><thead><tr><th>Role</th><th>Mapped folder</th><th>Map an existing folder</th><th></th></tr></thead><tbody>
+{{range .RoleMappings}}<tr><td>{{.Role}}</td><td>{{if .Mapped}}{{.FolderName}} <span class="pill">mapped</span>{{else}}<span class="pill amber">missing</span>{{end}}</td>
+<td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="folder_id"><option value="">Select a folder…</option>{{range .Candidates}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="secondary btn-sm">Map</button></form></td>
+<td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="path" value="{{.DefaultName}}"><button class="secondary btn-sm">Create {{.DefaultName}}</button></form></td></tr>{{end}}
+</tbody></table>
+</section>`
+
+// roleMappingView is one special folder role in the connection-settings mapping
+// table: whether it is currently mapped, which folder carries it, and the
+// existing folders that could be selected for it.
+type roleMappingView struct {
+	Role        string
+	Mapped      bool
+	FolderID    string
+	FolderName  string
+	DefaultName string
+	Candidates  []folderListResponse
+}
+
+// buildRoleMappings builds the special-folder mapping table for a standalone
+// inbox: a role is mapped only when a remote-origin (or explicitly locked) folder
+// carries it. Candidates are the inbox's selectable, non-protected folders the
+// operator may map.
+func (s *Server) buildRoleMappings(ctx context.Context, accountID, inboxID string) []roleMappingView {
+	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
+	if err != nil {
+		return nil
+	}
+	var candidates []folderListResponse
+	mappedByRole := map[string]model.Folder{}
+	for _, f := range folders {
+		remoteMapping := f.Origin == "remote" || f.RoleLocked
+		if remoteMapping && f.Role != model.FolderRoleFolder && f.Role != model.FolderRoleLabel {
+			if _, exists := mappedByRole[f.Role]; !exists && strings.TrimSpace(f.Path) != "" {
+				mappedByRole[f.Role] = f
+			}
+		}
+		if f.Selectable && !f.IsSystem {
+			candidates = append(candidates, folderResponse(f))
+		}
+	}
+	out := make([]roleMappingView, 0, len(specialFolderRoles))
+	for _, role := range specialFolderRoles {
+		v := roleMappingView{Role: role, DefaultName: roleConventionalName(role), Candidates: candidates}
+		if f, ok := mappedByRole[role]; ok {
+			v.Mapped = true
+			v.FolderID = f.ID
+			v.FolderName = f.Name
+		}
+		out = append(out, v)
+	}
+	return out
+}

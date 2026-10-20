@@ -1,0 +1,1483 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/imap"
+)
+
+// RemoteForwarder fetches a detected remote arrival's raw RFC5322 MIME to a
+// transient temp file for a demand-based webhook/Hermes forward. It is the narrow
+// seam the webhook and relay workers use so they never speak IMAP and never
+// archive a body. The returned path must be removed with CleanupRemoteRaw.
+type RemoteForwarder interface {
+	FetchArrivalRaw(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (path string, size int64, err error)
+	CleanupRemoteRaw(path string)
+}
+
+// RemoteDetection is the on-demand detection surface the HTTP agent drives when a
+// client polls for events. It forces a detection pass for one inbox (so a new
+// arrival is durably recorded and published without waiting for an IDLE signal)
+// and reports how many approvals are pending. It is installed once at startup by
+// cmd/server onto the Service.
+type RemoteDetection interface {
+	// DetectInbox runs one remote-arrival detection pass for an inbox, recording
+	// and publishing any genuinely new arrivals. It is safe to call concurrently
+	// and is a no-op for a non-standalone or unconfigured inbox.
+	DetectInbox(ctx context.Context, inbox model.Inbox)
+	// PendingRemoteApprovals reports whether an inbox has an outstanding pending
+	// email approval request, so a control message forces detection.
+	PendingRemoteApprovals(ctx context.Context, inbox model.Inbox) bool
+}
+
+// FetchArrivalRaw implements RemoteForwarder. It streams the arrival's raw MIME to
+// a transient file and never marks the message seen.
+func (m *RemoteMailboxService) FetchArrivalRaw(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (string, int64, error) {
+	return m.fetchArrivalRawToTemp(ctx, inbox, arrival)
+}
+
+// RemoteWorker is the process-owned standalone-inbox watcher. For every
+// remote-configured standalone inbox it runs a bounded, dedicated observation of
+// the inbox's selected INBOX folder:
+//
+//   - It prefers a realtime IDLE watch on a dedicated connection (the adapter's
+//     Watch), and falls back to bounded polling (the adapter's Poll) when the
+//     server does not advertise IDLE or the watch cannot be established. Either
+//     way it uses its own connection, so a slow/blocking IDLE never starves the
+//     other inboxes.
+//   - On every signal it re-runs the durable detection pass: it reads the live UID
+//     set, compares it against the inbox's durable per-folder cursor, records
+//     exactly one durable arrival per genuinely new message, and advances the
+//     cursor. The first ever pass establishes the baseline WITHOUT emitting any
+//     arrival, so enabling the watcher on an existing mailbox never floods the
+//     event stream with old mail.
+//   - A connection failure is a retry, never a skip: the cursor is not advanced
+//     past unrecorded mail, so nothing is lost across a reconnect.
+//
+// The watcher owns only remote *events*; it never archives a body and never
+// advances a live-read cursor. Proactive webhook/Hermes delivery is demand-based:
+// an arrival is only fanned out to clients the inbox actually has.
+//
+// All state lives in the durable store, so a restart resumes from the cursor. The
+// worker holds no package-level global; it is created once by cmd/server and
+// stopped on shutdown.
+type RemoteWorker struct {
+	svc    *Service
+	remote *RemoteMailboxService
+
+	log    *slog.Logger
+	stop   chan struct{}
+	done   chan struct{}
+	period time.Duration
+
+	// maxInboxConnections bounds the number of inboxes watched concurrently. Each
+	// watched inbox holds at most one dedicated connection, so this caps the
+	// watcher's connection and memory footprint.
+	maxInboxConnections int
+	// pollInterval is the bounded fallback poll cadence when IDLE is unavailable.
+	pollInterval time.Duration
+	// watchBackoff bounds reconnect attempts after a watch/connection failure.
+	watchBackoff time.Duration
+	// detectionMu and detecting serialize provider detection across startup,
+	// watcher, demand, and approval-triggered paths for each inbox.
+	detectionMu sync.Mutex
+	detecting   map[string]bool
+	// demandMu guards lastDemand, the per-inbox timestamp of the last
+	// demand-driven detection pass. It coalesces the many clients that can ask
+	// for freshness (SSE streams, long-polls, list/thread reads, the reload
+	// button) onto one schedule per inbox instead of each launching a pass.
+	demandMu   sync.Mutex
+	lastDemand map[string]time.Time
+	// demandInterval overrides the demand-coalescing spacing. A zero value
+	// derives it from the inbox's quick poll interval; a negative value disables
+	// coalescing entirely (every demand pass runs), which tests use for
+	// determinism.
+	demandInterval time.Duration
+}
+
+// Defaults for the remote watcher.
+const (
+	defaultRemoteWatchPeriod    = 30 * time.Second
+	defaultRemotePollInterval   = 60 * time.Second
+	defaultRemoteWatchBackoff   = 5 * time.Second
+	defaultRemoteMaxConnections = 8
+	// remoteArrivalPageLimit bounds how many header rows a single detection pass
+	// fetches, so a huge folder cannot exhaust memory; a folder larger than this
+	// is simply caught up over subsequent passes.
+	remoteArrivalPageLimit = 500
+	// remoteArrivalLease bounds a proactive fan-out claim.
+	remoteArrivalLease = 2 * time.Minute
+)
+
+// NewRemoteWorker builds the watcher over the app service and its remote surface.
+func NewRemoteWorker(svc *Service, rm *RemoteMailboxService, log *slog.Logger) *RemoteWorker {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &RemoteWorker{
+		svc:                 svc,
+		remote:              rm,
+		log:                 log,
+		stop:                make(chan struct{}),
+		done:                make(chan struct{}),
+		period:              defaultRemoteWatchPeriod,
+		maxInboxConnections: defaultRemoteMaxConnections,
+		pollInterval:        defaultRemotePollInterval,
+		watchBackoff:        defaultRemoteWatchBackoff,
+		detecting:           make(map[string]bool),
+		lastDemand:          make(map[string]time.Time),
+	}
+}
+
+// SetPeriod overrides the reconciling poll period (used by tests).
+func (w *RemoteWorker) SetPeriod(d time.Duration) { w.period = d }
+
+// SetPollInterval overrides the fallback poll cadence when IDLE is unavailable.
+func (w *RemoteWorker) SetPollInterval(d time.Duration) { w.pollInterval = d }
+
+// SetMaxInboxConnections bounds how many inboxes are watched concurrently.
+func (w *RemoteWorker) SetMaxInboxConnections(n int) {
+	if n > 0 {
+		w.maxInboxConnections = n
+	}
+}
+
+// SetDemandInterval overrides the demand-coalescing spacing (used by tests). A
+// negative value disables coalescing so every demand pass runs.
+func (w *RemoteWorker) SetDemandInterval(d time.Duration) { w.demandInterval = d }
+
+// WatchIntervalForTest exposes the push-aware watcher cadence for tests.
+func (w *RemoteWorker) WatchIntervalForTest(inbox model.Inbox) time.Duration {
+	return w.watchIntervalFor(inbox)
+}
+
+// WatchInboxForTest exposes the per-inbox watch loop for tests, which need to
+// observe the realtime IDLE path and its logging without starting the full worker.
+func (w *RemoteWorker) WatchInboxForTest(ctx context.Context, inbox model.Inbox) {
+	w.watchInbox(ctx, inbox)
+}
+
+// DemandIntervalForTest exposes the demand-coalescing cadence for tests.
+func (w *RemoteWorker) DemandIntervalForTest(inbox model.Inbox) time.Duration {
+	return w.demandIntervalFor(inbox)
+}
+
+// Start launches the worker. It returns immediately.
+func (w *RemoteWorker) Start() { go w.run() }
+
+// Stop signals the worker to stop and waits for every watcher goroutine to drain.
+// In-flight passes observe the stop signal between messages so shutdown is prompt
+// and no goroutine is leaked.
+func (w *RemoteWorker) Stop() {
+	close(w.stop)
+	<-w.done
+}
+
+func (w *RemoteWorker) stopping() bool {
+	select {
+	case <-w.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// run reconciles the set of watchers against the configured standalone inboxes on
+// each tick, and drains them all on stop. A watcher is a long-lived goroutine plus
+// its dedicated connection; the reconcile pass starts one for each new inbox and
+// cancels one for each removed/disabled inbox.
+func (w *RemoteWorker) run() {
+	defer close(w.done)
+	// Recover claims left by a previous process so arrivals resume.
+	if err := w.svc.Store.RecoverAbandonedRemoteArrivalClaims(context.Background()); err != nil {
+		w.log.Error("remote arrival claim recovery", "error", err)
+	}
+	// Recover abandoned sent-copy claims so a copy interrupted by a restart
+	// resumes instead of idling until its lease expires.
+	if err := w.svc.Store.RecoverAbandonedRemoteSentCopyClaims(context.Background()); err != nil {
+		w.log.Error("remote sent-copy claim recovery", "error", err)
+	}
+	if w.remote != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w.runMicrosoftPush(ctx)
+		}()
+		defer func() { cancel(); <-done }()
+	}
+
+	type watcher struct {
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
+	active := map[string]*watcher{}
+
+	reconcile := func() {
+		inboxes, err := w.svc.Store.ListDetectableRemoteInboxes(context.Background())
+		if err != nil {
+			w.log.Error("remote watcher reconcile", "error", err)
+			return
+		}
+		want := map[string]model.Inbox{}
+		for _, ib := range inboxes {
+			want[ib.ID] = ib
+			// Full index reconcile on the inbox's own cadence, not every tick:
+			// a folder is deep-refreshed only when its last index is older than
+			// the full-sync interval. New mail is handled far faster by the
+			// detection pass's quick INBOX index, so the deep pass is reserved
+			// for read/flag changes, non-INBOX folders and backfill.
+			if status, err := w.svc.Store.GetRemoteIndexStatus(context.Background(), ib.AccountID, ib.ID); err == nil {
+				if fullSyncDue(status, ib.RemoteFullSyncMinutes) {
+					w.remote.ScheduleRefresh(ib.AccountID, ib.ID)
+				}
+			}
+		}
+		// Stop watchers for inboxes that are gone or disabled.
+		for id, wt := range active {
+			if _, ok := want[id]; !ok {
+				wt.cancel()
+				delete(active, id)
+			}
+		}
+		// Start watchers for new inboxes, bounded by maxInboxConnections.
+		for id, ib := range want {
+			if _, ok := active[id]; ok {
+				continue
+			}
+			if len(active) >= w.maxInboxConnections {
+				break
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			active[id] = &watcher{cancel: cancel, done: done}
+			go func(ib model.Inbox) {
+				defer close(done)
+				w.watchInbox(ctx, ib)
+			}(ib)
+		}
+	}
+
+	// On startup, drain any arrivals left pending by a previous process, then
+	// reconcile and run one full detection pass over every inbox so a fresh start
+	// catches up immediately.
+	w.drainRemoteArrivals()
+	w.reconcileRemoteActions()
+	reconcile()
+	w.detectAll()
+	w.drainRemotePreviews()
+
+	ticker := time.NewTicker(w.period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.stop:
+			for _, wt := range active {
+				wt.cancel()
+			}
+			for _, wt := range active {
+				<-wt.done
+			}
+			return
+		case <-ticker.C:
+			reconcile()
+			w.drainRemoteArrivals()
+			w.drainRemotePreviews()
+			w.reconcileRemoteActions()
+			w.detectPendingApprovalInboxes()
+			// Drive the durable sent-copy queue (copies of sent mail into a
+			// standalone inbox's remote Sent folder). It is independent of SMTP
+			// success and never re-sends.
+			if w.remote != nil {
+				w.remote.CopyPendingSentCopies(context.Background())
+			}
+		}
+	}
+}
+
+// fullSyncDue reports whether a standalone inbox's deep index reconcile is due:
+// it has never completed a pass, or its last pass is older than the inbox's
+// full-sync interval. A completed pass younger than the interval is skipped, so
+// the deep pass runs on a configurable cadence rather than every worker tick.
+func fullSyncDue(status store.RemoteIndexStatus, fullMinutes *int) bool {
+	if status.Status != store.RemoteIndexComplete {
+		return true
+	}
+	if status.IndexedAt.IsZero() {
+		return true
+	}
+	interval := time.Duration(model.NormalizeRemoteFullSyncMinutes(fullMinutes)) * time.Minute
+	return time.Since(status.IndexedAt) >= interval
+}
+
+// watchInbox observes one inbox's INBOX folder until ctx is cancelled. It prefers a
+// realtime IDLE watch on a dedicated session; when the server does not advertise
+// IDLE (or the watch fails) it falls back to bounded polling. A connection failure
+// backs off and retries; it never advances the cursor past unrecorded mail, so no
+// arrival is lost.
+func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		// Neither provider has an IDLE watch, so the worker polls. The interval is
+		// re-resolved every pass: a Microsoft inbox with active push drops its
+		// quick poll to the full-sync safety net, and returns to quick polling if
+		// the subscription expires or is removed.
+		timer := time.NewTimer(0)
+		defer timer.Stop()
+		for {
+			w.detectInbox(ctx, inbox)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(w.watchIntervalFor(inbox))
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stop:
+				return
+			case <-timer.C:
+			}
+		}
+	}
+	folder := inboxFolder(inbox)
+	// Run one detection pass up front so a fresh watcher reports mail that
+	// arrived while the process was down.
+	w.detectInbox(ctx, inbox)
+	for !w.stopping() {
+		if err := w.runWatchSession(ctx, inbox, folder); err != nil {
+			if ctx.Err() != nil || w.stopping() {
+				return
+			}
+			w.log.Debug("remote watch retry", "inbox_id", inbox.ID, "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stop:
+				return
+			case <-time.After(w.watchBackoff):
+			}
+			continue
+		}
+		return
+	}
+}
+
+// runWatchSession opens a dedicated session and runs either an IDLE watch or a
+// poll loop, invoking detection on every signal. It returns nil only on a clean
+// context cancellation.
+func (w *RemoteWorker) runWatchSession(ctx context.Context, inbox model.Inbox, folder string) error {
+	sess, err := w.remote.openRemoteSession(ctx, inbox)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+
+	if watcher, ok := sess.(watchSession); ok && watcher.IdleCapable() {
+		return w.runIdleWatch(ctx, inbox, folder, watcher)
+	}
+	return w.runPollWatch(ctx, inbox, watcherPoll(sess))
+}
+
+// watchSession is the optional IDLE surface of a remote session. The production
+// adapter implements it; a test fake may or may not.
+type watchSession interface {
+	IdleCapable() bool
+	Watch(ctx context.Context, folder string, buffer int) (<-chan imap.Notification, func(), <-chan error, error)
+}
+
+// watchSessionPoll is the optional poll surface of a remote session.
+type watchSessionPoll interface {
+	Poll(ctx context.Context, folder string, interval time.Duration, buffer int) (<-chan imap.Notification, func(), <-chan error, error)
+}
+
+// watcherPoll returns the poll surface if present.
+func watcherPoll(sess RemoteSession) watchSessionPoll {
+	if p, ok := sess.(watchSessionPoll); ok {
+		return p
+	}
+	return nil
+}
+
+// runIdleWatch runs the realtime IDLE watch, running detection on each signal and
+// reconnecting (returning) on a watch error. Each server-pushed update is logged
+// at Debug only: the operator-facing line is the single "remote received" emitted
+// by the detection pass, whose source reports "imap push" when the pass was
+// driven by an IDLE update rather than the periodic poll.
+func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, folder string, watcher watchSession) error {
+	notify, stop, errCh, err := watcher.Watch(ctx, folder, 16)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	// Coalesce bursts: a server may push several mailbox updates in quick
+	// succession; detection is idempotent by cursor so extra passes are cheap, but
+	// a small debounce keeps them bounded.
+	debounce := time.NewTimer(0)
+	if !debounce.Stop() {
+		<-debounce.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-w.stop:
+			return nil
+		case <-errCh:
+			return errors.New("remote watch ended")
+		case n, ok := <-notify:
+			if !ok {
+				return errors.New("remote watch closed")
+			}
+			event := strings.TrimSpace(n.Kind)
+			if event == "" {
+				event = "idle"
+			}
+			w.log.Debug("imap push received",
+				"provider", "imap",
+				"inbox", inbox.Address,
+				"event", event,
+				"folder", folder,
+			)
+			debounce.Reset(250 * time.Millisecond)
+		case <-debounce.C:
+			// Mark the pass as IDLE-driven so any arrival it records reports the
+			// push source, then clear the mark so a later poll pass does not.
+			w.detectInbox(WithIMAPPushSync(ctx), inbox)
+		}
+	}
+}
+
+// runPollWatch runs the bounded polling fallback when IDLE is unavailable.
+func (w *RemoteWorker) runPollWatch(ctx context.Context, inbox model.Inbox, poller watchSessionPoll) error {
+	interval := w.pollIntervalFor(inbox)
+	if poller == nil {
+		// The adapter has no poll surface: fall back to a plain ticker that runs
+		// detection through a fresh session each period.
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-w.stop:
+				return nil
+			case <-ticker.C:
+				w.detectInbox(ctx, inbox)
+			}
+		}
+	}
+	notify, stop, errCh, err := poller.Poll(ctx, inboxFolder(inbox), interval, 8)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-w.stop:
+			return nil
+		case <-errCh:
+			return errors.New("remote poll ended")
+		case _, ok := <-notify:
+			if !ok {
+				return errors.New("remote poll closed")
+			}
+			w.detectInbox(ctx, inbox)
+		}
+	}
+}
+
+// DetectInbox runs one detection pass for an inbox. It is the on-demand entry
+// point the HTTP agent calls when a client polls for events, so a new arrival is
+// detected without waiting for an IDLE signal. It is a no-op for a non-standalone
+// or unconfigured inbox.
+func (w *RemoteWorker) DetectInbox(ctx context.Context, inbox model.Inbox) {
+	if inbox.Kind != model.InboxKindStandalone || inbox.AccountID == "" || inbox.ID == "" {
+		return
+	}
+	// Coalesce demand: many clients can ask for freshness at once (SSE streams
+	// on their own tick, long-polls, list/thread reads, the reload button). A pass
+	// is run at most once per quick interval per inbox, so client presence cannot
+	// outpace the worker's own poll; concurrent callers share the in-flight pass
+	// via the per-provider guards. An explicit manual sync always runs.
+	if !w.admitDemand(ctx, inbox) {
+		return
+	}
+	// Durable detection belongs to the worker: a polling client disconnect must
+	// not cancel persistence after a successful IMAP fetch. Bound the pass and
+	// still honour process shutdown.
+	pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-w.stop:
+			cancel()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	w.detectInbox(pass, inbox)
+}
+
+// admitDemand reports whether a demand-driven detection pass for the inbox may
+// run now: it stamps the inbox's last-demand time and returns true, unless a pass
+// already ran within the inbox's quick interval, in which case it returns false.
+// A manual sync (WithManualRemoteSync) always admits. The stamp is taken before
+// the pass so a burst of concurrent callers admits at most one.
+func (w *RemoteWorker) admitDemand(ctx context.Context, inbox model.Inbox) bool {
+	if remoteManualSync(ctx) {
+		return true
+	}
+	interval := w.demandIntervalFor(inbox)
+	if interval < 0 {
+		// A negative override disables coalescing (tests): every demand pass runs.
+		return true
+	}
+	key := inbox.AccountID + ":" + inbox.ID
+	now := time.Now()
+	w.demandMu.Lock()
+	defer w.demandMu.Unlock()
+	if last, ok := w.lastDemand[key]; ok && now.Sub(last) < interval {
+		return false
+	}
+	w.lastDemand[key] = now
+	return true
+}
+
+// remoteManualSync reports whether ctx carries the explicit user-triggered sync
+// marker.
+func remoteManualSync(ctx context.Context) bool {
+	v, _ := ctx.Value(remoteSyncTriggerKey{}).(bool)
+	return v
+}
+
+// PendingRemoteApprovals reports whether an inbox has an outstanding pending email
+// approval request.
+func (w *RemoteWorker) PendingRemoteApprovals(ctx context.Context, inbox model.Inbox) bool {
+	return w.inboxHasPendingApproval(ctx, inbox)
+}
+
+// detectPendingApprovalInboxes forces a detection pass for every standalone inbox
+// with an outstanding pending email approval request, so a control reply whose IDLE
+// signal was missed (or whose server does not push) is still detected and actioned
+// promptly. It is bounded and a no-op when no approval is pending.
+func (w *RemoteWorker) detectPendingApprovalInboxes() {
+	inboxes, err := w.svc.Store.ListDetectableRemoteInboxes(context.Background())
+	if err != nil {
+		return
+	}
+	for _, ib := range inboxes {
+		if w.stopping() {
+			return
+		}
+		if w.inboxHasPendingApproval(context.Background(), ib) {
+			w.detectInbox(context.Background(), ib)
+		}
+	}
+}
+
+// ReconcileRemoteActionsForTest runs the delayed auto-trash sweep once. It exists so
+// a test can drive the sweep deterministically without waiting for the ticker.
+func (w *RemoteWorker) ReconcileRemoteActionsForTest(ctx context.Context) {
+	w.reconcileRemoteActions()
+}
+
+// detectAll runs one detection pass over every configured inbox. It is used on
+// startup (and in tests) so a fresh process catches up without waiting for an IDLE
+// signal. It runs the passes concurrently, bounded by maxInboxConnections.
+func (w *RemoteWorker) detectAll() {
+	inboxes, err := w.svc.Store.ListDetectableRemoteInboxes(context.Background())
+	if err != nil {
+		w.log.Error("remote detection list", "error", err)
+		return
+	}
+	sem := make(chan struct{}, w.maxInboxConnections)
+	var wg sync.WaitGroup
+	for _, ib := range inboxes {
+		if w.stopping() {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ib model.Inbox) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			w.detectInbox(context.Background(), ib)
+		}(ib)
+	}
+	wg.Wait()
+}
+
+// inboxFolder resolves the folder a watcher observes for an inbox: its selected
+// namespace when set, else the default INBOX. A standalone inbox's scope is itself
+// the INBOX-and-children root; the watcher only ever detects new arrivals in the
+// selected root folder, never its children.
+//
+// It is a package function, not a method, so the worker and its watch sessions
+// share one definition and cannot drift apart.
+func inboxFolder(inbox model.Inbox) string {
+	f := strings.TrimSpace(inbox.Namespace)
+	if f == "" {
+		f = model.NamespaceINBOX
+	}
+	return f
+}
+
+// quickPollDisabledFor reports whether an inbox has opted out of the new-mail
+// quick poll (an explicit stored 0). One inboxes cannot disable it: their poll is
+// the only delivery path, so the flag is ignored for them.
+func (w *RemoteWorker) quickPollDisabledFor(inbox model.Inbox) bool {
+	if inbox.RemotePollSeconds == nil {
+		return false
+	}
+	if w.svc.Store.IsOne(context.Background(), inbox.AccountID, inbox.ID) {
+		return false
+	}
+	return *inbox.RemotePollSeconds == model.RemotePollSecondsDisabled
+}
+
+// pollIntervalFor resolves the quick (new-mail) poll cadence for one inbox: its
+// per-inbox override when positive, else the worker's configured default. The
+// override is clamped to the model minimum so a bad value cannot hammer the
+// remote server. A disabled quick poll resolves to the full-sync cadence, which
+// is the slowest safety-net pass the inbox still runs. This is the quick cadence
+// the demand side (client presence, long-polls, list reads) also coalesces onto.
+func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
+	if w.quickPollDisabledFor(inbox) {
+		return w.fullSyncIntervalFor(inbox)
+	}
+	if w.svc.Store.IsOne(context.Background(), inbox.AccountID, inbox.ID) {
+		seconds := 300
+		if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
+			seconds = *inbox.RemotePollSeconds
+		}
+		return time.Duration(max(120, min(seconds, 1800))) * time.Second
+	}
+	if inbox.RemotePollSeconds != nil {
+		return time.Duration(model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds)) * time.Second
+	}
+	return w.pollInterval
+}
+
+// fullSyncIntervalFor resolves the deep index-reconcile cadence for one inbox:
+// its per-inbox override when positive, else the model default, clamped to the
+// model minimum.
+func (w *RemoteWorker) fullSyncIntervalFor(inbox model.Inbox) time.Duration {
+	return time.Duration(model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes)) * time.Minute
+}
+
+// watchIntervalFor resolves how often the worker's dedicated watcher runs a
+// detection pass for one inbox. Microsoft and Google have no IDLE watch, so the
+// worker polls them; the cadence adapts to push:
+//
+//   - When Microsoft push is active, a notification wakes detection immediately,
+//     so the redundant quick poll is dropped and only a slow safety-net pass runs
+//     on the inbox's full-sync cadence (so a missed or expired notification is
+//     still caught). Re-evaluated every loop, so a subscription that expires or
+//     activates takes effect on the next pass.
+//   - An inbox whose owner disabled the quick poll (a stored 0) skips the quick
+//     poll the same way, relying on push and the full sync.
+//   - Otherwise the quick poll cadence applies.
+func (w *RemoteWorker) watchIntervalFor(inbox model.Inbox) time.Duration {
+	if w.svc.Store.MicrosoftPushActive(context.Background(), inbox.AccountID, inbox.ID) {
+		return w.fullSyncIntervalFor(inbox)
+	}
+	return w.pollIntervalFor(inbox)
+}
+
+// demandIntervalFor is the minimum spacing of demand-driven detection passes for
+// one inbox. It is the quick cadence so client presence cannot outpace the
+// worker's own poll. Gmail and IMAP share the same guard; Microsoft is exempt
+// only in that a push wake still forces an immediate pass on the watcher path
+// (this gate governs HTTP-demand callers, which push does not drive). An inbox
+// with the quick poll disabled coalesces onto the full-sync cadence instead, so
+// presence cannot reintroduce a near-minute poll the owner switched off.
+func (w *RemoteWorker) demandIntervalFor(inbox model.Inbox) time.Duration {
+	if w.demandInterval != 0 {
+		return w.demandInterval
+	}
+	return w.pollIntervalFor(inbox)
+}
+
+// detectInbox runs at most one durable detection pass for an inbox at a time,
+// regardless of whether startup, its watcher, or a demand path initiated it. It
+// emits the operator-facing completion line for IMAP; Microsoft and Google have
+// dedicated passes that log their own completion. A connection failure returns
+// without touching the cursor.
+func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
+	if w.stopping() {
+		return
+	}
+	key := inbox.AccountID + ":" + inbox.ID
+	w.detectionMu.Lock()
+	if w.detecting[key] {
+		w.detectionMu.Unlock()
+		return
+	}
+	w.detecting[key] = true
+	w.detectionMu.Unlock()
+	finishMetadataCheck := w.remote.metadataCheck(inbox.AccountID, inbox.ID)
+	defer finishMetadataCheck()
+	defer func() {
+		w.detectionMu.Lock()
+		delete(w.detecting, key)
+		w.detectionMu.Unlock()
+	}()
+
+	start := time.Now()
+	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		w.detectMicrosoft(ctx, inbox)
+		return
+	}
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		w.detectGoogle(ctx, inbox)
+		return
+	}
+	arrived, status, err := w.detectInboxIMAP(ctx, inbox)
+	result := remoteSyncResult{started: start, new: arrived, status: status, err: err}
+	if err != nil {
+		result.status = "error"
+	}
+	w.remote.logRemoteSync(ctx, inbox.AccountID, inbox.ID, result)
+}
+
+// detectMicrosoft runs the cheap Microsoft detection pass the on-demand and
+// watcher paths use: the Inbox folder's delta from its stored cursor, with the
+// folder tree taken from the store (no Graph folder enumeration). The slower
+// whole-mailbox reconcile (every folder, prune, folder tree) runs on the
+// full-sync cadence instead. It logs its own completion line.
+func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) {
+	_, err := w.remote.reconcileMicrosoftQuick(ctx, inbox.AccountID, inbox.ID)
+	// See detectGoogle: a rejected grant must read as disconnected before the
+	// next deep reconcile would record it.
+	if reconnectRequired(err) {
+		w.remote.recordReconnectVerdict(ctx, inbox.AccountID, inbox.ID)
+	}
+}
+
+// detectInboxIMAP runs one durable IMAP detection pass for one inbox. It opens a
+// session, reads the live UID set of the selected folder, and:
+//
+//   - on the first ever pass (no cursor) establishes the baseline to the current
+//     max UID WITHOUT emitting arrivals, so enabling the watcher on an existing
+//     mailbox never floods.
+//   - otherwise, records one durable arrival per UID strictly greater than the
+//     cursor's last_uid, then advances the cursor. UIDs are processed in ascending
+//     order and the cursor is only advanced to the highest UID whose arrival rows
+//     have all been persisted, so a mid-pass failure re-detects rather than skips.
+//
+// It returns the number of newly-recorded arrivals, a status ("complete" when the
+// pass completed, "partial" when it returned early and will retry) and any error.
+func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (arrived int, status string, err error) {
+	status = "complete"
+	if w.stopping() {
+		return 0, "partial", nil
+	}
+	folder := inboxFolder(inbox)
+	sess, err := w.remote.openRemoteSession(ctx, inbox)
+	if err != nil {
+		w.log.Debug("remote detection open", "inbox_id", inbox.ID, "error", err)
+		return 0, "partial", err
+	}
+	defer sess.Close()
+
+	// Resolve the live folder and its UIDVALIDITY. A folder outside the inbox
+	// scope is never watched.
+	validity, verr := remoteFolderUIDValidity(ctx, sess, folder)
+	if verr != nil {
+		w.log.Debug("remote detection validity", "inbox_id", inbox.ID, "error", verr)
+		return 0, "partial", verr
+	}
+
+	cursor, ok, cerr := w.svc.Store.GetRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder)
+	if cerr != nil {
+		w.log.Error("remote detection cursor", "inbox_id", inbox.ID, "error", cerr)
+		return 0, "partial", cerr
+	}
+	if !ok || !cursor.BaselineDone || (cursor.UIDValidity != 0 && cursor.UIDValidity != validity) {
+		// First observation (or a UIDVALIDITY reset): establish the notification
+		// and detection baseline to the current maximum UID and emit nothing. A
+		// bounded, newest-first, single-UID search yields the folder maximum
+		// directly; the default ascending order would be truncated to the OLDEST
+		// page on a folder larger than one page, yielding a baseline far below
+		// the true maximum and permanently suppressing detection.
+		res, serr := sess.Search(ctx, folder, imap.SearchQuery{NewestFirst: true, Limit: 1})
+		if serr != nil {
+			w.log.Debug("remote detection baseline search", "inbox_id", inbox.ID, "error", serr)
+			return 0, "partial", serr
+		}
+		maxUID := uint32(0)
+		if len(res.UIDs) > 0 {
+			maxUID = res.UIDs[0]
+		}
+		if err := w.svc.Store.EstablishRemoteBaseline(ctx, inbox.AccountID, inbox.ID, folder, validity, maxUID); err != nil {
+			w.log.Error("remote baseline establish", "inbox_id", inbox.ID, "error", err)
+			return 0, "partial", err
+		}
+		// Record the notification baseline flag once so a later pass never treats
+		// the pre-existing backlog as notifiable.
+		if set, berr := w.svc.Store.RemoteNotifyBaselineSet(ctx, inbox.AccountID, inbox.ID); berr == nil && !set {
+			if merr := w.svc.Store.MarkRemoteNotifyBaselineSet(ctx, inbox.AccountID, inbox.ID); merr != nil {
+				w.log.Warn("remote baseline flag", "inbox_id", inbox.ID, "error", merr)
+			}
+		}
+		return 0, "complete", nil
+	}
+
+	// Incremental: the oldest new UIDs strictly above the cursor, fetched with an
+	// IMAP-native, bounded "(cursor+1):*" search so a detector never has to load
+	// the whole folder (and never files the wrong UIDs when the folder is larger
+	// than one search page). The cursor only advances to a UID whose arrival rows
+	// are all persisted, so a mid-pass failure re-detects rather than skips.
+	res, err := sess.Search(ctx, folder, imap.SearchQuery{AfterUID: cursor.LastUID, Limit: remoteArrivalPageLimit})
+	if err != nil {
+		w.log.Debug("remote detection search", "inbox_id", inbox.ID, "error", err)
+		return 0, "partial", err
+	}
+	newUIDs := res.UIDs
+	if len(newUIDs) == 0 {
+		return 0, "complete", nil
+	}
+	// Defensive: a session that ignores Limit must not blow the per-pass bound.
+	if len(newUIDs) > remoteArrivalPageLimit {
+		newUIDs = newUIDs[:remoteArrivalPageLimit]
+	}
+	headers, liveValidity, herr := sess.ListHeaders(ctx, folder, newUIDs, len(newUIDs))
+	if herr != nil {
+		w.log.Debug("remote detection headers", "inbox_id", inbox.ID, "error", herr)
+		return 0, "partial", herr
+	}
+	// A UIDVALIDITY change between the SEARCH and the FETCH means the UIDs no
+	// longer name the messages the search found; do not record arrivals under a
+	// stale generation. The cursor is left unadvanced so the next pass re-baselines.
+	if liveValidity != 0 && liveValidity != validity {
+		w.log.Debug("remote detection generation changed mid-pass", "inbox_id", inbox.ID, "want", validity, "live", liveValidity)
+		return 0, "partial", nil
+	}
+	byUID := map[uint32]imap.MessageHeader{}
+	for _, h := range headers {
+		byUID[h.UID] = h
+	}
+	// Quick index: upsert the new UIDs' header metadata into the read index so
+	// new mail appears in the inbox list immediately, without waiting for the
+	// slower deep reconcile. This is the standard client "fetch only new"
+	// behaviour; the deep pass later reconciles flags, other folders and prune.
+	w.quickIndexHeaders(ctx, inbox, headers)
+	highestRecorded := cursor.LastUID
+	for _, uid := range newUIDs {
+		h, ok := byUID[uid]
+		if !ok {
+			// The message vanished between the search and the header fetch
+			// (expunged). It is safe to advance past it: there is nothing to
+			// deliver and re-detecting it forever would stall the mailbox.
+			highestRecorded = uid
+			continue
+		}
+		arrival, inserted, aerr := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{
+			FolderPath:   folder,
+			Source:       imapArrivalSource(ctx),
+			UIDValidity:  validity,
+			UID:          uid,
+			RFCMessageID: h.MessageID,
+			FromName:     h.From.Name,
+			FromAddress:  h.From.Address,
+			Subject:      h.Subject,
+			SizeBytes:    h.Size,
+			InternalDate: internalDatePtr(h),
+		})
+		if aerr != nil {
+			w.log.Error("remote arrival record", "inbox_id", inbox.ID, "uid", uid, "error", aerr)
+			// Do not advance past an unrecorded UID: a later pass retries it.
+			err = aerr
+			status = "partial"
+			break
+		}
+		if inserted {
+			arrived++
+			w.onNewArrival(ctx, inbox, arrival)
+		}
+		highestRecorded = uid
+	}
+	if highestRecorded > cursor.LastUID {
+		if aerr := w.svc.Store.AdvanceRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder, validity, highestRecorded); aerr != nil {
+			w.log.Error("remote cursor advance", "inbox_id", inbox.ID, "error", aerr)
+			if err == nil {
+				err = aerr
+				status = "partial"
+			}
+		}
+	}
+	return arrived, status, err
+}
+
+// quickIndexHeaders upserts fetched INBOX header metadata into the read index
+// (inbox_remote_messages) so a newly-detected message is visible in the list
+// immediately, rather than only after the next deep reconcile. It is metadata
+// only (no body), and a per-header failure is logged and skipped so one bad row
+// cannot stall detection. The deep reconcile later upserts the same rows in
+// place, so this is idempotent.
+func (w *RemoteWorker) quickIndexHeaders(ctx context.Context, inbox model.Inbox, headers []imap.MessageHeader) {
+	for _, h := range headers {
+		if h.UID == 0 {
+			continue
+		}
+		if _, err := w.svc.Store.UpsertRemoteMessage(ctx, inbox.AccountID, inbox.ID, remoteMessageInputFromHeader(h)); err != nil {
+			w.log.Warn("remote quick index", "inbox_id", inbox.ID, "uid", h.UID, "error", err)
+		}
+	}
+}
+
+// onNewArrival handles a freshly-recorded arrival. It classifies the arrival and,
+// for ordinary notifiable mail, persists the durable remote event (which the
+// existing webhook and Hermes workers consume on demand) and publishes it to the
+// hub so SSE/long-poll wake. Proactive delivery is never triggered by an ordinary
+// live read. Classification fails closed: an arrival that cannot be conclusively
+// classified is left pending and never published as ordinary mail.
+func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) {
+	// Pending-email-approval detection must happen before any proactive delivery:
+	// an approval control message is consumed through the shared remote-control
+	// handler (token + From validated there) and is never forwarded.
+	control, retry, err := w.classifyArrival(ctx, inbox, arrival)
+	if err != nil {
+		w.log.Warn("remote arrival classify", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", err)
+	}
+	if retry {
+		// Leave the arrival pending for a later pass; do not publish it as ordinary
+		// mail. Bound the retries so a permanently unreadable body cannot pin the
+		// queue forever.
+		if arrival.Attempts >= maxArrivalClassifyAttempts {
+			w.settle(ctx, inbox, arrival, store.RemoteArrivalFailed, "control classification did not complete")
+		}
+		return
+	}
+	if control {
+		w.settle(ctx, inbox, arrival, store.RemoteArrivalSkipped, "approval control mail")
+		return
+	}
+	// A frozen handoff draft echoed back into the connected mailbox is excluded
+	// from proactive delivery by its correlation Message-ID; it is never mistaken
+	// for fresh mail. The lookup is durable and cheap.
+	if w.isHandoffEcho(ctx, inbox, arrival) {
+		_ = w.svc.Store.MarkRemoteNotified(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID)
+		w.settle(ctx, inbox, arrival, store.RemoteArrivalSkipped, "handoff echo")
+		return
+	}
+	// Queue a preview only after control/workflow classification. The periodic
+	// worker fetches the bounded prefix later; a client read never fetches previews.
+	// Match the connector family, not one exact label: an IMAP arrival records
+	// "imap" when the quick poll found it and "imap push" when an IDLE update drove
+	// the pass, and a recovery/re-baseline pass may introduce another label again.
+	// Gating on the exact string "imap" silently skipped every push-discovered
+	// arrival, so no IMAP message ever got a preview while poll-discovered ones did.
+	if strings.HasPrefix(arrival.Source, "imap") {
+		rec, err := w.svc.Store.GetRemoteMessageByUID(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID)
+		if err != nil {
+			// A miss here means the arrival and the read index disagree on
+			// (folder, uid_validity, uid); without this line the lookup failed
+			// invisibly and no preview was ever queued for any IMAP message.
+			w.log.Warn("remote preview lookup miss",
+				"inbox_id", inbox.ID, "arrival", arrival.ID,
+				"folder", arrival.FolderPath, "uid", arrival.UID, "error", err)
+		} else if n, qerr := w.svc.Store.QueueRemotePreviewRows(ctx, inbox.AccountID, inbox.ID, rec.ID); qerr != nil {
+			w.log.Warn("remote preview queue", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", qerr)
+		} else if n == 0 {
+			// Declined: the row already carries a snippet, or has no remote UID.
+			w.log.Debug("remote preview queue declined",
+				"inbox_id", inbox.ID, "arrival", arrival.ID, "message", rec.ID)
+		}
+	}
+	// The proactive allowlist gates the notification, not live reads: a message
+	// from a disallowed sender is still readable live, but it never raises a
+	// proactive notification. Live-read suppression is intentionally not applied.
+	if !inbox.AllowsInbound(arrival.FromAddress) {
+		_ = w.svc.Store.MarkRemoteNotified(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID)
+		w.settle(ctx, inbox, arrival, store.RemoteArrivalSkipped, "sender not in proactive allowlist")
+		return
+	}
+	// Record the notification baseline BEFORE publishing, so a crash after the
+	// event is persisted but before it is fanned out never re-notifies the same
+	// message on restart.
+	if err := w.svc.Store.MarkRemoteNotified(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID); err != nil {
+		w.log.Warn("remote notify baseline", "arrival", arrival.ID, "error", err)
+	}
+	// The arrival event is what the generic SSE/long-poll surface replays, and
+	// what the demand-based webhook/Hermes workers consume. It is persisted before
+	// any realtime publication, so the durable truth exists first.
+	ev, emitted, err := w.svc.Store.RecordRemoteArrivalEvent(ctx, inbox.AccountID, inbox.ID, arrival)
+	if err != nil {
+		w.log.Error("remote arrival event", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", err)
+		w.retryArrival(ctx, arrival, "event persistence failed")
+		return
+	}
+	if emitted {
+		provider := w.remote.remoteProviderLabel(context.WithoutCancel(ctx), inbox.AccountID, inbox.ID)
+		source := strings.TrimSpace(arrival.Source)
+		if source == "" {
+			source = provider
+		}
+		w.log.Info("remote received",
+			"message_id", arrival.ID,
+			"from", arrival.FromAddress,
+			"to", inbox.Address,
+			"provider", provider,
+			"source", source,
+		)
+		w.svc.Hub.Publish(ev)
+	}
+	w.settle(ctx, inbox, arrival, store.RemoteArrivalDelivered, "")
+	// Enqueue the durable auto-action (mark read on ACK + delayed trash) for an
+	// arrival that was accepted. The action state is independent of the fan-out.
+	w.ensureRemoteAction(ctx, arrival)
+}
+
+func (w *RemoteWorker) retryArrival(ctx context.Context, arrival store.RemoteArrival, reason string) {
+	// Never turn a recoverable store fault into a lost notification or a tight drain loop.
+	delay := time.Second * time.Duration(1<<min(max(arrival.Attempts, 0), 8))
+	outcomeCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	if err := w.svc.Store.RetryRemoteArrival(outcomeCtx, arrival.AccountID, arrival.ID, reason, time.Now().UTC().Add(delay)); err != nil && !errors.Is(err, store.ErrConflict) {
+		w.log.Warn("remote arrival retry", "arrival", arrival.ID, "error", err)
+	}
+}
+
+// settle marks a just-recorded arrival's proactive state. The arrival may have
+// been claimed by a concurrent pass; a conflict is not an error here.
+func (w *RemoteWorker) settle(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival, state, reason string) {
+	if err := w.svc.Store.SettleRemoteArrival(ctx, inbox.AccountID, arrival.ID, state, reason); err != nil && !errors.Is(err, store.ErrConflict) {
+		w.log.Warn("remote arrival settle", "arrival", arrival.ID, "state", state, "error", err)
+	}
+}
+
+// isHandoffEcho reports whether an arrival is a RemoteDraft handoff's own frozen
+// draft echoed back, which is never forwarded proactively. The frozen handoff
+// draft's Message-ID is recorded, so a cheap durable lookup catches it: the
+// correlation header (X-MailMoose-Handoff-ID) also travels with the mail, so the
+// raw body is fetched once and the header checked when the Message-ID lookup
+// misses. A handoff no longer sends a notification email, so there is no
+// notification copy to exclude.
+func (w *RemoteWorker) isHandoffEcho(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) bool {
+	id := strings.TrimSpace(arrival.RFCMessageID)
+	if id == "" {
+		return false
+	}
+	// An IMAP ENVELOPE strips the angle brackets, while the stored handoff
+	// Message-ID is bracketed, so test both the wire form and its bracketed
+	// normalization.
+	for _, c := range []string{id, ensureMessageID(id)} {
+		if c == "" {
+			continue
+		}
+		if _, err := w.svc.Store.HandoffByMessageID(ctx, inbox.AccountID, c); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyArrival reports whether an arrival is a pending-email-approval control
+// message. When the inbox has an outstanding approval request and the arrival
+// looks like a control subject/reply, it is forced through the shared remote
+// control handler. A handoff's own notification (carrying the handoff header) is
+// excluded and is never a control. Ordinary mail is classified false.
+//
+// It fails closed. When it cannot conclusively classify the message (the body
+// could not be fetched or parsed, or the control handler had a transient error) it
+// returns retry=true with control possibly set: the caller must NOT publish the
+// message as ordinary mail and must leave the arrival pending for a later pass.
+// This guarantees a control message whose body fetch failed is never forwarded to
+// an agent, and a genuine approval is retried rather than dropped.
+func (w *RemoteWorker) classifyArrival(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (control bool, retry bool, err error) {
+	subject := strings.TrimSpace(arrival.Subject)
+	controlSubject := looksLikeControl(subject)
+	if !controlSubject {
+		// A reply-form control message can only be recognised from the body, which
+		// requires a live fetch. Only do that when the inbox actually has an
+		// outstanding approval request: otherwise the body fetch is pure waste.
+		if !w.inboxHasPendingApproval(ctx, inbox) {
+			return false, false, nil
+		}
+	}
+	raw, ok := w.fetchArrivalRaw(ctx, inbox, arrival)
+	if !ok {
+		// The body could not be read. A control subject is definitely control mail
+		// that must not be forwarded; for a non-control subject we cannot prove the
+		// message is ordinary. Defer either way.
+		return controlSubject, true, nil
+	}
+	parsed, perr := mailparse.ParseBytes(raw, w.svc.mimeLimits())
+	if perr != nil {
+		return controlSubject, true, nil
+	}
+	if !looksLikeControl(parsed.Subject) && !looksLikeControlReply(parsed) {
+		return false, false, nil
+	}
+	if HasHandoffHeader(raw) {
+		return false, false, nil
+	}
+	issued, cerr := w.svc.isApprovalControl(ctx, inbox, inbox.Address, parsed)
+	if cerr != nil {
+		return false, true, fmt.Errorf("classify remote approval: %w", cerr)
+	}
+	if !issued {
+		return false, false, nil
+	}
+	// Force detection of a pending email approval: the shared handler validates
+	// the live token and the nominated approver From address before acting, and
+	// consumes the control mail so it never becomes a message. A consumed control
+	// message returns transport.ErrInboundIgnored, which is success, not failure.
+	if herr := w.svc.HandleRemoteApprovalControl(ctx, inbox, parsed, raw); herr != nil {
+		if errors.Is(herr, transport.ErrInboundIgnored) {
+			return true, false, nil
+		}
+		return true, true, fmt.Errorf("remote approval control: %w", herr)
+	}
+	return true, false, nil
+}
+
+// maxArrivalClassifyAttempts bounds how many times a pending arrival is retried
+// for control classification before it is terminally failed, so a permanently
+// unreadable body cannot pin the pending queue forever.
+const maxArrivalClassifyAttempts = 8
+
+// fetchArrivalRaw fetches an arrival's raw MIME to a transient temp file and reads
+// it back. It never marks the message seen (BODY.PEEK). The temp file is removed.
+func (w *RemoteWorker) fetchArrivalRaw(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) ([]byte, bool) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		path, _, e := w.remote.fetchArrivalRawToTemp(ctx, inbox, arrival)
+		if e != nil {
+			return nil, false
+		}
+		defer w.remote.CleanupRemoteRaw(path)
+		b, e := os.ReadFile(path)
+		return b, e == nil
+	}
+	sess, err := w.remote.openRemoteSession(ctx, inbox)
+	if err != nil {
+		return nil, false
+	}
+	defer sess.Close()
+	var buf limitedBuffer
+	loc := imap.Locator{FolderPath: arrival.FolderPath, UIDValidity: arrival.UIDValidity, UID: arrival.UID, MessageID: arrival.RFCMessageID}
+	lw := &limitedWriter{w: &buf, limit: w.remote.remoteBodyLimit()}
+	if err := sess.FetchRawMIME(ctx, loc, lw); err != nil {
+		return nil, false
+	}
+	return buf.Bytes(), true
+}
+
+// inboxHasPendingApproval reports whether an inbox has any outstanding send
+// request awaiting an email decision.
+func (w *RemoteWorker) inboxHasPendingApproval(ctx context.Context, inbox model.Inbox) bool {
+	n, err := w.svc.Store.CountPendingSendRequests(ctx, inbox.AccountID, inbox.ID)
+	if err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// drainRemoteArrivals re-drives any arrival left pending by a crash: an arrival is
+// only recorded (pending) before its event is persisted, so a resumed pass either
+// persists the event or terminally skips it. It is demand-based: an arrival with no
+// configured webhook/Hermes client settles with no network call.
+func (w *RemoteWorker) drainRemoteArrivals() {
+	for i := 0; i < 256 && !w.stopping(); i++ {
+		arrival, ok, err := w.svc.Store.ClaimNextRemoteArrival(context.Background(), time.Now().UTC(), "remote", remoteArrivalLease)
+		if err != nil {
+			w.log.Error("remote arrival claim", "error", err)
+			return
+		}
+		if !ok {
+			return
+		}
+		// A claimed arrival is one whose durable event was not persisted before a
+		// crash. Re-drive it through the normal classification path.
+		if arrival.Control {
+			w.settle(context.Background(), model.Inbox{AccountID: arrival.AccountID, ID: arrival.InboxID}, arrival, store.RemoteArrivalSkipped, "approval control mail")
+			continue
+		}
+		w.recoverArrival(context.Background(), arrival)
+	}
+}
+
+// recoverArrival re-drives a claimed (crash-recovered) arrival through the same
+// classification path a fresh arrival takes, so recovery cannot bypass the
+// control-mail, handoff-exclusion or allow-list checks. It resolves the owning
+// inbox and delegates to onNewArrival.
+func (w *RemoteWorker) recoverArrival(ctx context.Context, arrival store.RemoteArrival) {
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, arrival.InboxID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			w.retryArrival(ctx, arrival, "inbox lookup failed")
+			return
+		}
+		// The inbox is gone: nothing can be delivered. Settle terminally so the
+		// arrival does not pin the drain.
+		w.settle(ctx, model.Inbox{AccountID: arrival.AccountID, ID: arrival.InboxID}, arrival, store.RemoteArrivalFailed, "inbox unavailable")
+		return
+	}
+	w.onNewArrival(ctx, inbox, arrival)
+}
+
+// reconcileRemoteActions applies the delayed auto-trash action for every remote
+// arrival whose window has elapsed.
+func (w *RemoteWorker) reconcileRemoteActions() {
+	due, err := w.svc.Store.ListRemoteActionsDueForTrash(context.Background(), time.Now().UTC(), 128)
+	if err != nil {
+		w.log.Error("remote action list", "error", err)
+		return
+	}
+	for _, a := range due {
+		if w.stopping() {
+			return
+		}
+		w.applyRemoteTrash(context.Background(), a)
+	}
+}
+
+// applyRemoteTrash moves a remote arrival's message to the inbox's remote Trash
+// folder. A failure is retried (the action stays due); it never marks the message
+// locally deleted (there is no local message row for a remote arrival).
+func (w *RemoteWorker) applyRemoteTrash(ctx context.Context, a store.RemoteAction) {
+	if w.remote.IsMicrosoft(ctx, a.AccountID, a.InboxID) {
+		id, e := w.svc.Store.MicrosoftLocalID(ctx, a.AccountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "microsoft:"))
+		if e != nil {
+			return
+		}
+		f, e := w.svc.Store.GetSystemFolder(ctx, a.AccountID, a.InboxID, model.FolderRoleTrash)
+		if e != nil {
+			return
+		}
+		_, e = w.remote.MoveRemoteMessage(ctx, model.Principal{AccountID: a.AccountID, Admin: true}, a.InboxID, id, f.Path)
+		if e == nil {
+			_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		}
+		return
+	}
+	if w.remote.IsGoogle(ctx, a.AccountID, a.InboxID) {
+		id, e := w.svc.Store.GoogleLocalID(ctx, a.AccountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "gmail:"))
+		if e != nil {
+			return
+		}
+		_, e = w.remote.MoveRemoteMessage(ctx, model.Principal{AccountID: a.AccountID, Admin: true}, a.InboxID, id, "TRASH")
+		if e == nil {
+			_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		}
+		return
+	}
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, a.AccountID, a.InboxID)
+	if err != nil {
+		// The inbox is gone (or unreadable). Record the reason so the skipped
+		// action is auditable, then mark done so it does not pin the sweep.
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "inbox unavailable for auto-trash")
+		w.log.Warn("remote auto-trash skipped: inbox unavailable", "arrival", a.ArrivalID, "inbox_id", a.InboxID, "error", err)
+		_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		return
+	}
+	trash, terr := w.svc.Store.GetSystemFolder(ctx, a.AccountID, a.InboxID, model.FolderRoleTrash)
+	if terr != nil || strings.TrimSpace(trash.Path) == "" {
+		// No remote Trash folder: the action cannot be applied. Record the
+		// reason, then mark done so it does not pin the sweep forever.
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "no remote Trash folder mapped for auto-trash")
+		w.log.Warn("remote auto-trash skipped: no Trash folder", "arrival", a.ArrivalID, "inbox_id", a.InboxID)
+		_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		return
+	}
+	sess, oerr := w.remote.openRemoteSession(ctx, inbox)
+	if oerr != nil {
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "remote connection unavailable")
+		return
+	}
+	defer sess.Close()
+	loc := imap.Locator{FolderPath: a.FolderPath, UIDValidity: a.UIDValidity, UID: a.UID}
+	if _, merr := sess.MoveMessage(ctx, loc, trash.Path); merr != nil {
+		if errors.Is(merr, imap.ErrNotFound) {
+			// The message is already gone (server-expired or moved): the action is
+			// satisfied.
+			_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+			return
+		}
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "remote move failed")
+		return
+	}
+	_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+}
+
+// ensureRemoteAction creates the durable auto-action for an arrival, stamping the
+// delayed trash instant from the inbox's auto-trash window when configured.
+func (w *RemoteWorker) ensureRemoteAction(ctx context.Context, arrival store.RemoteArrival) {
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, arrival.InboxID)
+	if err != nil {
+		return
+	}
+	if !inbox.AutoMarkReadOnDelivery && inbox.AutoTrashAfterDeliveryHours == nil {
+		return
+	}
+	var trashAfter time.Duration
+	if inbox.AutoTrashAfterDeliveryHours != nil {
+		trashAfter = time.Duration(*inbox.AutoTrashAfterDeliveryHours) * time.Hour
+	}
+	if _, err := w.svc.Store.EnsureRemoteAction(ctx, arrival.AccountID, arrival, trashAfter); err != nil {
+		w.log.Warn("remote action ensure", "arrival", arrival.ID, "error", err)
+	}
+}
+
+// MarkRemoteArrivalRead implements the ACK mark-read auto-action for a remote
+// arrival: it sets \Seen on the live server exactly once. It is exported so the
+// HTTP agent's ACK handler can drive it after a generic delivery acknowledgement.
+func (w *RemoteWorker) MarkRemoteArrivalRead(ctx context.Context, accountID, inboxID, arrivalID string) error {
+	arrival, err := w.svc.Store.GetRemoteArrival(ctx, accountID, arrivalID)
+	if err != nil {
+		return err
+	}
+	if arrival.InboxID != inboxID {
+		return store.ErrForbidden
+	}
+	if w.remote.IsMicrosoft(ctx, accountID, inboxID) {
+		id, e := w.svc.Store.MicrosoftLocalID(ctx, accountID, inboxID, strings.TrimPrefix(arrival.FolderPath, "microsoft:"))
+		if e != nil {
+			return e
+		}
+		_, e = w.remote.SetRemoteRead(ctx, model.Principal{AccountID: accountID, Admin: true}, inboxID, id, true)
+		if e != nil {
+			return e
+		}
+		return w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+	}
+	if w.remote.IsGoogle(ctx, accountID, inboxID) {
+		if e := w.googleArrivalRead(ctx, accountID, inboxID, arrival); e != nil {
+			return e
+		}
+		return w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+	}
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
+	sess, err := w.remote.openRemoteSession(ctx, inbox)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	loc := imap.Locator{FolderPath: arrival.FolderPath, UIDValidity: arrival.UIDValidity, UID: arrival.UID, MessageID: arrival.RFCMessageID}
+	if _, err := sess.SetFlags(ctx, loc, []string{imap.FlagSeen}, nil); err != nil {
+		if errors.Is(err, imap.ErrNotFound) {
+			_ = w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+			return nil
+		}
+		return err
+	}
+	return w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+}
+
+// remoteFolderUIDValidity resolves a folder's live UIDVALIDITY through the
+// adapter's EnsureFolderExists (an EXAMINE under the hood).
+func remoteFolderUIDValidity(ctx context.Context, sess RemoteSession, folder string) (uint32, error) {
+	return sess.EnsureFolderExists(ctx, folder)
+}
+
+// openRemoteSession resolves and dials a live session for a standalone inbox
+// without a principal. The caller must Close it. It is the watcher's connection
+// entry point and never marks any message seen.
+func (m *RemoteMailboxService) openRemoteSession(ctx context.Context, inbox model.Inbox) (RemoteSession, error) {
+	r, err := m.ResolveRemote(ctx, inbox.AccountID, inbox.ID)
+	if err != nil {
+		return nil, err
+	}
+	if r.Secrets.IMAPPassword == "" {
+		return nil, model.NewMailboxError(model.ErrKindUnavailable, "remote connector has no password configured", false, ErrRemoteNotBound)
+	}
+	sess, err := m.dial(ctx, m.imapConfig(r))
+	if err != nil {
+		return nil, normalizeRemoteError(err)
+	}
+	return sess, nil
+}
+
+// fetchArrivalRawToTemp streams a remote arrival's raw RFC5322 MIME to a transient
+// temp file and returns its path and size. It is the demand-based forward path's
+// body fetch: it is only called when a webhook client is configured for raw
+// forwarding, never by a live read. The caller must CleanupRemoteRaw. The message
+// is never marked seen (BODY.PEEK).
+func (m *RemoteMailboxService) fetchArrivalRawToTemp(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (string, int64, error) {
+	if m.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		id, e := m.Service.Store.MicrosoftLocalID(ctx, inbox.AccountID, inbox.ID, strings.TrimPrefix(arrival.FolderPath, "microsoft:"))
+		if e != nil {
+			return "", 0, e
+		}
+		return m.microsoftRaw(ctx, inbox.AccountID, inbox.ID, id)
+	}
+	if m.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		id, e := m.Service.Store.GoogleLocalID(ctx, inbox.AccountID, inbox.ID, strings.TrimPrefix(arrival.FolderPath, "gmail:"))
+		if e != nil {
+			return "", 0, e
+		}
+		return m.googleRaw(ctx, inbox.AccountID, inbox.ID, id)
+	}
+	sess, err := m.openRemoteSession(ctx, inbox)
+	if err != nil {
+		return "", 0, err
+	}
+	defer sess.Close()
+	dir := filepath.Join(m.Service.Config.DataDir, "remote", ".tmp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", 0, model.NewMailboxError(model.ErrKindInternal, "", false, err)
+	}
+	f, err := os.CreateTemp(dir, "forward-*.eml")
+	if err != nil {
+		return "", 0, model.NewMailboxError(model.ErrKindInternal, "", false, err)
+	}
+	lw := &limitedWriter{w: f, limit: m.remoteBodyLimit()}
+	loc := imap.Locator{FolderPath: arrival.FolderPath, UIDValidity: arrival.UIDValidity, UID: arrival.UID, MessageID: arrival.RFCMessageID}
+	if ferr := sess.FetchRawMIME(ctx, loc, lw); ferr != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", 0, normalizeRemoteError(ferr)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", 0, model.NewMailboxError(model.ErrKindInternal, "", false, err)
+	}
+	return f.Name(), lw.n, nil
+}
+
+// internalDatePtr returns the arrival's internal date when the adapter supplied one.
+func internalDatePtr(h imap.MessageHeader) *time.Time {
+	if h.InternalDate.IsZero() {
+		if h.Date.IsZero() {
+			return nil
+		}
+		t := h.Date.UTC()
+		return &t
+	}
+	t := h.InternalDate.UTC()
+	return &t
+}
+
+// limitedBuffer is a small in-memory io.Writer used to read back a transient remote
+// body. The body is bounded by the remote size cap before it is buffered here.
+type limitedBuffer struct {
+	buf []byte
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *limitedBuffer) Bytes() []byte { return b.buf }

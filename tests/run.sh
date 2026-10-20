@@ -1,0 +1,364 @@
+#!/bin/bash
+# tests/run.sh — unified test runner for mailmoose.
+#
+# Runs the selected test tiers, writes ALL detail to
+# tests/logs/runs/<UTC-ts>-<tiers>/, and prints only a one-line-per-tier
+# summary to stdout with a pointer to that folder. The full output is
+# ALWAYS on disk — never re-run just to see more; read the run folder, or
+# use --last for the newest one.
+#
+# Usage:
+#   ./tests/run.sh                      # default preset: unit + vet + fmt + lint + js
+#   ./tests/run.sh --unit --vet         # pick specific tiers
+#   ./tests/run.sh --all                # every tier
+#   ./tests/run.sh --smoke              # slow gated tests only (opt-in)
+#   ./tests/run.sh --last               # print the newest run's summary + paths (no run)
+#   ./tests/run.sh --prune [--keep N]   # prune old runs (default: keep all, no-op)
+#   ./tests/run.sh --list               # list tiers and exit
+#
+# Tiers (mirror .github/workflows/ci.yml):
+#   unit     Go unit/integration tests (test -race -count=1 -v ./...)
+#   vet      Go static analysis (vet ./...)
+#   fmt      gofmt gate (gofmt -l cmd internal tests dialmx, fail on output)
+#   lint     dead-code gate (staticcheck -checks U1000 ./...)
+#   js       Antler dialog interaction checks (node tests/antler-wizard-check.cjs)
+#   smoke    slow gated tests (MAILMOOSE_SMOKE=1): the process-level receiver
+#            binary smoke. Deliberately NOT part of the default preset.
+#
+# Output levels (all written to the run folder every time):
+#   L1  summary.txt   per-tier pass/fail + elapsed + first error + folder path
+#   L2  timings.txt   per-tier elapsed + per-test breakdown for each test tier
+#   L3  full.log      concat of every tier's complete output (tier-tagged)
+#   meta.txt          run id, tiers, git SHA/branch/dirty, toolchain image
+#       <tier>/out.log  each tier's raw output
+#
+# Retention: runs are kept in full (no automatic pruning) so an agent can
+# always dig into an earlier run. Reclaim space explicitly with:
+#   ./tests/run.sh --prune --keep 20
+# tests/logs/history.tsv is an append-only ledger that survives pruning.
+#
+# The stdout block is L1 only — context-cheap for agents. Detail lives in
+# the folder; the summary's `detail:` line points straight at it.
+
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+cd "$REPO_ROOT"
+
+RUNS_DIR="tests/logs/runs"
+LATEST_LINK="tests/logs/latest"
+HISTORY="tests/logs/history.tsv"
+
+# --- mode flags -----------------------------------------------------------
+SHOW_LAST=0
+DO_PRUNE=0
+PRUNE_KEEP=""
+
+# --- tier selection -------------------------------------------------------
+declare -A TIER_SELECTED=()
+ALL_TIERS=(unit vet fmt lint js smoke)
+
+args=("$@")
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+    arg="${args[$i]}"
+    case "$arg" in
+        --unit)     TIER_SELECTED[unit]=1 ;;
+        --vet)      TIER_SELECTED[vet]=1 ;;
+        --fmt)      TIER_SELECTED[fmt]=1 ;;
+        --lint)     TIER_SELECTED[lint]=1 ;;
+        --js)       TIER_SELECTED[js]=1 ;;
+        --smoke)    TIER_SELECTED[smoke]=1 ;;
+        --all)      for t in "${ALL_TIERS[@]}"; do TIER_SELECTED[$t]=1; done ;;
+        --last)     SHOW_LAST=1 ;;
+        --prune)    DO_PRUNE=1 ;;
+        --keep)
+            i=$((i + 1))
+            if [ "$i" -ge "${#args[@]}" ]; then
+                echo "tests/run.sh: --keep requires a number" >&2
+                exit 2
+            fi
+            PRUNE_KEEP="${args[$i]}"
+            ;;
+        --list)
+            echo "Tiers: ${ALL_TIERS[*]}"
+            echo "Flags:  --unit --vet --fmt --lint --js --smoke --all"
+            echo "Modes:  --last | --prune [--keep N] | --list"
+            exit 0
+            ;;
+        -h|--help)
+            sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "tests/run.sh: unknown flag '$arg' (try --help)" >&2
+            exit 2
+            ;;
+    esac
+    i=$((i + 1))
+done
+
+# --- --last: print the newest run, no execution ---------------------------
+newest_run() {
+    ls -1dt "$RUNS_DIR"/*/ 2>/dev/null | head -1 | sed 's:/$::'
+}
+
+if [ "$SHOW_LAST" -eq 1 ]; then
+    latest=$(newest_run)
+    if [ -z "${latest:-}" ]; then
+        echo "tests/run.sh: no runs yet under $RUNS_DIR/" >&2
+        exit 1
+    fi
+    echo "run:     $latest/"
+    echo "summary: $latest/summary.txt"
+    echo "timings: $latest/timings.txt"
+    echo "full:    $latest/full.log"
+    [ -f "$latest/meta.txt" ] && echo "meta:    $latest/meta.txt"
+    echo
+    cat "$latest/summary.txt" 2>/dev/null || echo "(no summary.txt)"
+    echo
+    if [ -f "$HISTORY" ]; then
+        echo "recent history ($HISTORY):"
+        tail -n 5 "$HISTORY"
+    fi
+    exit 0
+fi
+
+# --- --prune: optional, explicit LRU pruning ------------------------------
+if [ "$DO_PRUNE" -eq 1 ]; then
+    if [ -z "$PRUNE_KEEP" ]; then
+        echo "tests/run.sh: --prune requires --keep N (runs are kept in full by default)" >&2
+        exit 2
+    fi
+    KEEP_RUNS="$PRUNE_KEEP" KEEP_GO="$PRUNE_KEEP" . tests/scripts/prune-test-logs.sh
+    echo "pruned $RUNS_DIR/ to the newest $PRUNE_KEEP runs" >&2
+    exit 0
+fi
+
+# default preset: CI parity (gofmt + vet + lint + test -race). Use --all for everything.
+if [ "${#TIER_SELECTED[@]}" -eq 0 ]; then
+    TIER_SELECTED[unit]=1
+    TIER_SELECTED[vet]=1
+    TIER_SELECTED[fmt]=1
+    TIER_SELECTED[lint]=1
+    TIER_SELECTED[js]=1
+fi
+
+SELECTED=()
+for t in "${ALL_TIERS[@]}"; do
+    [ -n "${TIER_SELECTED[$t]:-}" ] && SELECTED+=("$t")
+done
+
+# --- run id + folder ------------------------------------------------------
+TS=$(date -u +%Y%m%dT%H%M%S)-$$
+TIER_LABEL=$(IFS=,; echo "${SELECTED[*]}")
+RUN_DIR="${RUNS_DIR}/${TS}-${TIER_LABEL}"
+
+for t in "${SELECTED[@]}"; do
+    mkdir -p "$RUN_DIR/$t"
+done
+
+# --- run metadata ---------------------------------------------------------
+git_sha="unknown"
+git_branch="unknown"
+git_dirty="unknown"
+if git rev-parse --git-dir >/dev/null 2>&1; then
+    git_sha=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        git_dirty="dirty"
+    else
+        git_dirty="clean"
+    fi
+fi
+image_id=$(docker image inspect mailmoose-go:1.27 --format '{{.Id}}' 2>/dev/null || echo "not-built")
+
+{
+    echo "run_id:    ${TS}-${TIER_LABEL}"
+    echo "started:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "host:      $(hostname 2>/dev/null || echo unknown)"
+    echo "tiers:     ${TIER_LABEL}"
+    echo "git_sha:   ${git_sha}"
+    echo "git_br:    ${git_branch}"
+    echo "git_state: ${git_dirty}"
+    echo "image:     ${image_id}"
+} > "$RUN_DIR/meta.txt"
+
+# --- run tiers ------------------------------------------------------------
+declare -A TIER_RC=()
+declare -A TIER_ELAPSED=()
+declare -A TIER_FIRST_ERROR=()
+
+run_start=$(date +%s.%N)
+
+for t in "${SELECTED[@]}"; do
+    echo "  running $t ..." >&2
+    tier_start=$(date +%s.%N)
+    rc=0
+    case "$t" in
+        unit)
+            # -v so per-test timing is available in the output for L2;
+            # -race for CI parity. No outer wall-clock cap: Go's per-test-binary
+            # -timeout (matching CI's 60s) already bounds a hung test and gives a
+            # panic + goroutine dump, which a `timeout` SIGTERM cannot.
+            # -mod=readonly fails loudly instead of silently rewriting go.mod
+            # when a gitignored scratch package (e.g. under tests/logs) imports
+            # something the module does not require.
+            MAILMOOSE_TEST_DIR="$RUN_DIR/unit" \
+                ./mailmoose-go.sh test -mod=readonly -race -count=1 -timeout=60s -v ./... >/dev/null 2>&1 || rc=$?
+            ;;
+        vet)
+            MAILMOOSE_TEST_DIR="$RUN_DIR/vet" \
+                ./mailmoose-go.sh vet -mod=readonly ./... >/dev/null 2>&1 || rc=$?
+            ;;
+        fmt)
+            # CI gate: gofmt -l prints unformatted files; empty output = pass.
+            MAILMOOSE_TEST_DIR="$RUN_DIR/fmt" \
+                ./mailmoose-go.sh gofmt -l cmd internal tests dialmx >/dev/null 2>&1 || rc=$?
+            if [ "$rc" -eq 0 ] && [ -s "$RUN_DIR/fmt/out.log" ]; then
+                rc=1
+            fi
+            ;;
+        lint)
+            # Dead-code gate: staticcheck U1000 reports unused unexported
+            # functions, types, fields and methods (test files included).
+            # `deadcode` is deliberately NOT a gate: it exits 0 even when it
+            # reports unreachable functions, and its RTA call graph treats
+            # exported methods of reflectively-reachable types as live, so it
+            # has both false positives and false negatives. Run it by hand (or
+            # read the ci-logs/deadcode.log artifact) when the gate is green.
+            MAILMOOSE_TEST_DIR="$RUN_DIR/lint" \
+                ./mailmoose-go.sh run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... >/dev/null 2>&1 || rc=$?
+            ;;
+        js)
+            node tests/connector-editor-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            # The dialog and copy interaction checks drive real app.js closures
+            # against a DOM stand-in; they cover what the Go suite cannot (timers,
+            # SSE listeners, clipboard writes, and feedback). Node is required on
+            # the host.
+            if [ "$rc" -eq 0 ]; then
+                node tests/antler-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/copy-controls-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/empty-trash-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/queue-popup-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/release-config-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            ;;
+        smoke)
+            # Slow gated tests: the process-level receiver binary smoke.
+            # MAILMOOSE_SMOKE=1 makes tests/support/smoke.Require run them
+            # instead of skipping; it is passed through to the container by
+            # mailmoose-go.sh.
+            MAILMOOSE_SMOKE=1 MAILMOOSE_TEST_DIR="$RUN_DIR/smoke" \
+                ./mailmoose-go.sh test -mod=readonly -race -count=1 -timeout=60s -v \
+                ./tests/unit/dialmx/receiver/ >/dev/null 2>&1 || rc=$?
+            ;;
+    esac
+    tier_end=$(date +%s.%N)
+    elapsed=$(awk "BEGIN {printf \"%.1f\", $tier_end - $tier_start}")
+    TIER_RC[$t]=$rc
+    TIER_ELAPSED[$t]=$elapsed
+
+    # let any tee'd process substitution flush before we read the file
+    wait 2>/dev/null || true
+
+    if [ "$rc" -ne 0 ]; then
+        if [ "$t" = "fmt" ]; then
+            first_err=$(head -c 300 "$RUN_DIR/$t/out.log" 2>/dev/null || true)
+        else
+            first_err=$(grep -m1 -E '^(--- FAIL|FAIL\b|Error:|FAIL:)' "$RUN_DIR/$t/out.log" 2>/dev/null | head -c 300 || true)
+        fi
+        [ -n "$first_err" ] && TIER_FIRST_ERROR[$t]="$first_err"
+    fi
+done
+
+run_end=$(date +%s.%N)
+total_elapsed=$(awk "BEGIN {printf \"%.1f\", $run_end - $run_start}")
+
+# --- L1 summary -----------------------------------------------------------
+overall_rc=0
+for t in "${SELECTED[@]}"; do
+    [ "${TIER_RC[$t]}" -ne 0 ] && overall_rc=1
+done
+overall_str=$([ "$overall_rc" -eq 0 ] && echo "PASS" || echo "FAIL")
+
+{
+    echo "[mailmoose tests] ${TS} — ${TIER_LABEL}"
+    for t in "${SELECTED[@]}"; do
+        rc=${TIER_RC[$t]}
+        elapsed=${TIER_ELAPSED[$t]}
+        if [ "$rc" -eq 0 ]; then
+            printf "  %-8s PASS   %ss\n" "$t" "$elapsed"
+        else
+            printf "  %-8s FAIL   %ss" "$t" "$elapsed"
+            [ -n "${TIER_FIRST_ERROR[$t]:-}" ] && printf "  %s" "${TIER_FIRST_ERROR[$t]}"
+            printf "\n"
+        fi
+    done
+    printf "  overall  %s     %ss\n" "$overall_str" "$total_elapsed"
+    echo "  detail: $RUN_DIR/"
+} | tee "$RUN_DIR/summary.txt"
+
+# --- L2 timings -----------------------------------------------------------
+{
+    echo "Timings — ${TS} ${TIER_LABEL}"
+    echo "--------------------------------"
+    for t in "${SELECTED[@]}"; do
+        printf "%-8s %ss\n" "$t" "${TIER_ELAPSED[$t]}"
+    done
+    printf "total    %ss\n" "$total_elapsed"
+
+    # Go per-test breakdown for every test tier that produced -v output.
+    for t in "${SELECTED[@]}"; do
+        out="$RUN_DIR/$t/out.log"
+        [ -f "$out" ] || continue
+        if ! grep -qE '^\s*--- (PASS|FAIL):' "$out" 2>/dev/null; then
+            continue
+        fi
+        echo
+        echo "${t^} per-test (sorted by elapsed, descending):"
+        grep -E '^\s*--- (PASS|FAIL):' "$out" 2>/dev/null | \
+            sed -E 's/^[[:space:]]*--- (PASS|FAIL):[[:space:]]+([^[:space:]]+)[[:space:]]+\(([0-9.]+)s\)[[:space:]]*$/\3 \1 \2/' | \
+            sort -t' ' -k1 -rn | \
+            awk '{printf "  %7.3fs  %-6s  %s\n", $1, $2, $3}' || true
+    done
+} > "$RUN_DIR/timings.txt"
+
+# --- L3 full log ----------------------------------------------------------
+{
+    echo "===== mailmoose tests: ${TS} ${TIER_LABEL} ====="
+    echo "overall: $overall_str  total: ${total_elapsed}s"
+    echo
+    for t in "${SELECTED[@]}"; do
+        echo "===== $t (${TIER_ELAPSED[$t]}s, rc=${TIER_RC[$t]}) ====="
+        if [ -f "$RUN_DIR/$t/out.log" ]; then
+            cat "$RUN_DIR/$t/out.log"
+        else
+            echo "  (no output captured)"
+        fi
+        echo
+    done
+} > "$RUN_DIR/full.log"
+
+# --- latest pointer + durable history -------------------------------------
+ln -sfn "runs/${TS}-${TIER_LABEL}" "$LATEST_LINK"
+
+if [ ! -f "$HISTORY" ]; then
+    printf 'timestamp\tsha\tbranch\tstate\ttiers\toverall\telapsed_s\trun_dir\n' > "$HISTORY"
+fi
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$TS" "$git_sha" "$git_branch" "$git_dirty" "$TIER_LABEL" "$overall_str" "$total_elapsed" "$RUN_DIR" \
+    >> "$HISTORY"
+
+exit "$overall_rc"

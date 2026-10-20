@@ -1,0 +1,111 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      # Every step tees its full output to ci-logs/ so the exact failure text is
+      # downloadable as a build artifact (uploaded even on failure below). This
+      # keeps CI on native Go (and setup-go caching) while still giving the same
+      # "never re-run to see the full log" guarantee as ./tests/run.sh locally.
+      - name: gofmt
+        run: |
+          mkdir -p ci-logs
+          {
+            echo "== gofmt =="
+            unformatted="$(gofmt -l cmd internal tests dialmx)"
+            if [ -n "$unformatted" ]; then
+              echo "Unformatted Go files:"
+              echo "$unformatted"
+              while IFS= read -r file; do
+                [ -z "$file" ] || gofmt -d "$file" || true
+              done <<< "$unformatted"
+              exit 1
+            fi
+          } 2>&1 | tee ci-logs/gofmt.log
+      - name: vet
+        run: go vet -mod=readonly ./... 2>&1 | tee ci-logs/vet.log
+      # Dead-code gate: U1000 reports unused unexported functions, types, fields
+      # and methods (test files included). Kept in step with tests/run.sh --lint.
+      - name: lint
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... 2>&1 | tee ci-logs/lint.log
+      # Advisory only, never a gate: deadcode exits 0 even with findings, and its
+      # RTA call graph treats exported methods of reflectively-reachable types as
+      # live (false negatives) while flagging test-only seams (false positives).
+      # The log is uploaded as an artifact for reading, not for failing the build.
+      - name: deadcode (advisory)
+        run: go run golang.org/x/tools/cmd/deadcode@v0.51.0 ./... 2>&1 | tee ci-logs/deadcode.log
+      - name: build
+        run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/... 2>&1 | tee ci-logs/build.log
+      # The Antler dialog interaction checks drive the real app.js closure against
+      # a DOM stand-in: timers, SSE listener attachment and footer payloads are
+      # invisible to the Go suite. ubuntu-latest ships Node.
+      - name: generated API reference
+        run: |
+          go run ./cmd/docsgen > /tmp/mailmoose-API.md
+          diff -u docs/API.md /tmp/mailmoose-API.md
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
+      - name: OpenClaw build and tests
+        working-directory: plugins/openclaw/openclaw-plugin
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: js
+        run: |
+          set -o pipefail
+          {
+            node tests/antler-wizard-check.cjs
+            node tests/empty-trash-check.cjs
+            node tests/release-config-check.cjs
+          } 2>&1 | tee ci-logs/js.log
+      # The default run skips the slow gated tests (see tests/support/smoke);
+      # they are run explicitly in the smoke step so CI coverage is never
+      # silently lost.
+      - name: unit
+        run: |
+          set -o pipefail
+          go test -mod=readonly -race -count=1 -timeout=60s ./... 2>&1 | tee ci-logs/unit.log
+      - name: smoke
+        run: |
+          set -o pipefail
+          MAILMOOSE_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: ci-logs/
+          if-no-files-found: ignore
+
+  gitleaks:
+    name: secret scan (full history)
+    # Runs on every push/PR. Scans the whole checked-out history for committed
+    # secrets; fails the build on any new finding. Historical false positives
+    # are allowlisted in the committed .gitleaks.toml (see that file for the
+    # review notes). Uses the gitleaks container image directly to avoid the
+    # GITLEAKS_LICENSE requirement of gitleaks-action for org-owned repos.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, so the full commit graph must be present.
+          fetch-depth: 0
+      - name: scan
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/.gitleaks.toml:/cfg.toml:ro" \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --log-opts="--all" -c /cfg.toml --no-banner
