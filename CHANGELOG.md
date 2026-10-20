@@ -8,7 +8,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [0.1.0-beta.1] - 2026-10-20
 
-First public beta of MailMoose: self-hosted email infrastructure for people and
+Initial release of MailMoose: self-hosted email infrastructure for people and
 AI agents. Run it as one container, manage inboxes on your domains or connect
 existing mailboxes, and give agents scoped access to read and send mail—with
 approval controls when you need them.
@@ -28,3 +28,6 @@ Relay; and an OpenClaw connector (early alpha).
   provider credentials.
 
 Behaviour and APIs may change between beta releases.
+
+[Unreleased]: https://github.com/dellarb/mailmoose/compare/v0.1.0-beta.1...main
+[0.1.0-beta.1]: https://github.com/dellarb/mailmoose/releases/tag/v0.1.0-beta.1
