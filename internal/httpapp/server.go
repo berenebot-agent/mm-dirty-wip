@@ -316,6 +316,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
 	m.HandleFunc("POST /ui/openclaw/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
 	m.HandleFunc("POST /ui/openclaw/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
+	m.HandleFunc("POST /ui/openclaw/setup/{id}/cancel", s.withSession(s.withCSRF(s.uiCancelRelaySetup)))
 	m.HandleFunc("POST /ui/webhooks/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateWebhook)))
 	m.HandleFunc("POST /ui/webhooks/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateWebhook)))
 	m.HandleFunc("POST /ui/webhooks/{id}/toggle", s.withSession(s.withCSRF(s.uiToggleWebhook)))

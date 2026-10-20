@@ -4166,6 +4166,7 @@ function clearUrlParams(names) {
     if (c.Kind === 'hermes' || c.Kind === 'openclaw') {
       var isOpenClaw = c.Kind === 'openclaw';
       var label = isOpenClaw ? 'OpenClaw' : 'Hermes Relay';
+      fields += '<p class="muted small">Lost the setup credentials? Delete this connector and add a new one. Connection history does not indicate whether the gateway is online now.</p>';
       fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — ' + (isOpenClaw ? 'agent' : 'relay') + ' sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — ' + (isOpenClaw ? 'agent' : 'relay') + ' drafts and requests approval</option></select>';
       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '</form>';
     } else {
@@ -4265,7 +4266,6 @@ function clearUrlParams(names) {
       empty.className = 'muted';
       empty.textContent = 'No connectors configured for this inbox.';
       connectorList.appendChild(empty);
-      return;
     }
 
     editConnectors.forEach(function (c) {
@@ -4282,6 +4282,9 @@ function clearUrlParams(names) {
       var text = document.createElement('div');
       text.className = 'connector-row-main';
       var status = c.Kind === 'webhook' ? (c.Enabled ? 'Active' : 'Paused') : (c.Scope || 'Configured');
+      if (c.Kind === 'hermes' || c.Kind === 'openclaw') {
+        status += ' · ' + (c.LastConnectedAt ? 'Last connected: ' + new Date(c.LastConnectedAt).toLocaleString() : 'Never connected');
+      }
       text.innerHTML = '<div class="connector-row-name">' + escapeConnector(c.Name || connectorLabel(c)) + '</div><div class="connector-row-meta">' + connectorLabel(c) + ' · ' + escapeConnector(status) + '</div>';
       row.appendChild(text);
 
@@ -4309,6 +4312,31 @@ function clearUrlParams(names) {
 
       connectorList.appendChild(row);
     });
+
+    var pendingTemplate = document.getElementById('pending-relay-setups');
+    if (pendingTemplate) {
+      var pending = document.createElement('section');
+      pending.className = 'connector-list';
+      pendingTemplate.content.querySelectorAll('[data-inbox]').forEach(function (source) {
+        if (source.dataset.inbox !== editInboxID || Date.parse(source.dataset.expires) <= Date.now()) {
+          return;
+        }
+        var row = source.cloneNode(true);
+        row.querySelector('button').addEventListener('click', function (e) {
+          if (!window.confirm('Cancel this setup? Its one-time code will stop working.')) {
+            e.preventDefault();
+          }
+        });
+        pending.appendChild(row);
+      });
+      if (pending.children.length) {
+        var heading = document.createElement('h3');
+        heading.className = 'section-head';
+        heading.textContent = 'Pending setup codes';
+        pending.prepend(heading);
+        connectorList.appendChild(pending);
+      }
+    }
   }
 
   // ---- Clients & Access tab ----------------------------------------------

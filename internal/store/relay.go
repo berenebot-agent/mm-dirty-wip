@@ -64,6 +64,43 @@ type EnrollRecord struct {
 	Kind                     RelayKind
 }
 
+// PendingRelaySetup contains only display metadata, never the enrollment authority.
+type PendingRelaySetup struct {
+	ID, InboxID, Name string
+	ExpiresAt         time.Time
+}
+
+func (s *Store) ListPendingRelaySetups(ctx context.Context, accountID string) ([]PendingRelaySetup, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,inbox_id,name,expires_at FROM hermes_enroll_tokens WHERE account_id=? AND kind='openclaw' AND used_at IS NULL AND expires_at>? ORDER BY created_at DESC`, accountID, nowText())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PendingRelaySetup{}
+	for rows.Next() {
+		var v PendingRelaySetup
+		var expires string
+		if err := rows.Scan(&v.ID, &v.InboxID, &v.Name, &expires); err != nil {
+			return nil, err
+		}
+		v.ExpiresAt = parseTime(expires)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// CancelRelaySetup revokes an unclaimed code; it never deletes an enrolled connector.
+func (s *Store) CancelRelaySetup(ctx context.Context, accountID, id string) error {
+	res, err := s.write.ExecContext(ctx, `DELETE FROM hermes_enroll_tokens WHERE id=? AND account_id=? AND kind='openclaw' AND used_at IS NULL`, id, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // EnrollHermesConnection consumes a one-time enrollment token and creates or
 // replaces the gateway connection atomically. A gateway id owned by another
 // account is rejected without consuming the token.
