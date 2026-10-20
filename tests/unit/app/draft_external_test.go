@@ -150,6 +150,9 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	svc, u, _, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
+	if err := svc.Store.SetInboxDisplayName(ctx, u.AccountID, box.ID, "Hermes Team"); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +184,9 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 		t.Fatalf("token length = %d, want 22 (base64url of 16 random bytes)", len(token))
 	}
 	text := approvalEmailText(t, svc, u.AccountID, box.ID)
+	if want := "Hermes Team <" + box.Address + "> has asked you to approve"; !strings.Contains(text, want) {
+		t.Fatalf("approval email missing inbox name %q:\n%s", want, text)
+	}
 	// It must tell the approver that feedback does not alter the draft.
 	if !strings.Contains(text, "does not change the email being sent") {
 		t.Fatalf("approval email missing feedback clarification:\n%s", text)
@@ -190,6 +196,9 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 		t.Fatalf("approval email missing reference line %q:\n%s", want, text)
 	}
 	_, htmlBody := approvalEmailParts(t, svc, u.AccountID, box.ID)
+	if want := "Hermes Team &lt;" + box.Address + "&gt;</strong> has asked you to approve"; !strings.Contains(htmlBody, want) {
+		t.Fatalf("approval email HTML missing inbox name %q:\n%s", want, htmlBody)
+	}
 	if want := "[GH-REQUEST:" + token + "]"; !strings.Contains(htmlBody, want) {
 		t.Fatalf("approval email HTML missing reference line %q:\n%s", want, htmlBody)
 	}
