@@ -1596,7 +1596,7 @@ const settingsBody = settingsShellOpen + `{{if .Notice}}<div class="ok notice" r
 <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_tab" value="account">
 <section class="dialog-panel" role="tabpanel">
 <h3 class="section-head">Account settings</h3>
-<p class="muted">These apply to everyone in {{.Account.Name}}.</p>
+<p class="muted">These settings are for this account. The time zone is the default for operators; Trash retention is the default for inboxes.</p>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-name">Account name</label><p class="muted small">Shown in the header; a display name, not an email address.</p></div><input id="settings-account-name" name="name" value="{{.Account.Name}}" maxlength="80" required></div>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-tz">Account time zone</label><p class="muted small">Default for operators who have not set their own. Leave blank for UTC.</p></div><input id="settings-account-tz" name="timezone" list="tz-options" value="{{.AccountTimezone}}" placeholder="{{.AccountTimezoneLabel}}" autocomplete="off"></div>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-trash">Trash auto-purge (days)</label><p class="muted small">Trashed messages are purged after this many days; 0 keeps them until emptied manually.</p></div><input id="settings-account-trash" name="days" type="number" min="0" max="3650" value="{{.TrashRetentionDays}}" required></div>
