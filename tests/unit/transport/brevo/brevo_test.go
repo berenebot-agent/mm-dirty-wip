@@ -58,7 +58,10 @@ func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 		MessageID:   "<m1@example.com>",
 		InReplyTo:   "<m0@example.com>",
 		References:  []string{"<m0@example.com>"},
-		Attachments: []transport.OutboundAttachment{{Filename: "quote.pdf", ContentType: "application/pdf", Content: []byte("pdf")}},
+		Attachments: []transport.OutboundAttachment{
+			{Filename: "quote.pdf", ContentType: "application/pdf", Content: []byte("pdf")},
+			{Filename: "report.md", ContentType: "text/markdown", Content: []byte("# Report")},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +90,37 @@ func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 	if body.Headers["In-Reply-To"] != "<m0@example.com>" {
 		t.Fatalf("headers %#v", body.Headers)
 	}
-	if len(body.Attachment) != 1 || body.Attachment[0].Name != "quote.pdf" {
+	if len(body.Attachment) != 2 || body.Attachment[0].Name != "quote.pdf" || body.Attachment[1].Name != "report.md" {
 		t.Fatalf("attachments %#v", body.Attachment)
+	}
+	if string(body.Attachment[0].Content) != "pdf" || string(body.Attachment[1].Content) != "# Report" {
+		t.Fatalf("attachment bytes %#v", body.Attachment)
+	}
+}
+
+func TestSendAttachmentExtensionRejection(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body brevoPayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Attachment) != 1 || body.Attachment[0].Name != "report.md" || string(body.Attachment[0].Content) != "# Report" {
+			t.Errorf("attachment changed: %#v", body.Attachment)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"code":"invalid_parameter","message":"Extension .md is not allowed for attachments"}`)
+	}))
+	defer srv.Close()
+	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "xkeysib-secret", APIBase: srv.URL}, transport.OutboundMessage{
+		FromAddress: "a@example.com", To: []string{"b@example.com"}, Text: "See attached",
+		Attachments: []transport.OutboundAttachment{{Filename: "report.md", ContentType: "text/markdown", Content: []byte("# Report")}},
+	})
+	if err == nil || !transport.IsPermanent(err) || transport.AsAmbiguous(err) {
+		t.Fatalf("expected permanent rejection, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "attachment file extension") || strings.Contains(err.Error(), "xkeysib-secret") {
+		t.Fatalf("unsafe or unhelpful rejection: %v", err)
 	}
 }
 
