@@ -449,10 +449,13 @@
     '#action-queue[open]{position:absolute;left:0;top:0;right:auto;bottom:auto;margin:0;z-index:60;display:flex;flex-direction:column;width:304px;max-height:min(65vh,380px);padding:10px 12px;border:1px solid #dadce0;border-radius:9px;background:#fff;color:#202124;box-shadow:0 6px 20px rgba(32,33,36,.16);font-size:13px;line-height:1.4;box-sizing:border-box;outline:none}',
     '#action-queue::before{content:"";position:absolute;top:-6px;left:var(--aq-caret,18px);width:10px;height:10px;background:#fff;border-left:1px solid #dadce0;border-top:1px solid #dadce0;transform:rotate(45deg)}',
     '.aq-head{display:flex;align-items:center;gap:8px;padding:0 0 7px;border-bottom:1px solid #eee;flex:0 0 auto}',
-    '.aq-title{font-weight:600}',
-    '.aq-summary{margin-left:auto;color:#5f6368;font-size:12px}',
+    '.aq-title{font-weight:600;flex:0 0 auto}',
+    '.aq-summary{margin-left:auto;color:#5f6368;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.aq-close{width:26px;height:26px;padding:0;flex:0 0 auto;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:18px;line-height:1}',
     '.aq-close:hover{background:#f1f3f4;color:#202124}',
+    '.aq-clear{border:0;background:transparent;color:#174ea6;font-size:12px;line-height:1.4;padding:3px 6px;border-radius:5px;cursor:pointer;flex:0 0 auto}',
+    '.aq-clear:hover{background:#e8f0fe}',
+    '.aq-clear[hidden]{display:none}',
     '.aq-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}',
     '.aq-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:2px 8px;align-items:start;padding:8px 0;border-bottom:1px solid #f1f3f4}',
     '.aq-row:last-child{border-bottom:0}',
@@ -476,7 +479,7 @@
     '.aq-empty,.aq-more,.aq-notice{margin:9px 0 2px;color:#5f6368;font-size:12px;text-align:center}',
     '.aq-notice[data-error]{color:#b3261e}',
     '.aq-notice[hidden]{display:none}',
-    '.aq-btn:focus-visible,.aq-close:focus-visible{outline:2px solid #1557b0;outline-offset:1px}',
+    '.aq-btn:focus-visible,.aq-close:focus-visible,.aq-clear:focus-visible{outline:2px solid #1557b0;outline-offset:1px}',
     '.aq-row[data-state=queued] .aq-dot{background:#b88700}',
     '.aq-row[data-state=waiting] .aq-dot{background:#9aa0a6}',
     '.aq-row[data-state=paused] .aq-dot{background:#b88700}',
@@ -510,7 +513,7 @@
   // "error" and "paused" need attention.
   var SYNC_RANK = { error: 0, paused: 0, running: 1, queued: 2, waiting: 3 };
   var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Downloading', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
-  var csrf = '', items = [], syncs = [], displaySyncs = [], connections = {}, active = false;
+  var csrf = '', items = [], rawItems = [], syncs = [], displaySyncs = [], drawerSyncs = [], connections = {}, cleared = {}, active = false;
   var bubble = document.createElement('dialog');
   bubble.id = 'action-queue';
   bubble.tabIndex = -1;
@@ -522,6 +525,12 @@
   heading.textContent = 'Queue';
   var summary = document.createElement('span');
   summary.className = 'aq-summary';
+  var clearAll = document.createElement('button');
+  clearAll.type = 'button';
+  clearAll.className = 'aq-clear';
+  clearAll.textContent = 'Clear all';
+  clearAll.setAttribute('aria-label', 'Clear all flagged items from the queue');
+  clearAll.hidden = true;
   var close = document.createElement('button');
   close.type = 'button';
   close.className = 'aq-close';
@@ -532,7 +541,7 @@
   var notice = document.createElement('p');
   notice.className = 'aq-notice';
   notice.hidden = true;
-  head.append(heading, summary, close);
+  head.append(heading, summary, clearAll, close);
   bubble.append(head, list, notice);
   document.body.appendChild(bubble);
 
@@ -570,18 +579,36 @@
     return s.state === 'error' || s.state === 'paused';
   }
 
+  // counts reports the rows the drawer shows: a cleared row stops counting,
+  // because the person has already taken it off the drawer.
   function counts() {
     var queued = 0, attention = 0, syncing = 0, waiting = 0;
     items.forEach(function (a) {
       if (a.state === 'pending' || a.state === 'running') { queued++; }
       if (a.state === 'failed' || a.state === 'ambiguous') { attention++; }
     });
-    displaySyncs.forEach(function (s) {
+    drawerSyncs.forEach(function (s) {
       if (s.state === 'running' || s.state === 'queued') { syncing++; }
       if (s.state === 'waiting') { waiting++; }
       if (s.state === 'error' || s.state === 'paused') { attention++; }
     });
     return { queued: queued, attention: attention, syncing: syncing, waiting: waiting };
+  }
+
+  // flaggedAction is an action only a human can settle: it failed, or the
+  // provider left it ambiguous.
+  function flaggedAction(a) { return a.state === 'failed' || a.state === 'ambiguous'; }
+
+  // flaggedSync is a metadata sync that stopped for a reason only a human can
+  // fix: an error, or a pause.
+  function flaggedSync(s) { return s.state === 'error' || s.state === 'paused'; }
+
+  // applyFilter decides which rows the drawer shows. A completed action clears
+  // itself, a row the person cleared stays cleared, and a cleared metadata sync
+  // leaves the drawer but keeps the banner on its own inbox page.
+  function applyFilter() {
+    items = rawItems.filter(function (a) { return a.state !== 'done' && !cleared['act:' + a.id]; });
+    drawerSyncs = displaySyncs.filter(function (s) { return !cleared['sync:' + s.inbox_id]; });
   }
 
   function control(a, label, action, showError) {
@@ -632,7 +659,7 @@
     var acts = document.createElement('div');
     acts.className = 'aq-acts';
     if (a.state === 'failed') { acts.appendChild(control(a, 'Retry', 'retry', showError)); }
-    if (a.state === 'failed' || a.state === 'ambiguous' || (a.state === 'done' && a.input && a.input.kind === 'empty_trash')) {
+    if (a.state === 'failed' || a.state === 'ambiguous') {
       acts.appendChild(control(a, 'Dismiss', 'dismiss', showError));
     }
     if (acts.childNodes.length) { row.appendChild(acts); }
@@ -769,7 +796,7 @@
 
   function render() {
     list.replaceChildren();
-    var syncOrder = displaySyncs.slice().sort(function (a, b) {
+    var syncOrder = drawerSyncs.slice().sort(function (a, b) {
       return (SYNC_RANK[a.state] === undefined ? 4 : SYNC_RANK[a.state]) - (SYNC_RANK[b.state] === undefined ? 4 : SYNC_RANK[b.state]);
     });
     var actionOrder = items.slice().sort(function (a, b) {
@@ -798,17 +825,9 @@
     }
   }
 
-  function update(data) {
-    csrf = data.csrf || csrf;
-    // Successful actions stay in durable history briefly, but leave the status
-    // popup as soon as the worker confirms completion.
-    items = (data.items || []).filter(function (a) { return a.state !== 'done' || (a.input && a.input.kind === 'empty_trash'); });
-    syncs = data.syncs || [];
-    displaySyncs = syncs.filter(shouldDisplaySync);
-    connections = data.connections || {};
-    // The header spinner reads every status, so routine refreshes still show
-    // there while staying out of the banner, rows and counts.
-    if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
+  // paint refreshes the header badge, the drawer's summary and the Clear all
+  // control from the rows the drawer currently shows.
+  function paint() {
     var n = counts();
     var activity = n.queued + n.syncing + n.waiting;
     badge.textContent = n.attention ? ' !' : activity ? ' (' + activity + ')' : '';
@@ -822,6 +841,22 @@
     if (n.waiting) { summaryParts.push(n.waiting + ' waiting'); }
     if (n.attention) { summaryParts.push(n.attention + ' need attention'); }
     summary.textContent = summaryParts.join(' · ') || 'All clear';
+    clearAll.hidden = !items.some(flaggedAction) && !drawerSyncs.some(flaggedSync);
+  }
+
+  function update(data) {
+    csrf = data.csrf || csrf;
+    // Successful actions stay in durable history briefly, but leave the status
+    // popup as soon as the worker confirms completion.
+    rawItems = data.items || [];
+    syncs = data.syncs || [];
+    displaySyncs = syncs.filter(shouldDisplaySync);
+    connections = data.connections || {};
+    applyFilter();
+    // The header spinner reads every status, so routine refreshes still show
+    // there while staying out of the banner, rows and counts.
+    if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
+    paint();
     notice.hidden = true;
     notice.removeAttribute('data-error');
     // The banner tracks the poll even while the popup is closed.
@@ -875,6 +910,19 @@
   }
 
   close.onclick = function () { hide(); flag.focus(); };
+  // Clear all takes the flagged rows off the drawer. It hides them here only:
+  // nothing is dismissed in the store, so the queue keeps running and the
+  // worker keeps retrying a failed job behind the drawer.
+  clearAll.onclick = function () {
+    items.forEach(function (a) { if (flaggedAction(a)) { cleared['act:' + a.id] = true; } });
+    drawerSyncs.forEach(function (s) { if (flaggedSync(s)) { cleared['sync:' + s.inbox_id] = true; } });
+    applyFilter();
+    paint();
+    render();
+    // The control hides itself with the rows it cleared, so hand the focus to
+    // the drawer rather than losing it to the page.
+    if (clearAll.hidden) { bubble.focus(); }
+  };
   flag.addEventListener('click', toggle);
   flag.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }

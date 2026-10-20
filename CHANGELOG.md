@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- The header **Queue** popup now has a **Clear all** control, and it only appears
+  when the popup holds something flagged — a failed or uncertain action, or a
+  metadata sync that stopped with an error or a pause. It takes the flagged rows
+  off the popup in one click instead of one Dismiss each, and it hides them here
+  only: nothing is dismissed in the store, so the queue keeps running and the
+  worker keeps retrying a failed job behind the popup. The header badge and the
+  popup's own summary count the rows still on screen, so a cleared popup never
+  sits under a red mark.
+
+- A completed **Empty trash** now leaves the Queue popup as soon as the worker
+  confirms it, like every other completed action. The row used to stay behind
+  with its purge count and a Dismiss button, which is noise once the trash is
+  empty; the operation itself is unchanged, and the durable history still keeps
+  the record.
+
 - A Microsoft inbox no longer caches one message twice when the provider hands it
   out under two ids. The folder delta and a move response disagree on the id, and
   the delta's id stops resolving once the message moves, so the row the list showed
