@@ -807,7 +807,11 @@ func (s *Server) withPreAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
 		got := r.Form.Get("_csrf")
 		want := preAuthCSRF(r)
 		if got == "" || want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 || !s.validPreAuthCSRF(want) {
-			http.Error(w, "invalid CSRF token", http.StatusForbidden)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Add("Vary", "Cookie")
+			w.WriteHeader(http.StatusForbidden)
+			s.render(w, r, `<section class="card"><h1>Unable to verify your sign-in request</h1><p>Refresh the page containing the form and try again. If this keeps happening, make sure cookies are enabled.</p><p><strong>Self-hosting?</strong> Check that <code>BASE_URL</code> matches the address you use to open MailMoose, including <code>http://</code> or <code>https://</code>. An HTTPS base URL can prevent sign-in when you access the app over HTTP.</p><a href="/login">Return to sign in</a></section>`, pageData{Title: "Unable to verify your sign-in request"})
 			return
 		}
 		next(w, r)

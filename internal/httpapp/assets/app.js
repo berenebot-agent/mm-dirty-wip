@@ -101,13 +101,13 @@
 
 // Shared copy-to-clipboard helper. The async Clipboard API only exists in a
 // secure context (HTTPS or localhost), so a page served over plain HTTP cannot
-// copy. Every copy control routes through here: a secure context copies the
-// value; any other origin, or a refused write, selects the value where it can
-// and shows one shared message telling the operator how to copy it manually.
+// copy. Every copy control routes through here: a copy control is offered only
+// where copying works, and a refused write selects the value where it can and
+// shows one shared message telling the operator how to copy it manually.
 (function () {
   'use strict';
-  var SELECTED_MESSAGE = 'Copying to the clipboard needs HTTPS. The value is selected — press Ctrl+C (⌘C on Mac) to copy it.';
-  var PLAIN_MESSAGE = 'Copying to the clipboard needs HTTPS. Select the value and copy it manually.';
+  var SELECTED_MESSAGE = 'Copying to the clipboard was refused. The value is selected — press Ctrl+C (⌘C on Mac) to copy it.';
+  var PLAIN_MESSAGE = 'Copying to the clipboard was refused. Select the value and copy it manually.';
   var message = null;
   var messageTimer = null;
 
@@ -122,15 +122,36 @@
     window.setTimeout(function () { node.remove(); }, 300);
   }
 
+  // toastHost picks where the message is mounted. A modal dialog is painted in
+  // the top layer, above every ordinary element, so a message mounted in the
+  // body would sit behind the dialog's grey backdrop and never be seen. The
+  // :modal pseudo-class names the topmost open dialog; without it (a browser
+  // too old for the top layer) the body is the best host there is.
+  function toastHost() {
+    var dialog = null;
+    try {
+      dialog = document.querySelector('dialog:modal');
+    } catch (e) {
+      dialog = null;
+    }
+    return dialog || document.body;
+  }
+
   // announce shows the shared transient message. tone 'ok' is the green success
-  // toast; the default warns that the clipboard is unavailable without HTTPS.
+  // toast; the default warns that the clipboard write was refused.
   function announce(text, tone) {
     if (!message) {
       message = document.createElement('div');
       message.setAttribute('role', 'status');
       message.setAttribute('aria-live', 'polite');
       message.addEventListener('click', hideMessage);
-      document.body.appendChild(message);
+    }
+    // Mount the message in the current host, moving it only when the host
+    // changed: a toast left inside a closed dialog would be invisible, and a
+    // live region that is re-inserted may not be announced again.
+    var host = toastHost();
+    if (message.parentNode !== host) {
+      host.appendChild(message);
     }
     message.className = tone === 'ok' ? 'ok notice' : 'notice warn';
     message.textContent = text;
@@ -141,8 +162,15 @@
     messageTimer = window.setTimeout(hideMessage, 5000);
   }
 
+  // canCopy reports whether this origin can write to the clipboard at all. The
+  // async Clipboard API exists only in a secure context (HTTPS or localhost),
+  // so a page served over plain HTTP cannot copy.
+  function canCopy() {
+    return !!(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText);
+  }
+
   function copyText(text) {
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    if (canCopy()) {
       return navigator.clipboard.writeText(text);
     }
     return Promise.reject(new Error('clipboard unavailable'));
@@ -173,6 +201,20 @@
   // overrides the label restored after the flash.
   function wire(btn, opts) {
     if (!btn) {
+      return;
+    }
+    if (!canCopy()) {
+      // A control that cannot copy must not be offered: hide the button, and
+      // for an inline value keep the text but drop the click-to-copy
+      // affordance, so nothing looks copyable that is not.
+      if ((btn.tagName || '').toLowerCase() === 'button') {
+        btn.hidden = true;
+      } else {
+        btn.removeAttribute('role');
+        btn.removeAttribute('tabindex');
+        btn.removeAttribute('title');
+        btn.style.cursor = 'text';
+      }
       return;
     }
     opts = opts || {};
@@ -6333,6 +6375,26 @@ function generateBearerSecret() {
     function isReady(status) {
       return status.state === 'ready' && (!status.expires_at || Date.parse(status.expires_at) > Date.now());
     }
+    // Local DNS can still cache a negative answer after a receiver proves routing.
+    function receiverDNS(statuses, kind, hostname) {
+      var relevant = (statuses || []).filter(function (status) {
+        return !hostname || String(status.smtp_hostname || '').toLowerCase().replace(/\.$/, '') === String(hostname).toLowerCase().replace(/\.$/, '');
+      });
+      if (relevant.some(isReady)) { return { kind: kind, state: 'ok' }; }
+      var reason = kind === 'mx' ? 'not_mx' : 'key_unavailable';
+      if (relevant.some(function (status) { return status.state === 'rejected' && status.reason === reason; })) {
+        return { kind: kind, state: 'mismatch' };
+      }
+      return { kind: kind, state: null };
+    }
+    function receivingDNS(statuses) {
+      var checks = [receiverDNS(statuses, 'txt')];
+      // A ready sibling must not hide another receiver's routing refusal.
+      if ((statuses || []).some(function (status) { return !isReady(status) && status.state === 'rejected' && status.reason === 'not_mx'; })) {
+        checks.push({ kind: 'mx', state: 'mismatch' });
+      }
+      return checks;
+    }
     // The status view offers Save settings only once something actually differs
     // from what is stored; otherwise Close is the only action.
     function settingsDirty() {
@@ -6422,35 +6484,18 @@ function generateBearerSecret() {
       });
       return box;
     }
-    // remediationBlock builds the inline fix list from the watcher's DNS verdict,
-    // or an empty node when both checks are ok. It is DNS-driven rather than keyed
-    // off the receiver's single reason: the receiver stops at its first failing
-    // gate, so a domain with a broken TXT and a broken MX would otherwise show only
-    // the TXT fix. Here each failing check gets its own prompt, so the operator
-    // sees every record to publish at once. The records themselves come from the
-    // copy-ready instructions.
-    //
-    // A settled receiving record is a hard gate: anything that is not "ok" is
-    // shown, red, as a fix to make. "not_found" means nothing is published (publish
-    // it); "mismatch" means it is published but wrong (replace it); "dns_error"
-    // means the lookup failed and the record cannot be confirmed — that is not a
-    // licence to proceed either, so it renders a red prompt telling the operator to
-    // check DNS and retry, with the expected record to copy in case it is missing.
+    // Repair only explicit receiver refusals, never an independent cached lookup.
     function remediationBlock(dns, instructions, mxName) {
       var byKind = {};
       (dns || []).forEach(function (entry) { if (entry && entry.kind) { byKind[entry.kind] = entry; } });
       var txt = byKind.txt, mx = byKind.mx;
       var block = document.createElement('div');
-      var needTXT = txt && txt.state !== 'ok';
-      var needMX = mx && mx.state !== 'ok';
+      var needTXT = txt && txt.state && txt.state !== 'ok';
+      var needMX = mx && mx.state && mx.state !== 'ok';
       if (!needTXT && !needMX) { return block; }
       block.className = 'antler-dns-remediation';
       if (needTXT && instructions.txt_value) {
-        var txtPrompt = txt.state === 'not_found'
-          ? 'Domain not authorized — no TXT record is published yet. Publish this TXT record:'
-          : txt.state === 'dns_error'
-            ? 'Domain not authorized — the TXT record could not be verified right now. Do not proceed until it is confirmed; check your DNS provider, then retry. If it is missing, publish this TXT record:'
-            : 'Domain not authorized — the published TXT record does not match this domain\x27s key. Publish this TXT record:';
+        var txtPrompt = 'Domain not authorized — a receiver could not verify this domain\x27s TXT key. Check this TXT record:';
         block.appendChild(remediationLine(txtPrompt, [
           ['Record name', instructions.txt_name, true],
           ['Record type', 'TXT', false],
@@ -6458,11 +6503,7 @@ function generateBearerSecret() {
         ]));
       }
       if (needMX && (instructions.mx || []).length) {
-        var mxPrompt = mx.state === 'not_found'
-          ? 'No MX records are published for this domain yet. Publish these MX records:'
-          : mx.state === 'dns_error'
-            ? 'This domain\x27s MX records could not be verified right now. Do not proceed until they are confirmed; check your DNS provider, then retry. The MX records to publish are:'
-            : 'This domain\x27s MX records do not name an Antler receiver. Publish these MX records:';
+        var mxPrompt = 'An Antler receiver reports that its hostname is not in this domain\x27s MX records. Check these MX records:';
         var mxRecords = instructions.mx || [];
         if (mxRecords.length) { block.appendChild(remediationLine(mxPrompt, [])); }
         mxRecords.forEach(function (record, index) {
@@ -6597,7 +6638,7 @@ function generateBearerSecret() {
       records.replaceChildren();
       records.appendChild(statusTable(connectors, statuses));
       records.appendChild(unexpectedMXBlock({ unexpected_mx: unexpected || [] }, domainName));
-      records.appendChild(remediationBlock(dns || [], instructions || {}, mxName));
+      records.appendChild(remediationBlock(receivingDNS(statuses), instructions || {}, mxName));
     }
     // mxRecordName is the name column for the Antler MX rows. A two-label name
     // is a zone apex and reads best as the provider's "@". A name with more
@@ -6666,8 +6707,6 @@ function generateBearerSecret() {
       // A subdomain must publish its MX at its own fully-qualified name, never
       // the parent zone's "@" (see mxRecordName).
       var mxName = mxRecordName(domainName);
-      var dnsByKind = {};
-      (data.dns || []).forEach(function (entry) { dnsByKind[entry.kind] = entry; });
       // The status view has one light per receiver: the receiver proves both
       // domain authority (TXT) and routing (its own hostname in the domain's
       // MX), so its single state carries the whole verdict. The table is built
@@ -6684,12 +6723,7 @@ function generateBearerSecret() {
         update();
         return;
       }
-      // light builds one traffic-light cell body: a coloured dot plus its label,
-      // sharing a tooltip. state is a DNS check state, or null for a check that
-      // has not run yet. A settled receiving record is a hard gate — green only
-      // when it matches, red otherwise ("not_found" and "dns_error" included:
-      // the operator must not proceed on a record we cannot confirm). Amber is
-      // only the not-yet-run "Waiting" case.
+      // Record lights follow receiver proof; no report is unknown, not missing.
       function light(state, title) {
         var span = document.createElement('span');
         span.className = 'antler-light ' + (state === 'ok' ? 'green' : state === null ? 'amber' : 'red');
@@ -6706,22 +6740,6 @@ function generateBearerSecret() {
       }
       function lightFor(entry) {
         return light(!entry ? null : entry.state, (entry && entry.reason) || '');
-      }
-      // An MX row's light is its own record's, not the whole MX check's: the check
-      // is ok as soon as any one expected receiver is published, so a domain
-      // naming two receivers would otherwise paint both rows "Matching" the
-      // moment the operator published only one. matched lists the hostnames
-      // actually published, so a row resolves against that.
-      function mxRowLight(entry, hostname) {
-        if (!entry) { return light(null, ''); }
-        if (entry.state === 'ok') {
-          var want = String(hostname || '').toLowerCase().replace(/\.$/, '');
-          var matched = (entry.matched || []).some(function (h) { return String(h).toLowerCase().replace(/\.$/, '') === want; });
-          if (!matched) {
-            return light('not_found', 'Not published yet — publish this MX record');
-          }
-        }
-        return lightFor(entry);
       }
       var table = document.createElement('table');
       table.className = 'antler-dns-table antler-record-table';
@@ -6760,15 +6778,15 @@ function generateBearerSecret() {
         });
         action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
       }
-      (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, mxRowLight(dnsByKind.mx, mx.hostname)); });
-      if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, lightFor(dnsByKind.txt)); }
+      (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, lightFor(receiverDNS(data.status, 'mx', mx.hostname))); });
+      if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, lightFor(receiverDNS(data.status, 'txt'))); }
       table.appendChild(tbody);
       records.appendChild(table);
       renderReceivers(data.status);
       // The receivers step of the new-setup wizard carries the same inline
       // remediation, so an operator completing setup can publish the MX record
       // they need without leaving the step.
-      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data.dns || [], instructions, mxName));
+      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(receivingDNS(data.status), instructions, mxName));
       update();
     }
     function update() {
@@ -6872,7 +6890,10 @@ function generateBearerSecret() {
     // request that arrives while one is in flight is latched and run on
     // completion, so a slow poll cannot stack fetches, and a hidden dialog
     // defers until it is visible again rather than fetching in a background tab.
-    var pendingRefresh = false;
+    var pendingRefresh = false, staleRetry = null;
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && pendingRefresh) { refresh(); }
+    });
     function onRefreshable() {
       if (!active() || !dlg.open) { return false; }
       if (!statusMode && (step === 0 || step === 3 || step === 4)) { return false; }
@@ -6882,18 +6903,18 @@ function generateBearerSecret() {
       if (!onRefreshable()) { return; }
       if (document.hidden) { pendingRefresh = true; return; }
       if (busy) { pendingRefresh = true; return; }
+      if (staleRetry !== null) { window.clearTimeout(staleRetry); staleRetry = null; }
+      pendingRefresh = false;
       busy = true;
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
       api('GET').then(function (data) {
         render(data); fail('');
-        // A response whose record verdict was already stale carried a queued
-        // re-check, not its result. Read once more so the fresh verdict lands now
-        // rather than on the next poll — otherwise a warning for MX records the
-        // operator has already removed stays on screen for a poll interval.
-        if (data.dns_stale && dlg.open) { pendingRefresh = true; }
+        // Allow the asynchronous watcher time to finish; never spin on a stale GET.
+        if (data.dns_stale && dlg.open) {
+          staleRetry = window.setTimeout(function () { staleRetry = null; refresh(); }, 2000);
+        }
       }).catch(function (err) { fail(err.message); }).finally(function () {
         busy = false;
-        pendingRefresh = false;
         note.removeAttribute('aria-busy');
         update();
         if (pendingRefresh) { pendingRefresh = false; refresh(); }
@@ -6988,11 +7009,7 @@ function generateBearerSecret() {
       busy = true; fail(''); update();
       var finishing = step === 3;
       var beforeSave = finishing ? api('GET').then(function (data) {
-        // Finish is never gated on receiver readiness: once the operator is past
-        // the receiver step, saving re-renders the status view, which reports the
-        // receiver authorizing/reconnecting until it reconnects. Bouncing back to
-        // the receiver step would trap the operator for a state that needs no
-        // action and matches neither key rotation nor DNS repair.
+        // A receiver reconnecting must not trap Finish or discard the chosen policy.
         render(data);
       }) : api('GET').then(function (data) {
         // Reopening an existing setup must retain its enforcement until the
@@ -7007,7 +7024,7 @@ function generateBearerSecret() {
       }).then(function (data) {
         if (!finishing) { enforcement.value = data.config.enforcement || 'moderate'; }
         savedEmail = email.value; render(data);
-        if (finishing) { statusMode = true; render(data); fail(''); }
+        if (finishing) { statusMode = true; render(data); fail(''); dlg.close(); }
         else { step = 1; }
       }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
     });
@@ -7049,6 +7066,7 @@ function generateBearerSecret() {
         attachedTo = null;
       }
       if (timer) { window.clearInterval(timer); }
+      if (staleRetry !== null) { window.clearTimeout(staleRetry); }
     });
     // The open dialog re-checks on two clocks, both stopped once it closes:
     //   * a slow fallback (the saved status view) that catches a change no push
@@ -7531,25 +7549,46 @@ function generateBearerSecret() {
     });
   }
 
-  var signin = document.getElementById('passkey-signin');
-  if (signin) {
-    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
-      signin.disabled = true;
-      signin.title = 'Passkeys require HTTPS and a supported browser';
-      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
-    } else {
-      wire(signin, document.getElementById('passkey-status'), false);
+  // canUsePasskeys reports whether this origin can run a WebAuthn ceremony at
+  // all. The API and the secure-context rule are both browser-enforced, so a
+  // control offered where they do not hold can only fail.
+  function canUsePasskeys() {
+    return !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+  }
+
+  // hidePasskeyControl removes a control the browser cannot use. Removing it
+  // rather than disabling it keeps the page free of a dead button and of an
+  // explanation for a requirement the page simply does not meet.
+  function hidePasskeyControl(button) {
+    if (!button) { return; }
+    // The login page wraps its button and status line in one block; the
+    // account page puts the add button beside the password-recovery form, so
+    // only the button goes there.
+    var node = button;
+    if (button.closest) {
+      var block = button.closest('.auth-action');
+      if (block) { node = block; }
+    }
+    var parent = node.parentNode;
+    if (!parent) { return; }
+    parent.removeChild(node);
+    // A row of actions left with nothing in it is dead space.
+    if (node === button && parent.children && parent.children.length === 0 && parent.parentNode) {
+      parent.parentNode.removeChild(parent);
     }
   }
+
+  var signin = document.getElementById('passkey-signin');
   var add = document.getElementById('passkey-add');
-  if (add) {
-    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
-      add.disabled = true;
-      add.title = 'Passkeys require HTTPS and a supported browser';
-      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
-    } else {
-      wire(add, document.getElementById('passkey-status'), true);
-    }
+  var status = document.getElementById('passkey-status');
+  if (!canUsePasskeys()) {
+    hidePasskeyControl(signin);
+    hidePasskeyControl(add);
+    // Nothing will report a failure, so the status line goes too.
+    if (status && status.parentNode) { status.parentNode.removeChild(status); }
+  } else {
+    if (signin) { wire(signin, status, false); }
+    if (add) { wire(add, status, true); }
   }
 
   /* Each passkey row is a name plus a gear button that opens that passkey's

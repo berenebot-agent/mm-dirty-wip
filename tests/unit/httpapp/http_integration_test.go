@@ -64,6 +64,63 @@ func seedInboundCredential(t *testing.T, svc *app.Service, accountID, domainID, 
 	}
 }
 
+func TestPreAuthCSRFErrorGuidance(t *testing.T) {
+	t.Parallel()
+	st, dir := testdb.OpenDir(t)
+	cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901"}
+	svc, err := app.New(cfg, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httpapp.New(svc, nil).Handler()
+	get := httptest.NewRecorder()
+	h.ServeHTTP(get, httptest.NewRequest("GET", "http://mail.example.test/setup", nil))
+	var cookie *http.Cookie
+	for _, c := range get.Result().Cookies() {
+		if c.Name == "mmm_csrf" {
+			cookie = c
+		}
+	}
+	if cookie == nil || !cookie.Secure {
+		t.Fatal("HTTPS BASE_URL must still set a Secure CSRF cookie")
+	}
+	for _, route := range []string{"/setup", "/register", "/login", "/login/key", "/invite/example"} {
+		for _, failure := range []string{"missing-cookie", "missing-form-token", "mismatch", "unsigned"} {
+			t.Run(route+"/"+failure, func(t *testing.T) {
+				form := url.Values{"_csrf": {cookie.Value}}
+				c := *cookie
+				switch failure {
+				case "missing-form-token":
+					form.Del("_csrf")
+				case "mismatch":
+					form.Set("_csrf", "wrong")
+				case "unsigned":
+					c.Value = "unsigned"
+					form.Set("_csrf", c.Value)
+				}
+				req := httptest.NewRequest("POST", "http://mail.example.test"+route, strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				if failure != "missing-cookie" {
+					req.AddCookie(&c)
+				}
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403: %s", rr.Code, rr.Body.String())
+				}
+				for _, text := range []string{"Unable to verify your sign-in request", "Refresh the page", "cookies are enabled", "BASE_URL", "http://", "https://", "Return to sign in"} {
+					if !strings.Contains(rr.Body.String(), text) {
+						t.Errorf("error page missing %q", text)
+					}
+				}
+				if rr.Header().Get("Content-Type") != "text/html; charset=utf-8" || rr.Header().Get("Cache-Control") != "no-store" {
+					t.Fatalf("unexpected error page headers: %v", rr.Header())
+				}
+			})
+		}
+	}
+}
+
 func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
