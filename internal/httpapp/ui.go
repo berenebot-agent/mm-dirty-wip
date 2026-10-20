@@ -746,16 +746,12 @@ type pageData struct {
 	AccessMembersJSON string
 	// Passkeys lists the signed-in user's registered passkeys, and
 	// PasskeyEnabled reports whether the deployment has WebAuthn configured.
-	// PasskeyInsecureContext reports that passkeys are configured but the
-	// canonical origin is not a browser secure context (plain HTTP), so the
-	// settings panel explains why they are unavailable instead of offering
-	// controls that cannot work.
-	Passkeys               []model.WebAuthnCredential
-	PasskeyEnabled         bool
-	PasskeyInsecureContext bool
-	LogEntries             []store.DomainLogEntry
-	LogHasMore             bool
-	LogBefore              string
+	// A deployment without it renders no passkey controls at all.
+	Passkeys       []model.WebAuthnCredential
+	PasskeyEnabled bool
+	LogEntries     []store.DomainLogEntry
+	LogHasMore     bool
+	LogBefore      string
 	// Client delivery log (Webhook / Hermes relay): the client being viewed, its
 	// newest entries, and the keyset cursor for the next page.
 	ClientLogClient             *credentialView
@@ -1600,7 +1596,7 @@ const settingsBody = settingsShellOpen + `{{if .Notice}}<div class="ok notice" r
 <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_tab" value="account">
 <section class="dialog-panel" role="tabpanel">
 <h3 class="section-head">Account settings</h3>
-<p class="muted">These apply to everyone in {{.Account.Name}}.</p>
+<p class="muted">These settings are for this account. The time zone is the default for operators; Trash retention is the default for inboxes.</p>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-name">Account name</label><p class="muted small">Shown in the header; a display name, not an email address.</p></div><input id="settings-account-name" name="name" value="{{.Account.Name}}" maxlength="80" required></div>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-tz">Account time zone</label><p class="muted small">Default for operators who have not set their own. Leave blank for UTC.</p></div><input id="settings-account-tz" name="timezone" list="tz-options" value="{{.AccountTimezone}}" placeholder="{{.AccountTimezoneLabel}}" autocomplete="off"></div>
 <div class="setting-row"><div class="setting-label"><label for="settings-account-trash">Trash auto-purge (days)</label><p class="muted small">Trashed messages are purged after this many days; 0 keeps them until emptied manually.</p></div><input id="settings-account-trash" name="days" type="number" min="0" max="3650" value="{{.TrashRetentionDays}}" required></div>
@@ -1625,8 +1621,7 @@ const settingsBody = settingsShellOpen + `{{if .Notice}}<div class="ok notice" r
 </section>
 </form>
 {{if .PasskeyEnabled}}<h3 class="section-head">Passkeys</h3>
-<p class="muted">Sign in without a password using a passkey (Touch ID, Windows Hello, or a security key). Add one per device.{{if not .User.SystemAdmin}} When you add a passkey you can choose to make it your only sign-in method.{{end}}{{if not .User.PasswordEnabled}} <b>Password sign-in is currently disabled.</b>{{end}}</p>{{if .Passkeys}}<ul class="slist passkey-list">{{range .Passkeys}}<li><span class="alias-row-name">{{.Name}}</span><button type="button" class="secondary icon-btn open-passkey-settings" data-passkey="{{.ID}}" title="Passkey settings" aria-label="Settings for passkey {{.Name}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button></li>{{end}}</ul>{{else}}<p class="muted">No passkeys yet.</p>{{end}}<div class="dialog-actions">{{if and (not .User.PasswordEnabled) (not .User.SystemAdmin)}}<form method="post" action="/ui/account/passkeys/password" data-confirm="Re-enable password sign-in?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="button" class="secondary">Re-enable password sign-in</button></form>{{end}}<button type="button" class="secondary" id="passkey-add" data-begin="/ui/account/passkeys/begin" data-finish="/ui/account/passkeys/finish" data-... (line truncated to 2000 chars)password-enabled="{{if and .User.PasswordEnabled (not .User.SystemAdmin)}}1{{else}}0{{end}}">Add a passkey</button></div><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></section>{{range .Passkeys}}<dialog id="passkey-dialog-{{.ID}}" class="passkey-dialog"><h2>Passkey settings</h2><dl class="dialog-usage"><dt>Name</dt><dd>{{.Name}}</dd><dt>Added</dt><dd>{{mailDate .CreatedAt}}</dd><dt>Last used</dt><dd>{{lastUsedDate .LastUsedAt}}</dd><dt>Backups</dt><dd>{{passkeyBackup .}}</dd></dl><form method="post" action="/ui/account/passkeys/rename"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><label>Name</label><input name="name" value="{{.Name}}" maxlength="80" required><button class="secondary">Rename</button></form><div class="dialog-actions"><div class="dialog-danger"><form method="post" action="/ui/account/passkeys/delete" data-confirm="Remove this passkey? You will no longer be able to sign in with it."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="secondary danger">Remove passkey</button></form></div><button type="button" class="secondary" data-close-dialog>Cancel</button></div></dialog>{{end}}{{else if .PasskeyInsecureContext}}<h3 class="section-head">Passkeys</h3>
-<p class="muted">Passkeys need HTTPS. This instance is reached over plain HTTP, so passkey sign-in is disabled. Serve MailMoose over HTTPS and set <code>BASE_URL</code> to that origin (or use <code>localhost</code>) to enable passkeys. Password and API-key sign-in work normally.</p>
+<p class="muted">Sign in without a password using a passkey (Touch ID, Windows Hello, or a security key). Add one per device.{{if not .User.SystemAdmin}} When you add a passkey you can choose to make it your only sign-in method.{{end}}{{if not .User.PasswordEnabled}} <b>Password sign-in is currently disabled.</b>{{end}}</p>{{if .Passkeys}}<ul class="slist passkey-list">{{range .Passkeys}}<li><span class="alias-row-name">{{.Name}}</span><button type="button" class="secondary icon-btn open-passkey-settings" data-passkey="{{.ID}}" title="Passkey settings" aria-label="Settings for passkey {{.Name}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button></li>{{end}}</ul>{{else}}<p class="muted">No passkeys yet.</p>{{end}}<div class="dialog-actions">{{if and (not .User.PasswordEnabled) (not .User.SystemAdmin)}}<form method="post" action="/ui/account/passkeys/password" data-confirm="Re-enable password sign-in?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button type="button" class="secondary">Re-enable password sign-in</button></form>{{end}}<button type="button" class="secondary" id="passkey-add" data-begin="/ui/account/passkeys/begin" data-finish="/ui/account/passkeys/finish" data-... (line truncated to 2000 chars)password-enabled="{{if and .User.PasswordEnabled (not .User.SystemAdmin)}}1{{else}}0{{end}}">Add a passkey</button></div><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p>{{range .Passkeys}}<dialog id="passkey-dialog-{{.ID}}" class="passkey-dialog"><h2>Passkey settings</h2><dl class="dialog-usage"><dt>Name</dt><dd>{{.Name}}</dd><dt>Added</dt><dd>{{mailDate .CreatedAt}}</dd><dt>Last used</dt><dd>{{lastUsedDate .LastUsedAt}}</dd><dt>Backups</dt><dd>{{passkeyBackup .}}</dd></dl><form method="post" action="/ui/account/passkeys/rename"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><label>Name</label><input name="name" value="{{.Name}}" maxlength="80" required><button class="secondary">Rename</button></form><div class="dialog-actions"><div class="dialog-danger"><form method="post" action="/ui/account/passkeys/delete" data-confirm="Remove this passkey? You will no longer be able to sign in with it."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="secondary danger">Remove passkey</button></form></div><button type="button" class="secondary" data-close-dialog>Cancel</button></div></dialog>{{end}}
 {{end}}
 {{end}}
 {{if eq .SettingsTab "account"}}{{template "account-operators" .}}{{end}}
@@ -1681,10 +1676,6 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	if creds, cerr := s.Service.Store.WebAuthnCredentialsForUser(r.Context(), p.UserID); cerr == nil {
 		data.Passkeys = creds
 	}
-	// Passkeys are configured when the deployment has a WebAuthn service. When
-	// it does not because the origin is plain HTTP, say so rather than hiding
-	// the section silently.
-	data.PasskeyInsecureContext = s.Service.Config.WebAuthnRPID() != "" && !s.Service.Config.SecureContext()
 	if p.Admin {
 		if days, derr := s.Service.Store.GetTrashRetention(r.Context(), p); derr == nil {
 			data.TrashRetentionDays = days
