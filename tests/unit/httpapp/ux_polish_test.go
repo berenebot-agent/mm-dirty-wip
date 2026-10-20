@@ -135,6 +135,48 @@ func TestUICreateDomainInvalidShowsError(t *testing.T) {
 	}
 }
 
+// TestUIMailboxSettingsGearStaysInToolbar proves the inbox-settings gear is
+// the last control of the mailbox toolbar on every view. The Outbox has no bulk
+// actions, so its gear used to render alone at the far left of the bar and jump
+// to the right-hand button group on the other views; it now sits in the same
+// right-aligned group, so the icon never moves.
+func TestUIMailboxSettingsGearStaysInToolbar(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	gear := `<a class="btn secondary icon-btn" href="/?inbox=` + box.ID + `" title="Inbox settings" aria-label="Inbox settings">`
+
+	for _, tc := range []struct{ path, before, after string }{
+		// The gear closes the toolbar's button group.
+		{"/ui/inboxes/" + box.ID, "</button>", "</form></div>"},
+		{"/ui/inboxes/" + box.ID + "/drafts", "</button>", "</form></div>"},
+		// The outbox has no bulk actions, so the gear is the only control in the
+		// right-aligned group.
+		{"/ui/inboxes/" + box.ID + "/outbox", `<div class="bulkbar">`, "</div></div>"},
+	} {
+		rr := uiGet(t, h, cookie, tc.path)
+		if rr.Code != 200 {
+			t.Fatalf("%s: %d", tc.path, rr.Code)
+		}
+		body := rr.Body.String()
+		i := strings.Index(body, gear)
+		if i < 0 {
+			t.Fatalf("%s: missing inbox settings gear: %s", tc.path, body)
+		}
+		if !strings.HasSuffix(body[:i], tc.before) {
+			t.Fatalf("%s: inbox settings gear does not follow %q: %s", tc.path, tc.before, body)
+		}
+		rest := body[i:]
+		end := strings.Index(rest, "</a>")
+		if end < 0 {
+			t.Fatalf("%s: inbox settings gear is not closed: %s", tc.path, body)
+		}
+		if !strings.HasPrefix(rest[end+len("</a>"):], tc.after) {
+			t.Fatalf("%s: inbox settings gear is not the last toolbar control: %s", tc.path, body)
+		}
+	}
+}
+
 // TestUIOutboxPager proves the outbox exposes a pager when more than one page of
 // queued mail exists, and that the pager cursor returns the older page without
 // the newest page's rows.

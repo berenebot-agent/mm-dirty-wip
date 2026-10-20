@@ -21,6 +21,14 @@ All notable changes to MailMoose are documented here. This project follows
   controls. Registered passkeys, and the option to re-enable password sign-in,
   stay reachable.
 
+### Fixed
+
+- The inbox settings button no longer jumps between the far left of the mailbox
+  toolbar and the right-hand button group. The Outbox has no bulk actions, so its
+  settings button was the only control on that toolbar and rendered alone on the
+  left, while every other mailbox view put it in the button group on the right.
+  It now closes the button group on every mailbox view.
+
 ## [0.1.0-beta.1] - 2026-10-20
 
 Initial release of MailMoose: self-hosted email infrastructure for people and
