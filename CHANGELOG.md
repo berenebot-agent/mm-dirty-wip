@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A queue row now names the mailbox it came from. The header **Queue** popup
+  lists the account's whole mailbox set, so a row for an action in one mailbox
+  read the same as a row for another; each row now carries the inbox's name
+  beside the action's own detail, on the line it already had, so nothing grew
+  a line. The queue's API (`GET /v1/actions` and `GET /v1/actions/{id}`) carries
+  the same `inbox_name`.
+
 - The header **Queue** popup now has a **Clear all** control, and it only appears
   when the popup holds something flagged — a failed or uncertain action, or a
   metadata sync that stopped with an error or a pause. It takes the flagged rows

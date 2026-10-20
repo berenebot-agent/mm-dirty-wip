@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -200,6 +201,47 @@ func (s *Server) queuedUIAction(w http.ResponseWriter, r *http.Request, kind str
 	s.submitMessageAction(w, r, r.PathValue("id"), in, true)
 }
 
+// actionView is one row of the queue: the action plus the name of the inbox it
+// belongs to. The queue lists the account's whole mailbox set, so a row that
+// does not name its mailbox leaves the reader to guess which one it came from.
+type actionView struct {
+	store.MessageAction
+	InboxName string `json:"inbox_name,omitempty"`
+}
+
+// inboxLabel is a mailbox's display name, or its address when it has no name.
+func inboxLabel(box model.Inbox) string {
+	if box.DisplayName != "" {
+		return box.DisplayName
+	}
+	return box.Address
+}
+
+// actionViews names each action's inbox. A name that cannot be read leaves the
+// row unnamed rather than failing the poll.
+func (s *Server) actionViews(ctx context.Context, p model.Principal, actions []store.MessageAction) []actionView {
+	names := map[string]string{}
+	if boxes, err := s.Service.Store.ListInboxes(ctx, p); err == nil {
+		for _, box := range boxes {
+			names[box.ID] = inboxLabel(box)
+		}
+	}
+	out := make([]actionView, 0, len(actions))
+	for _, a := range actions {
+		out = append(out, actionView{MessageAction: a, InboxName: names[a.InboxID]})
+	}
+	return out
+}
+
+// inboxName is the name of the mailbox an action belongs to.
+func (s *Server) inboxName(ctx context.Context, p model.Principal, inboxID string) string {
+	box, err := s.Service.Store.GetInbox(ctx, p, inboxID)
+	if err != nil {
+		return ""
+	}
+	return inboxLabel(box)
+}
+
 func (s *Server) uiActionQueue(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		action := r.Form.Get("action")
@@ -235,7 +277,7 @@ func (s *Server) uiActionQueue(w http.ResponseWriter, r *http.Request) {
 	// the connection health so the reconnect banner and its control appear
 	// without a page load when a provider rejects an authorization.
 	writeJSON(w, 200, map[string]any{
-		"items":       actions,
+		"items":       s.actionViews(r.Context(), principal(r), actions),
 		"syncs":       s.metadataSyncStatuses(r.Context(), principal(r)),
 		"connections": s.connectionStatesFor(r.Context(), principal(r)),
 		"csrf":        csrf(r),
@@ -243,13 +285,14 @@ func (s *Server) uiActionQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiAction(w http.ResponseWriter, r *http.Request) {
-	a, err := s.Service.Store.GetMessageAction(r.Context(), principal(r), r.PathValue("id"))
+	p := principal(r)
+	a, err := s.Service.Store.GetMessageAction(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"action": a})
+	writeJSON(w, 200, map[string]any{"action": actionView{MessageAction: a, InboxName: s.inboxName(r.Context(), p, a.InboxID)}})
 }
 
 // pendingMessageOverlay leaves durable provider locators and confirmed local

@@ -1,11 +1,12 @@
-// Dependency-free checks for the Clear all control in the queue popup.
-// Run: node tests/queue-clear-check.cjs
+// Dependency-free checks for the queue popup's rows.
+// Run: node tests/queue-popup-check.cjs
 //
 // The Go suite asserts the queue itself. This harness drives the real app.js
-// closure against a DOM stand-in to assert what only the drawer can show: the
-// Clear all control appears only when the drawer holds a flagged item, it
-// takes the flagged rows off the drawer, it leaves the live work alone, and a
-// later poll does not bring the cleared rows back.
+// closure against a DOM stand-in to assert what only the drawer can show: a
+// row names the mailbox it came from, the Clear all control appears only when
+// the drawer holds a flagged item, it takes the flagged rows off the drawer,
+// it leaves the live work alone, and a later poll does not bring the cleared
+// rows back.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -142,6 +143,20 @@ function rows(body) {
   return list.children.filter(child => (child.className || '').split(/\s+/).includes('aq-row'));
 }
 
+// The queue is account-wide, so a row names the mailbox it came from, on the
+// line it already has.
+{
+  const { window, body } = run();
+  window.mailmooseActionUpdateForTest({
+    csrf: 'token',
+    items: [{ id: 'act-id', message_id: 'msg_abcdefghijklmnop', state: 'pending', inbox_name: 'Sales', input: { kind: 'move' } }]
+  });
+  const row = rows(body)[0];
+  const meta = byClass(row, 'aq-meta')[0];
+  assert.equal(meta.textContent, 'Sales · msg_abcdefgh…', 'the row names its mailbox beside the detail');
+  assert.equal(byClass(row, 'aq-kind')[0].textContent, 'Move', 'the action keeps its own line');
+}
+
 // With nothing flagged there is nothing to clear, so the control stays away.
 {
   const { window, body } = run();
@@ -220,4 +235,4 @@ function rows(body) {
   assert.equal(remaining[0].getAttribute('data-sync-inbox'), 'in_2', 'the running sync keeps going');
 }
 
-console.log('queue-clear-check: all checks passed');
+console.log('queue-popup-check: all checks passed');
