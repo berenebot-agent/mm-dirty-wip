@@ -40,6 +40,14 @@ func TestProviderErrorBrevoAttachmentRejection(t *testing.T) {
 	for _, tc := range []struct {
 		name, provider, status, body, want string
 	}{
+		{"real Brevo response", "brevo", "400 Bad Request", `{"code":"invalid_parameter","message":"Unsupported file format: md"}`, attachment},
+		{"markdown format", "brevo", "400", `{"code":"invalid_parameter","message":"Unsupported file format: markdown"}`, attachment},
+		{"json format", "brevo", "400", `{"code":"invalid_parameter","message":"Unsupported file format: json"}`, attachment},
+		{"eml format", "brevo", "400", `{"code":"invalid_parameter","message":"Unsupported file format: eml"}`, attachment},
+		{"format secret echo", "brevo", "400", `{"code":"invalid_parameter","message":"Unsupported file format: xkeysib-secret private-file.md private-body user@example.com"}`, attachment},
+		{"format other provider", "resend", "400", `{"code":"invalid_parameter","message":"Unsupported file format: md"}`, fallback},
+		{"format unknown code", "brevo", "400", `{"code":"unauthorized","message":"Unsupported file format: md"}`, fallback},
+		{"format server status", "brevo", "500", `{"code":"invalid_parameter","message":"Unsupported file format: md"}`, "provider is temporarily unavailable"},
 		{"extension not allowed", "brevo", "400 Bad Request", `{"code":"invalid_parameter","message":"Extension .md is not allowed for attachments"}`, attachment},
 		{"invalid extension", "brevo", "400", `{"code":"invalid_parameter","message":"Invalid attachment extension"}`, attachment},
 		{"unsupported extension", "brevo", "400", `{"code":"invalid_parameter","message":"Attachment extension is not supported"}`, attachment},

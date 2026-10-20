@@ -141,9 +141,10 @@ func ProviderError(provider, status string, body []byte) error {
 		if json.Unmarshal(body, &rejection) == nil && rejection.Code == "invalid_parameter" {
 			message := strings.ToLower(rejection.Message)
 			// Classify the reason, never echo provider text that could contain secrets.
-			if strings.Contains(message, "attachment") && strings.Contains(message, "extension") &&
-				(strings.Contains(message, "not allowed") || strings.Contains(message, "not supported") ||
-					strings.Contains(message, "unsupported") || strings.Contains(message, "invalid")) {
+			if strings.HasPrefix(message, "unsupported file format:") ||
+				strings.Contains(message, "attachment") && strings.Contains(message, "extension") &&
+					(strings.Contains(message, "not allowed") || strings.Contains(message, "not supported") ||
+						strings.Contains(message, "unsupported") || strings.Contains(message, "invalid")) {
 				diagnostic = "provider rejected an attachment file extension; check Brevo's supported attachment types"
 			}
 		}

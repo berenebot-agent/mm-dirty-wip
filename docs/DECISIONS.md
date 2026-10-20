@@ -5777,6 +5777,16 @@ worker logs and the domain activity log.
 Extend recognition with a regression fixture if Brevo changes its response;
 do not fall back to echoing provider prose.
 
+**UAT follow-up (2026-10-20):** The initial fixtures were synthetic and missed
+Brevo's real response: `{"code":"invalid_parameter","message":"Unsupported file format: md"}`.
+Recognise the `Unsupported file format:` message prefix under the same Brevo,
+HTTP 400, `invalid_parameter` and body-size guards, without requiring the words
+"attachment" and "extension". Retain only the fixed diagnostic, never the
+suffix after the colon. The captured response is now an adapter/unit regression
+fixture; the end-to-end fixture uses the same wording with planted secrets to
+verify send-status, worker-log and domain-log safety. No format blocklist or
+proactive validation is introduced.
+
 **Compatibility:** Attachment validation, filenames, content, success handling,
 permanent-error classification and retries are unchanged. This is diagnostic
 classification only, not a general attachment restriction. No UI, API schema,

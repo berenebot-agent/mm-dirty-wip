@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Follow-up: recognise Brevo's real `Unsupported file format: md` response,
+  which does not contain "attachment" or "extension". The safe diagnostic now
+  recognises that wording; regression tests use the response captured in UAT.
+
 - Brevo attachment-extension rejections now identify the unsupported attachment
   type in send status, worker logs and the domain activity log, rather than
   suggesting recipient or sender-verification problems. Only a fixed diagnostic
