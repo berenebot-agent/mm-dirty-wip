@@ -344,21 +344,22 @@ func (s *Store) ListPendingHandoffs(ctx context.Context, limit int) ([]model.Ass
 	return out, rows.Err()
 }
 
-// ClaimNextHandoff atomically claims the oldest pending handoff for publication.
+// ClaimNextHandoff atomically claims the next pending handoff after the cursor.
+// A zero cursor starts a pass; (requested_at, id) visits tied timestamps once.
 // It returns the record, or a zero record when none is due. Publication is not a
 // lease-based queue: the claim moves the record to HandoffPending with a bumped
 // attempt count and the caller must call MarkHandoffPublished / MarkHandoffFailed
 // / MarkHandoffAmbiguous to settle it. A claim that is never settled is retried
 // because the record stays Pending and the worker's publish path is idempotent by
 // handoff id.
-func (s *Store) ClaimNextHandoff(ctx context.Context, owner string) (model.AssistantHandlingRequest, bool, error) {
+func (s *Store) ClaimNextHandoff(ctx context.Context, afterRequestedAt time.Time, afterID string) (model.AssistantHandlingRequest, bool, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.AssistantHandlingRequest{}, false, err
 	}
 	defer tx.Rollback()
 	var id, accountID string
-	err = tx.QueryRowContext(ctx, `SELECT id,account_id FROM assistant_handling_requests WHERE publication=? ORDER BY requested_at ASC LIMIT 1`, model.HandoffPending).Scan(&id, &accountID)
+	err = tx.QueryRowContext(ctx, `SELECT id,account_id FROM assistant_handling_requests WHERE publication=? AND (requested_at,id)>(?,?) ORDER BY requested_at,id LIMIT 1`, model.HandoffPending, timeText(afterRequestedAt), afterID).Scan(&id, &accountID)
 	if err == sql.ErrNoRows {
 		return model.AssistantHandlingRequest{}, false, nil
 	}
@@ -606,11 +607,9 @@ func (s *Store) HandoffCountsByInbox(ctx context.Context, p model.Principal, pub
 	return out, rows.Err()
 }
 
-// RecordHandoffAppendAttempt is a convenience that bumps the attempt count and
-// records a last error without changing the publication state, used when an
-// append attempt fails transiently and will be retried.
-func (s *Store) RecordHandoffAppendAttempt(ctx context.Context, accountID, id, reason string) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE assistant_handling_requests SET attempts=attempts+1,last_error=?,updated_at=? WHERE id=? AND account_id=?`, reason, nowText(), id, accountID)
+// RecordHandoffError records a transient failure; claiming counts the attempt.
+func (s *Store) RecordHandoffError(ctx context.Context, accountID, id, reason string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE assistant_handling_requests SET last_error=?,updated_at=? WHERE id=? AND account_id=?`, reason, nowText(), id, accountID)
 	return err
 }
 

@@ -154,16 +154,13 @@ func (s *Service) PublishHandoffs(ctx context.Context) {
 	if s.HandoffPublisher == nil {
 		return
 	}
-	// A transient append failure leaves the handoff Pending, so it would be
-	// re-claimed immediately. Attempt each handoff at most once per pass and let
-	// the next worker tick retry it, so a persistent transient fault cannot spin
-	// this loop.
-	attempted := map[string]bool{}
+	// Advance past failures so every handoff gets one attempt per pass.
+	var after model.AssistantHandlingRequest
 	for {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		r, ok, err := s.Store.ClaimNextHandoff(ctx, "handoff")
+		r, ok, err := s.Store.ClaimNextHandoff(ctx, after.RequestedAt, after.ID)
 		if err != nil {
 			s.Log.Error("handoff claim", "error", err)
 			return
@@ -171,10 +168,7 @@ func (s *Service) PublishHandoffs(ctx context.Context) {
 		if !ok {
 			return
 		}
-		if attempted[r.ID] {
-			return
-		}
-		attempted[r.ID] = true
+		after = r
 		s.publishOneHandoff(ctx, r)
 	}
 }
@@ -290,7 +284,7 @@ func (s *Service) deferHandoffRetry(ctx context.Context, accountID string, r mod
 		s.markHandoffAmbiguous(ctx, accountID, r, "handoff verification did not complete within the retry budget")
 		return
 	}
-	if err := s.Store.RecordHandoffAppendAttempt(ctx, accountID, r.ID, "handoff verification pending"); err != nil {
+	if err := s.Store.RecordHandoffError(ctx, accountID, r.ID, "handoff verification pending"); err != nil {
 		s.Log.Warn("record handoff verification attempt", "handoff_id", r.HandoffID, "error", err)
 	}
 }
@@ -341,7 +335,7 @@ func (s *Service) settleHandoffError(ctx context.Context, accountID string, r mo
 		}
 		return
 	}
-	if rerr := s.Store.RecordHandoffAppendAttempt(ctx, accountID, r.ID, publicHandoffError(err)); rerr != nil {
+	if rerr := s.Store.RecordHandoffError(ctx, accountID, r.ID, publicHandoffError(err)); rerr != nil {
 		s.Log.Warn("record handoff attempt", "handoff_id", r.HandoffID, "error", rerr)
 	}
 }

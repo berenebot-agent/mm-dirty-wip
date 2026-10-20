@@ -377,6 +377,9 @@ func (s *Store) GetInviteByToken(ctx context.Context, token string) (model.Invit
 // mailbox operator it describes. The password is hashed before the transaction
 // so the writer lock is held only for the inserts.
 func (s *Store) RedeemInvite(ctx context.Context, token, password string) (model.User, error) {
+	if _, err := s.GetInviteByToken(ctx, token); err != nil {
+		return model.User{}, err
+	}
 	ph, err := auth.HashPassword(password)
 	if err != nil {
 		return model.User{}, err

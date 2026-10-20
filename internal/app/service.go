@@ -2000,21 +2000,13 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 		in.FromAddress = d.FromAddress
 		in.FromName = d.FromName
 	}
-	// A direct owner send of a pending draft authorizes the outstanding request
-	// as it enqueues; the approval and the message land in one transaction.
-	if in.SendRequestID == "" && d.SendRequest != nil && d.SendRequest.Status == model.SendRequestPending {
-		actor, aerr := s.Store.ActorIdentity(ctx, p)
-		if aerr != nil {
-			return SendResult{}, aerr
-		}
-		in.SendRequestID = d.SendRequest.ID
-		in.DecisionActor = actor.Label
-		in.DecisionActorID = actor.ID()
+	// Pending requests authorize only the frozen content, never unsaved edits.
+	if in.SendRequestID == "" && d.Status == model.DraftStatusPendingApproval {
+		method := model.DecisionMethodAPI
 		if p.ViaSession {
-			in.DecisionMethod = model.DecisionMethodUI
-		} else {
-			in.DecisionMethod = model.DecisionMethodAPI
+			method = model.DecisionMethodUI
 		}
+		return s.ApproveDraft(ctx, p, draftID, "", method, idem)
 	}
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err

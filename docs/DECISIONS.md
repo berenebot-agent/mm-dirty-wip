@@ -4415,6 +4415,12 @@ mailbox as a bounce, which is visible without a dashboard.
   pending/failed rows). It stays recoverable in Trash, and `RequeueFailed`
   restores it (`deleted_at=NULL`) as well as resetting it to pending, so a manual
   retry still works.
+- **Quota cannot reject a terminal failure notice (2026-10-20 hardening).** Its
+  bytes increment both account and inbox storage counters even if either quota
+  is exhausted. This narrow exception preserves the failed outcome, clears the
+  pre-send marker and makes the notice visible in the same transaction. Ordinary
+  message writes still enforce quota; queued failures can temporarily push usage
+  above the cap.
 - **Exactly one notice per failure episode.** `writeDeliveryFailureTx` is a no-op
   when the original is already trashed, so a re-marked terminal failure cannot
   spam the mailbox. The notice arrival emits `message.received` and the clearing

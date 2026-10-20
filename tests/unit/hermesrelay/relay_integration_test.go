@@ -193,11 +193,15 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	}
 }
 
-// TestRelayFutureAckDoesNotSkipEvents proves a gateway that acknowledges a
-// buffer id ahead of the event actually delivered cannot advance the durable
-// cursor over the events in between: the cursor moves only to the delivered
-// event, and the skipped event is still replayed.
+// TestRelayFutureAckDoesNotSkipEvents requires an exact ack, including on replay.
 func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
+	// Serial: app.New changes the process-global outbound policy.
+	t.Run("local", func(t *testing.T) { testRelayFutureAck(t, false) })
+	t.Run("remote", func(t *testing.T) { testRelayFutureAck(t, true) })
+}
+
+func testRelayFutureAck(t *testing.T, remote bool) {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st := testdb.OpenAt(t, dir)
@@ -211,6 +215,12 @@ func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
 	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+	if remote {
+		box, err = st.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "hermes@remote.example"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
 	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-future-ack")))
@@ -219,15 +229,25 @@ func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ev1, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "future-1", RFCMessageID: "<f1@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Future one", Text: "one", RawPath: "messages/f1.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
+	var queued [2]model.Event
+	for i := range queued {
+		messageID := fmt.Sprintf("<future-%d@test>", i)
+		if remote {
+			arrival, _, aerr := st.RecordRemoteArrival(ctx, u.AccountID, box.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 1, UID: uint32(i + 1), RFCMessageID: messageID, FromAddress: "alice@outside.test", Subject: "Remote", SizeBytes: 4})
+			if aerr != nil {
+				t.Fatal(aerr)
+			}
+			queued[i], _, err = st.RecordRemoteArrivalEvent(ctx, u.AccountID, box.ID, arrival)
+		} else {
+			_, queued[i], _, err = st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: messageID, RFCMessageID: messageID, From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Future", Text: "body", RawPath: "messages/future.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	_, ev2, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "future-2", RFCMessageID: "<f2@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Future two", Text: "two", RawPath: "messages/f2.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ev1, ev2 := queued[0], queued[1]
 	rs := hermesrelay.New(svc)
+	rs.SetAckTimeoutsForTest(300*time.Millisecond, time.Second)
 	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
 	defer ts.Close()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
@@ -250,24 +270,45 @@ func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
 		t.Fatal(err)
 	}
-	// The second event must still be delivered: the future ack must not have
-	// skipped it.
-	if err = client.readJSON(&inbound); err != nil {
-		t.Fatal(err)
+	// Without the exact ack, the connection must time out instead of advancing.
+	if err = client.readJSON(&inbound); err == nil {
+		t.Fatalf("future ack advanced delivery: %#v", inbound)
 	}
-	if inbound["bufferId"] != ev2.Cursor {
-		t.Fatalf("second event after a future ack %#v", inbound)
-	}
-	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(50 * time.Millisecond)
 	updated, err := st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
-	if err != nil {
+	if err != nil || updated.LastAckEventID != conn.LastAckEventID {
+		t.Fatalf("future ack persisted: %+v, %v", updated, err)
+	}
+	entries, err := st.ClientDeliveryLog(ctx, u.AccountID, conn.ID, 10, ev2.ID+1)
+	if err != nil || len(entries) == 0 || entries[0].EventID != ev1.ID || entries[0].Status != "failed" {
+		t.Fatalf("unacknowledged delivery log: %+v, %v", entries, err)
+	}
+	replay := dialRawWS(t, wsURL, makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer replay.close()
+	if err = replay.writeJSON(map[string]any{"type": "hello", "platform": "email"}); err != nil {
 		t.Fatal(err)
 	}
-	if updated.LastAckEventID != ev2.ID {
-		t.Fatalf("final cursor = %d, want %d", updated.LastAckEventID, ev2.ID)
+	if _, err = replay.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	if err = replay.readJSON(&inbound); err != nil || inbound["bufferId"] != ev1.Cursor {
+		t.Fatalf("current event not replayed: %#v, %v", inbound, err)
+	}
+	// A future ack must not be cached and later stand in for ev2's real ack.
+	if err = replay.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	if err = replay.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev1.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	if err = replay.readJSON(&inbound); err != nil || inbound["bufferId"] != ev2.Cursor {
+		t.Fatalf("next event not delivered: %#v, %v", inbound, err)
+	}
+	if err = replay.readJSON(&inbound); err == nil {
+		t.Fatalf("unacknowledged second event did not time out: %#v", inbound)
+	}
+	updated, err = st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
+	if err != nil || updated.LastAckEventID != ev1.ID {
+		t.Fatalf("final cursor = %d, want %d; err=%v", updated.LastAckEventID, ev1.ID, err)
 	}
 }
 
