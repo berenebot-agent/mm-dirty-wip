@@ -76,6 +76,15 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	if paths := strings.Count(btn, "<path"); paths != 1 {
 		t.Fatalf("inbox approve button glyph has %d paths, want a single tick: %s", paths, btn)
 	}
+	// The request card also carries the dash that cancels the approval.
+	cancelAt := strings.Index(body, `title="Cancel approval and edit"`)
+	if cancelAt < 0 || !strings.Contains(body, "/drafts/"+draft.ID+"/cancel-send-request") {
+		t.Fatalf("inbox request card missing the cancel-approval action")
+	}
+	cancelBtn := body[cancelAt : cancelAt+strings.Index(body[cancelAt:], "</button>")]
+	if paths := strings.Count(cancelBtn, "<path"); paths != 1 {
+		t.Fatalf("inbox cancel glyph has %d paths, want a single dash: %s", paths, cancelBtn)
+	}
 	// Send-request row uses inbox-like columns: To, subject + body start,
 	// request date and size.
 	for _, want := range []string{"friend@example.net", "Proposal", "body", ">Size</span>", ">To</span>"} {
@@ -94,13 +103,13 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	if !strings.Contains(drafts, `class="secondary icon-btn approve" title="Approve and send"`) {
 		t.Fatalf("drafts list approve action is not the green tick")
 	}
-	cancelAt := strings.Index(drafts, `title="Cancel approval and edit"`)
-	if cancelAt < 0 || !strings.Contains(drafts, "/drafts/"+draft.ID+"/cancel-send-request") {
+	draftsCancelAt := strings.Index(drafts, `title="Cancel approval and edit"`)
+	if draftsCancelAt < 0 || !strings.Contains(drafts, "/drafts/"+draft.ID+"/cancel-send-request") {
 		t.Fatalf("drafts list missing the cancel-approval action")
 	}
-	cancelBtn := drafts[cancelAt : cancelAt+strings.Index(drafts[cancelAt:], "</button>")]
-	if paths := strings.Count(cancelBtn, "<path"); paths != 1 {
-		t.Fatalf("drafts cancel glyph has %d paths, want a single dash: %s", paths, cancelBtn)
+	draftsCancelBtn := drafts[draftsCancelAt : draftsCancelAt+strings.Index(drafts[draftsCancelAt:], "</button>")]
+	if paths := strings.Count(draftsCancelBtn, "<path"); paths != 1 {
+		t.Fatalf("drafts cancel glyph has %d paths, want a single dash: %s", paths, draftsCancelBtn)
 	}
 	if strings.Contains(rr.Body.String(), "Request send") {
 		t.Fatalf("drafts list should not offer request-send to the UI user")
