@@ -1,0 +1,46 @@
+# Build-from-source single-container deployment (see CONTRIBUTING.md for the
+# toolchain). For a pull-and-run quickstart using the prebuilt
+# ghcr.io/dellarb/mailmoose image, see the README.
+#
+# Direct SMTP (MX) ingress is configured in the UI, not with environment
+# variables: sign in as the system administrator and set Admin -> MX receiver to
+# Included (this deployment runs the receiver on :2525) or Remote (a separate
+# receiver). Host port 25 is commented out by default: uncomment the :25 mapping
+# only when this deployment is an Included MX receiver reached from the public
+# internet. Leave it commented if you receive mail only through a webhook
+# provider (Mailgun, Cloudflare Email Routing, Resend).
+#
+# Project name pinned explicitly. Without this, Compose derives it from the
+# directory basename, so a checkout whose parent directory is also named
+# "repo" would collide with any sibling project and make each project see the
+# other's containers as orphans, tearing them down with `--remove-orphans`.
+name: mailmoose
+
+services:
+  mailmoose:
+    container_name: mailmoose
+    image: mailmoose:latest
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # System administrator credentials: when set in .env they are authoritative
+    # and rotate the stored login on restart. Prefer a Docker secret by adding an
+    # `environment:` block with ADMIN_PASSWORD_FILE and a `secrets:` entry below.
+    # MX receiver settings are configured in Admin -> MX receiver, not here.
+    volumes:
+      - ./data:/data
+    ports:
+      - "0.0.0.0:8081:8081"
+      # Dedicated inbound webhook listener (:8082). This is the receiver the
+      # Cloudflare Worker and the Microsoft push subscription post to (via
+      # DEDICATED_RECEIVER_URL), and it is the only listener that serves the
+      # /internal/ingest/* connector. It must stay published for any provider
+      # webhook to reach the app: the front end forwards to a host port, so the
+      # mapping cannot depend on the container's address, which changes on
+      # every recreate.
+      - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
+      # :25 = direct SMTP when using this as an Included MX receiver (the edge
+      # listens on :2525 inside the container). Uncomment for Included MX.
+      # Upgrading an existing Included MX installation? Retain this mapping;
+      # removing it stops incoming SMTP mail even if Included remains enabled.
+      # - "0.0.0.0:25:2525"

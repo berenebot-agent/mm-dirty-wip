@@ -1,0 +1,1683 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/timezone"
+)
+
+type AttachmentInput struct {
+	Filename, ContentType, ContentID string
+	Size                             int64
+	PartIndex                        int
+}
+type InboundRecord struct {
+	Inbox                                           model.Inbox
+	Provider, ProviderDeliveryID, ProviderMessageID string
+	// Source is the human label the activity log shows for where the message was
+	// received (for example a concrete Antler receiver or a webhook provider
+	// name). It is snapshotted on the inbound_delivery_log row.
+	Source            string
+	EnvelopeRecipient string
+	// EnvelopeFrom is the transport-supplied envelope sender. It is persisted
+	// verbatim (bounded by the ingest layer) and is empty when the transport
+	// supplied none; it is never inferred from the MIME From header.
+	EnvelopeFrom                 string
+	RFCMessageID, InReplyTo      string
+	References                   []string
+	From                         model.Address
+	To, CC, EnvelopeTo           []string
+	Subject, Text, HTML, RawPath string
+	SizeBytes                    int64
+	ReceivedAt                   time.Time
+	Attachments                  []AttachmentInput
+	// Spam is the local auth-policy disposition for MX mail. SpamReason is the
+	// bounded reason and AuthResults is the bounded normalized evidence. All
+	// three are empty/false for provider webhook mail.
+	Spam        bool
+	SpamReason  string
+	AuthResults string
+	// DeliveryFingerprint, when set, is the versioned MX retry identity. It is
+	// recorded as a durable receipt in the same transaction so a retry after
+	// the message is deleted still deduplicates. Empty for webhook providers,
+	// which rely on provider_delivery_id alone. ReceiptTTL overrides the default
+	// receipt retention when non-zero.
+	DeliveryFingerprint string
+	ReceiptTTL          time.Duration
+}
+type OutboundRecord struct {
+	Inbox                                                model.Inbox
+	Provider, ProviderMessageID, RFCMessageID, InReplyTo string
+	References                                           []string
+	From                                                 model.Address
+	// SendingDomainID is the domain whose sending configuration was used to
+	// enqueue this message. It is the alias's own domain for a send-as-alias,
+	// and may differ from the inbox's domain. Empty falls back to the inbox
+	// domain at delivery time.
+	SendingDomainID              string
+	To, CC, BCC                  []string
+	Subject, Text, HTML, RawPath string
+	SizeBytes                    int64
+	SentAt                       time.Time
+	ThreadID                     string
+	IdemKey                      string
+	LastError                    string
+	DraftID                      string
+	// ClientLabel/ClientID snapshot the credential that enqueued the message.
+	ClientLabel, ClientID string
+	Attachments           []AttachmentInput
+	// SendRequestID, when set, is the draft send request being authorized by
+	// this send. CommitOutbound claims it atomically and records the decision.
+	SendRequestID    string
+	DecisionActor    string
+	DecisionActorID  string
+	DecisionMethod   string
+	DecisionFeedback string
+	// NewSendRequest, when set, creates a draft send request in the same
+	// transaction that enqueues this message. It is used to queue the external
+	// approval email atomically with the request that authorizes it. The draft
+	// is frozen but not consumed.
+	NewSendRequest *SendRequestInsert
+	// Internal marks workflow mail (the approval-request email) that is queued
+	// in the inbox but hidden from every mailbox read surface, because it
+	// carries the one-time approval token.
+	Internal bool
+}
+
+func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Message, model.Event, bool, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	defer tx.Rollback()
+	recipient := normalizeAddress(r.EnvelopeRecipient)
+	var existing string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.Inbox.AccountID, r.Provider, recipient, r.ProviderDeliveryID).Scan(&existing)
+	if err == nil {
+		m, e := model.Message{}, model.Event{}
+		_ = tx.Rollback()
+		m, err = s.GetMessageByID(ctx, r.Inbox.AccountID, existing)
+		return m, e, true, err
+	}
+	if err != sql.ErrNoRows {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var quota, used int64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=?`, r.Inbox.AccountID).Scan(&quota, &used); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if quota > 0 && used+r.SizeBytes > quota {
+		return model.Message{}, model.Event{}, false, ErrQuota
+	}
+	// Per-inbox cap, layered on the account cap. inboxUsedTx initializes a
+	// NULL counter from a one-time SUM before comparing.
+	inboxUsed, err := inboxUsedTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var inboxQuota sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes FROM inboxes WHERE id=? AND account_id=?`, r.Inbox.ID, r.Inbox.AccountID).Scan(&inboxQuota); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if inboxQuota.Valid && inboxQuota.Int64 > 0 && inboxUsed+r.SizeBytes > inboxQuota.Int64 {
+		return model.Message{}, model.Event{}, false, ErrQuota
+	}
+	threadID, err := findThreadTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, r.InReplyTo, r.References)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	now := nowText()
+	if threadID == "" {
+		threadID = idgen.New("thr")
+		if _, err = tx.ExecContext(ctx, `INSERT INTO threads(id,account_id,inbox_id,subject,created_at,updated_at) VALUES(?,?,?,?,?,?)`, threadID, r.Inbox.AccountID, r.Inbox.ID, r.Subject, now, now); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
+	}
+	id := idgen.New("msg")
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), recipient, strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if err := cacheLocalPreview(ctx, tx, id, r.Text, r.HTML); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var names []string
+	for _, a := range r.Attachments {
+		aid := idgen.New("att")
+		if _, err = tx.ExecContext(ctx, `INSERT INTO attachments(id,message_id,filename,content_type,size_bytes,part_index,content_id) VALUES(?,?,?,?,?,?,?)`, aid, id, a.Filename, a.ContentType, a.Size, a.PartIndex, a.ContentID); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
+		names = append(names, a.Filename)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, r.Subject, r.From.Address, strings.Join(append(append([]string{}, r.To...), r.CC...), " "), r.Text+" "+stripHTMLText(r.HTML), strings.Join(names, " ")); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.AccountID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.ID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider_delivery_id,provider_message_id,message_id,from_address,to_json,subject,size_bytes,status,created_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.Inbox.AccountID, r.Inbox.DomainID, r.Inbox.ID, r.Provider, nullString(r.ProviderDeliveryID), r.ProviderMessageID, id, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, "received", now, r.Source); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if err = pruneInboundDeliveryLogTx(ctx, tx, r.Inbox.AccountID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.received", id, receivedPayload(id, r.Inbox.ID, threadID, r.Spam, r.SpamReason, r.AuthResults))
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if strings.TrimSpace(r.DeliveryFingerprint) != "" {
+		disp := string(DispositionStored)
+		if r.Spam {
+			disp = string(DispositionSpam)
+		}
+		reason := r.SpamReason
+		if reason == "" {
+			reason = "accepted"
+		}
+		if err = recordMXReceiptTx(ctx, tx, MXReceipt{
+			AccountID: r.Inbox.AccountID, Provider: r.Provider, EnvelopeRecipient: r.EnvelopeRecipient,
+			DeliveryFingerprint: r.DeliveryFingerprint, Disposition: disp, MessageID: id, Reason: reason,
+			ExpiresAt: receiptExpiry(r.ReceiptTTL),
+		}); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
+	}
+	m, err := s.getMessageTx(ctx, tx, r.Inbox.AccountID, id)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		// The commit may have reached disk before reporting an error. Only
+		// treat it as failed if the row is genuinely absent.
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), r.Inbox.AccountID, id); gerr == nil {
+			return existing, ev, false, nil
+		}
+		return model.Message{}, model.Event{}, false, err
+	}
+	return m, ev, false, nil
+}
+
+const maxInboundDeliveryLogPerAccount = 5000
+const inboundDeliveryLogMaxAge = 30 * 24 * time.Hour
+
+func pruneInboundDeliveryLogTx(ctx context.Context, tx *sql.Tx, accountID string) error {
+	cutoff := time.Now().UTC().Add(-inboundDeliveryLogMaxAge)
+	_, err := tx.ExecContext(ctx, `DELETE FROM inbound_delivery_log
+		WHERE account_id=?
+		  AND (id NOT IN (SELECT id FROM inbound_delivery_log WHERE account_id=? ORDER BY id DESC LIMIT ?)
+		       OR created_at < ?)`, accountID, accountID, maxInboundDeliveryLogPerAccount, timeText(cutoff))
+	return err
+}
+
+func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply string, refs []string) (string, error) {
+	ids := make([]string, 0, len(refs)+1)
+	if strings.TrimSpace(inReply) != "" {
+		ids = append(ids, strings.TrimSpace(inReply))
+	}
+	for _, r := range refs {
+		if strings.TrimSpace(r) != "" {
+			ids = append(ids, strings.TrimSpace(r))
+		}
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	// Match against both the stored RFC Message-ID and the provider's returned
+	// wire id. Providers that assign their own Message-ID (Brevo, Mailgun)
+	// return it as provider_message_id; the provider id is promoted to
+	// rfc_message_id on send, but the fallback also threads replies to rows
+	// persisted before that promotion existed.
+	q := `SELECT thread_id FROM messages WHERE account_id=? AND inbox_id=? AND (rfc_message_id IN (` + placeholders(len(ids)) + `) OR provider_message_id IN (` + placeholders(len(ids)) + `)) ORDER BY created_at DESC LIMIT 1`
+	args := make([]any, 0, 2+2*len(ids))
+	args = append(args, accountID, inboxID)
+	for _, v := range ids {
+		args = append(args, v)
+	}
+	for _, v := range ids {
+		args = append(args, v)
+	}
+	var thread string
+	err := tx.QueryRowContext(ctx, q, args...).Scan(&thread)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return thread, err
+}
+
+func firstJSON(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "{}"
+	}
+	return v
+}
+
+// receivedPayload builds the message.received event payload, including the
+// Spam flag and auth evidence so durable consumers and Relay can opt out of
+// automated processing for Spam (Relay rebuilds its own payload from the
+// message, so the flag is also persisted on the row).
+func receivedPayload(messageID, inboxID, threadID string, spam bool, reason, authResults string) map[string]any {
+	p := map[string]any{"message_id": messageID, "inbox_id": inboxID, "thread_id": threadID}
+	if spam {
+		p["is_spam"] = true
+		p["spam_reason"] = reason
+	}
+	if strings.TrimSpace(authResults) != "" && authResults != "{}" {
+		p["auth_results"] = json.RawMessage(authResults)
+	}
+	return p
+}
+
+func insertEventTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, typ, entity string, payload map[string]any) (model.Event, error) {
+	now := nowText()
+	res, err := tx.ExecContext(ctx, `INSERT INTO events(account_id,inbox_id,type,entity_id,payload_json,created_at) VALUES(?,?,?,?,?,?)`, accountID, nullString(inboxID), typ, entity, jsonString(payload), now)
+	if err != nil {
+		return model.Event{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return model.Event{}, err
+	}
+	return model.Event{ID: id, Cursor: fmt.Sprintf("evt_%d", id), AccountID: accountID, InboxID: inboxID, Type: typ, EntityID: entity, Payload: payload, CreatedAt: parseTime(now)}, nil
+}
+func stripHTMLText(v string) string {
+	r := strings.NewReplacer("<br>", " ", "<br/>", " ", "<br />", " ", "</p>", " ", "</div>", " ")
+	v = r.Replace(v)
+	var b strings.Builder
+	inside := false
+	for _, ch := range v {
+		if ch == '<' {
+			inside = true
+			continue
+		}
+		if ch == '>' {
+			inside = false
+			continue
+		}
+		if !inside {
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
+}
+
+func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
+	var m model.Message
+	var refs, to, cc, bcc, env, labels, created string
+	var received, sent, deleted, deliverDue sql.NullString
+	var read int
+	var has, internal, spam int
+	var authResults, envelopeFrom, envelopeRecipient, deliveriesJSON string
+	var mailboxID sql.NullString
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON, &mailboxID, &m.FolderPath, &m.Snippet)
+	if err != nil {
+		return m, err
+	}
+	m.MailboxID = mailboxID.String
+	m.EnvelopeFrom = envelopeFrom
+	m.EnvelopeRecipient = envelopeRecipient
+	m.Internal = internal != 0
+	m.Spam = spam != 0
+	if strings.TrimSpace(authResults) != "" && authResults != "{}" {
+		m.AuthResults = json.RawMessage(authResults)
+	}
+	m.References = decodeStrings(refs)
+	m.To = decodeStrings(to)
+	m.CC = decodeStrings(cc)
+	m.BCC = decodeStrings(bcc)
+	m.EnvelopeTo = decodeStrings(env)
+	m.Read = read != 0
+	m.DeletedAt = nullableTime(deleted)
+	m.DeliveryActionDueAt = nullableTime(deliverDue)
+	m.ReceivedAt = nullableTime(received)
+	m.SentAt = nullableTime(sent)
+	m.CreatedAt = parseTime(created)
+	m.HasAttachments = has != 0
+	m.Labels = decodeStrings(labels)
+	m.Deliveries = decodeMessageDeliveries(deliveriesJSON)
+	sort.Slice(m.Labels, func(i, j int) bool {
+		return strings.ToLower(m.Labels[i]) < strings.ToLower(m.Labels[j])
+	})
+	return m, nil
+}
+
+// decodeMessageDeliveries parses the per-connector delivery history embedded in
+// a message row. A malformed or empty value yields no deliveries rather than an
+// error: delivery history is supplementary to the message.
+func decodeMessageDeliveries(raw string) []model.MessageDelivery {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var rows []struct {
+		ClientID    string `json:"client_id"`
+		DeliveredAt string `json:"delivered_at"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	out := make([]model.MessageDelivery, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, model.MessageDelivery{ClientID: r.ClientID, DeliveredAt: parseTime(r.DeliveredAt)})
+	}
+	return out
+}
+
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]'),m.mailbox_id,COALESCE((SELECT f.path FROM inbox_folders f WHERE f.id=m.mailbox_id),''),m.snippet`
+
+func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
+	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+// getMessageTx reads a message on the caller's transaction, so a write path can
+// return the exact committed row without a fallible read after commit.
+func (s *Store) getMessageTx(ctx context.Context, tx *sql.Tx, accountID, id string) (model.Message, error) {
+	m, err := scanMessage(tx.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+// MessageAccountID resolves the account id for a message id. Used by the
+// outbox worker, which claims messages without a principal.
+func (s *Store) MessageAccountID(ctx context.Context, id string) (string, error) {
+	var accountID string
+	err := s.read.QueryRowContext(ctx, `SELECT account_id FROM messages WHERE id=?`, id).Scan(&accountID)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return accountID, err
+}
+func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (model.Message, error) {
+	m, err := s.GetMessageByID(ctx, p.AccountID, id)
+	if err != nil {
+		return m, err
+	}
+	if !p.CanRead(m.InboxID) || m.Internal {
+		return model.Message{}, ErrForbidden
+	}
+	return m, nil
+}
+
+type MessageFilter struct {
+	InboxID, ThreadID, From, To, Direction string
+	Unread, HasAttachment                  *bool
+	// Labels, when non-empty, restricts results to messages carrying every
+	// listed label (AND). Matching is case-insensitive.
+	Labels []string
+	// SpamOnly lists only Spam messages; IncludeSpam includes both. The default
+	// (both false) excludes Spam from ordinary reads. The explicit Spam view
+	// sets SpamOnly.
+	SpamOnly    bool
+	IncludeSpam bool
+	// Trashed selects the Trash view: only messages with deleted_at set. The
+	// default (false) excludes trashed messages from ordinary reads.
+	Trashed bool
+	// MailboxID restricts results to one folder within the inbox. An empty value
+	// (with FolderScoped false) matches any folder, preserving the pre-folder
+	// behaviour for callers that do not select a folder explicitly. The system
+	// Inbox is addressable either as the empty string (the implicit default) or
+	// by its own folder id; both name the same set.
+	MailboxID string
+	// FolderScoped, when true, restricts results to exactly MailboxID. This is
+	// how a named folder view (a custom folder, Sent, Trash, Spam, Archive) and
+	// the Inbox view that excludes messages moved into other folders are
+	// expressed: MailboxID="" scoped means the implicit system Inbox. When false
+	// (the default), MailboxID is an optional extra restriction and an empty
+	// value matches every folder, so existing unfiled reads keep their meaning.
+	FolderScoped bool
+	// InboxRole, when set, restricts the Inbox view to messages that are in the
+	// system Inbox bucket: mailbox_id IS NULL (unfiled default) or names a folder
+	// whose role equals InboxRole. It is the filter the mailbox Inbox tab sets so
+	// messages the assistant moved to a custom or archive folder no longer appear
+	// there, while mail filed into an explicit Inbox-role folder still does. It is
+	// only meaningful with FolderScoped=true and an empty MailboxID.
+	InboxRole string
+	Before    string
+	Limit     int
+}
+
+// messageFilterWhere builds the shared WHERE predicate (beginning with " AND ")
+// and bound args for a MessageFilter, minus the leading `m.account_id=?`. Every
+// read that lists or counts messages uses it, so the list, the total count and
+// the bulk-by-scope enumeration can never describe a different set. It enforces
+// the per-mailbox Read role for an explicit InboxID and scopes an unscoped read
+// to the caller's readable inboxes; a non-admin with no readable inboxes yields
+// a match-nothing predicate rather than an error.
+func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f MessageFilter) (string, []any, error) {
+	q := ` AND m.internal=0`
+	var args []any
+	q += trashClause("m", f.Trashed)
+	q += spamClause("m", f.SpamOnly, f.IncludeSpam)
+	q += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
+	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
+	if f.InboxID != "" {
+		if !p.CanRead(f.InboxID) {
+			return "", nil, ErrForbidden
+		}
+		q += ` AND m.inbox_id=?`
+		args = append(args, f.InboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			q += ` AND 1=0`
+		} else {
+			q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+			for _, id := range ids {
+				args = append(args, id)
+			}
+		}
+	}
+	if f.ThreadID != "" {
+		q += ` AND m.thread_id=?`
+		args = append(args, f.ThreadID)
+	}
+	if f.Direction != "" {
+		q += ` AND m.direction=?`
+		args = append(args, f.Direction)
+	}
+	if f.From != "" {
+		q += ` AND m.from_address LIKE ?`
+		args = append(args, "%"+normalizeAddress(f.From)+"%")
+	}
+	if f.To != "" {
+		q += ` AND (m.to_json LIKE ? OR m.cc_json LIKE ?)`
+		like := "%" + normalizeAddress(f.To) + "%"
+		args = append(args, like, like)
+	}
+	if f.Unread != nil {
+		q += ` AND m.is_read=?`
+		args = append(args, boolInt(!*f.Unread))
+	}
+	if f.HasAttachment != nil {
+		if *f.HasAttachment {
+			q += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		} else {
+			q += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		}
+	}
+	for _, label := range f.Labels {
+		if label = strings.TrimSpace(label); label == "" {
+			continue
+		}
+		q += ` AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id=m.id AND ml.label=?)`
+		args = append(args, label)
+	}
+	if f.Before != "" {
+		var beforeCreated string
+		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		if err == nil {
+			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
+			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+		} else if err != sql.ErrNoRows {
+			return "", nil, err
+		}
+	}
+	return q, args, nil
+}
+
+func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	q := messageSelect + ` FROM messages m WHERE m.account_id=?` + where
+	limit := f.Limit
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// CountMessages returns the exact number of messages matching a filter, without
+// the list page cap. The mailbox uses it for the "select all N" total, and the
+// bulk-by-scope path relies on it and AllMessageIDs agreeing on the same set.
+func (s *Store) CountMessages(ctx context.Context, p model.Principal, f MessageFilter) (int, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return 0, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.account_id=?`+where, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// AllMessageIDs returns the id of every message matching a filter, newest first
+// and deliberately uncapped. It backs bulk actions scoped to "all N" in a
+// folder: ListMessages clamps to PageSizeMaxList, so using it to enumerate a
+// bulk operation would silently skip messages beyond the cap. Callers apply the
+// action one id at a time and enforce the write role themselves.
+func (s *Store) AllMessageIDs(ctx context.Context, p model.Principal, f MessageFilter) ([]string, error) {
+	return s.AllMessageIDsLimit(ctx, p, f, 0)
+}
+
+// AllMessageIDsLimit returns at most limit matching message IDs when limit is
+// positive; zero preserves AllMessageIDs' uncapped behavior. It supports
+// bounded bulk operations that need to detect whether more work remains by
+// asking for cap+1 rows.
+func (s *Store) AllMessageIDsLimit(ctx context.Context, p model.Principal, f MessageFilter, limit int) ([]string, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	query := `SELECT m.id FROM messages m WHERE m.account_id=?` + where + ` ORDER BY m.created_at DESC, m.rowid DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.read.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// CountSpam returns the number of Spam messages in an inbox, used by the
+// mailbox Spam tab count.
+func (s *Store) CountSpam(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	if !p.CanRead(inboxID) {
+		return 0, ErrForbidden
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND deleted_at IS NULL AND is_spam=1`, p.AccountID, inboxID).Scan(&n)
+	return n, err
+}
+
+func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
+	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND deleted_at IS NULL AND direction='inbound' AND is_spam=0`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return map[string]int{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY inbox_id`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var inboxID string
+		var n int
+		if err = rows.Scan(&inboxID, &n); err != nil {
+			return nil, err
+		}
+		out[inboxID] = n
+	}
+	return out, rows.Err()
+}
+
+// MessageSizesByInbox returns the stored message bytes for each inbox.
+func (s *Store) MessageSizesByInbox(ctx context.Context, p model.Principal) (map[string]int64, error) {
+	q := `SELECT inbox_id,COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=? AND internal=0`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return map[string]int64{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY inbox_id`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var inboxID string
+		var size int64
+		if err = rows.Scan(&inboxID, &size); err != nil {
+			return nil, err
+		}
+		out[inboxID] = size
+	}
+	return out, rows.Err()
+}
+
+// UpdateMessageState sets a message's read flag. It requires Assistant or Owner
+// on the message's inbox. A change to the read flag commits a
+// message.state_changed event returning the old/new state so the UI can update
+// unread counts live; an unchanged or nil read is a no-op returning no event.
+func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read *bool) (*model.Event, error) {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return nil, ErrForbidden
+	}
+	if read == nil || m.Read == *read {
+		return nil, nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=? AND account_id=?`, boolInt(*read), id, p.AccountID); err != nil {
+		return nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageStateChanged, id, map[string]any{
+		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+		"old": m.Read, "new": *read, "read": *read,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &ev, nil
+}
+
+// ReplaceMessageLabels sets the exact label set on a message. It requires
+// Assistant or Owner on the message's inbox. Unknown labels are created
+// implicitly (there is no catalogue); an empty slice clears all labels. It
+// returns the durable message.labels_changed event.
+func (s *Store) ReplaceMessageLabels(ctx context.Context, p model.Principal, id string, labels []string) (model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Event{}, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Event{}, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Event{}, ErrForbidden
+	}
+	seen := map[string]bool{}
+	cleaned := make([]string, 0, len(labels))
+	for _, raw := range labels {
+		v, ok := model.NormalizeLabel(raw)
+		if !ok {
+			return model.Event{}, fmt.Errorf("invalid label: %q", raw)
+		}
+		key := strings.ToLower(v)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		cleaned = append(cleaned, v)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_labels WHERE message_id=?`, id); err != nil {
+		return model.Event{}, err
+	}
+	now := nowText()
+	for _, v := range cleaned {
+		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO message_labels(message_id,label,created_at) VALUES(?,?,?)`, id, v, now); err != nil {
+			return model.Event{}, err
+		}
+	}
+	sort.Strings(cleaned)
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageLabelsChanged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "labels": cleaned})
+	if err != nil {
+		return model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.Event{}, err
+	}
+	return ev, nil
+}
+
+// ListLabels returns the distinct labels visible to the principal, ordered
+// case-insensitively. There is no catalogue; the set is derived from usage.
+func (s *Store) ListLabels(ctx context.Context, p model.Principal) ([]string, error) {
+	q := `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.internal=0 AND m.deleted_at IS NULL`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []string{}, nil
+		}
+		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` ORDER BY ml.label COLLATE NOCASE`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err = rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// ListInboxLabels returns the distinct labels carried by an inbox's visible
+// messages, ordered case-insensitively. Used by the mailbox sidebar.
+func (s *Store) ListInboxLabels(ctx context.Context, p model.Principal, inboxID string) ([]string, error) {
+	if !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NULL ORDER BY ml.label COLLATE NOCASE`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err = rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// InboxLabelUnreadCounts returns the number of unread inbound, non-spam
+// messages carrying each label in an inbox, keyed by label. Used by the
+// mailbox sidebar label badges.
+func (s *Store) InboxLabelUnreadCounts(ctx context.Context, p model.Principal, inboxID string) (map[string]int, error) {
+	if !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT ml.label,COUNT(*) FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NULL AND m.is_read=0 AND m.is_spam=0 AND m.direction='inbound' GROUP BY ml.label`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var label string
+		var n int
+		if err = rows.Scan(&label, &n); err != nil {
+			return nil, err
+		}
+		out[label] = n
+	}
+	return out, rows.Err()
+}
+
+// TrashMessage soft-deletes a message: it sets deleted_at so the message is
+// hidden from every ordinary read surface but retains its row, raw MIME, FTS
+// entry, attachments and storage accounting until it is purged. It requires
+// Assistant or Owner on the message's inbox. It returns the durable
+// message.trashed event. A message that is already trashed is a no-op that
+// returns the current message and no event.
+func (s *Store) TrashMessage(ctx context.Context, p model.Principal, id string) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.DeletedAt != nil {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=? WHERE id=? AND account_id=?`, timeText(now), id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageTrashed, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.DeletedAt = timePtr(now)
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
+// RestoreMessage clears deleted_at, returning a trashed message to the mailbox.
+// It requires Assistant or Owner on the message's inbox. A message that is not
+// trashed is a no-op that returns the current message and no event.
+func (s *Store) RestoreMessage(ctx context.Context, p model.Principal, id string) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.DeletedAt == nil {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageRestored, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.DeletedAt = nil
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
+// PurgeMessage permanently erases a trashed message: it removes the row, FTS
+// entry and stored bytes, and returns the raw MIME path (and size) so the
+// caller can unlink the file. It requires Assistant or Owner on the message's
+// inbox: an Assistant may permanently delete a trashed message, the same as an
+// Owner (the only difference between the roles is sending). A Read principal is
+// refused. Only a trashed message can be purged; an ordinary message returns
+// ErrConflict and must be trashed first. It returns the durable message.purged
+// event.
+func (s *Store) PurgeMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return "", 0, model.Event{}, ErrForbidden
+	}
+	if m.Internal {
+		return "", 0, model.Event{}, ErrNotFound
+	}
+	if m.DeletedAt == nil {
+		return "", 0, model.Event{}, ErrConflict
+	}
+	if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessagePurged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	return m.RawPath, m.SizeBytes, ev, nil
+}
+
+// purgeMessageTx removes a message row, its FTS entry and its stored bytes
+// within the caller's transaction. It assumes authorization already happened.
+func purgeMessageTx(ctx context.Context, tx *sql.Tx, accountID string, m model.Message) error {
+	// Initialize the inbox counter before the row is deleted, so the
+	// post-delete decrement is applied to a correctly-summed baseline and a
+	// NULL counter is never clobbered to zero.
+	if _, err := inboxUsedTx(ctx, tx, accountID, m.InboxID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, m.ID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id=? AND account_id=?`, m.ID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	// Refund both counters through the shared helper.
+	return adjustStorageTx(ctx, tx, accountID, m.InboxID, -m.SizeBytes)
+}
+
+// EmptyTrash permanently purges every trashed message in an inbox and returns
+// the raw MIME paths to unlink. It requires Assistant or Owner on the inbox (a
+// Read principal is refused); the only difference between Assistant and Owner is
+// sending. The purge is a single transaction; events are emitted per purged
+// message.
+func (s *Store) EmptyTrash(ctx context.Context, p model.Principal, inboxID string) ([]string, []model.Event, error) {
+	if !p.CanAssist(inboxID) {
+		return nil, nil, ErrForbidden
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NOT NULL`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var victims []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		victims = append(victims, m)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+	paths := make([]string, 0, len(victims))
+	events := make([]model.Event, 0, len(victims))
+	for _, m := range victims {
+		if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
+			return nil, nil, err
+		}
+		ev, err := insertEventTx(ctx, tx, p.AccountID, inboxID, model.EventMessagePurged, m.ID, map[string]any{"message_id": m.ID, "inbox_id": inboxID, "thread_id": m.ThreadID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if m.RawPath != "" {
+			paths = append(paths, m.RawPath)
+		}
+		events = append(events, ev)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return paths, events, nil
+}
+
+// PurgeExpiredTrash permanently purges trashed messages whose deleted_at is
+// older than the owning mailbox's effective trash retention. The effective
+// window is the inbox's trash_retention_days override when set, otherwise the
+// account's trash_retention_days. A value of 0 (or NULL) keeps trashed mail
+// until purged explicitly. It returns the raw MIME paths to unlink; events are
+// emitted per purged message.
+func (s *Store) PurgeExpiredTrash(ctx context.Context) ([]string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m JOIN accounts a ON a.id=m.account_id JOIN inboxes i ON i.id=m.inbox_id WHERE m.deleted_at IS NOT NULL AND COALESCE(i.trash_retention_days, a.trash_retention_days) > 0 AND m.deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || COALESCE(i.trash_retention_days, a.trash_retention_days) || ' days')`)
+	if err != nil {
+		return nil, err
+	}
+	var victims []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		victims = append(victims, m)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	paths := make([]string, 0, len(victims))
+	for _, m := range victims {
+		if err = purgeMessageTx(ctx, tx, m.AccountID, m); err != nil {
+			return nil, err
+		}
+		if _, err = insertEventTx(ctx, tx, m.AccountID, m.InboxID, model.EventMessagePurged, m.ID, map[string]any{"message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "reason": "retention"}); err != nil {
+			return nil, err
+		}
+		if m.RawPath != "" {
+			paths = append(paths, m.RawPath)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// MessageRawPaths returns every non-empty raw MIME path still referenced by a
+// message row. The orphan sweep reads it as one snapshot and compares it against
+// the files under the messages tree, so a file with no referencing row can be
+// identified without one query per file.
+func (s *Store) MessageRawPaths(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT raw_path FROM messages WHERE raw_path<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var path string
+		if err = rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out[path] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// CountTrash returns the number of trashed messages in an inbox, used by the
+// mailbox Trash tab count.
+func (s *Store) CountTrash(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	if !p.CanRead(inboxID) {
+		return 0, ErrForbidden
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND deleted_at IS NOT NULL`, p.AccountID, inboxID).Scan(&n)
+	return n, err
+}
+
+// GetTrashRetention returns the account's trash retention in days (0 =
+// never auto-purge).
+func (s *Store) GetTrashRetention(ctx context.Context, p model.Principal) (int, error) {
+	var days int
+	err := s.read.QueryRowContext(ctx, `SELECT trash_retention_days FROM accounts WHERE id=?`, p.AccountID).Scan(&days)
+	if err == sql.ErrNoRows {
+		return 0, ErrNotFound
+	}
+	return days, err
+}
+
+// SetTrashRetention sets the account's trash retention in days. days must be 0
+// (never auto-purge) or positive. Callers enforce Owner/Admin authorization.
+func (s *Store) SetTrashRetention(ctx context.Context, p model.Principal, days int) error {
+	if days < 0 {
+		return fmt.Errorf("trash retention must be zero or positive")
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET trash_retention_days=? WHERE id=?`, days, p.AccountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteMessage permanently removes a message without requiring it to be
+// trashed first. It is the low-level administrative primitive (and is used by
+// account/domain purge and by tests); the public API moves messages to Trash
+// via TrashMessage and only erases them through PurgeMessage. It requires
+// Assistant or Owner on the message's inbox and emits message.purged.
+func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return "", 0, model.Event{}, ErrForbidden
+	}
+	if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessagePurged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	return m.RawPath, m.SizeBytes, ev, nil
+}
+
+// GetAccountTimezone returns the account's default display time zone name, or
+// "" when unset (meaning UTC). The value is an IANA name.
+func (s *Store) GetAccountTimezone(ctx context.Context, p model.Principal) (string, error) {
+	var tz string
+	err := s.read.QueryRowContext(ctx, `SELECT timezone FROM accounts WHERE id=?`, p.AccountID).Scan(&tz)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return tz, err
+}
+
+// SetAccountTimezone sets the account's default display time zone. An empty
+// string clears it to UTC. Callers enforce Owner/Admin authorization.
+func (s *Store) SetAccountTimezone(ctx context.Context, p model.Principal, tz string) error {
+	if err := timezone.Validate(tz); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET timezone=? WHERE id=?`, tz, p.AccountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUserTimezone sets the calling user's display time zone override. An empty
+// string clears the override so the account default applies.
+func (s *Store) SetUserTimezone(ctx context.Context, p model.Principal, tz string) error {
+	if err := timezone.Validate(tz); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE users SET timezone=? WHERE id=?`, tz, p.UserID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetMessageSpam moves a message between Spam and non-Spam and commits the
+// durable state-change event with old/new state. It requires Assistant or Owner
+// on the message's inbox. A no-op transition still returns the current message
+// with no event.
+func (s *Store) SetMessageSpam(ctx context.Context, p model.Principal, id string, spam bool) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.Spam == spam {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	reason := ""
+	if spam {
+		reason = "manual"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=? WHERE id=? AND account_id=?`, boolInt(spam), reason, id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageSpamChanged, id, map[string]any{
+		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+		"old": m.Spam, "new": spam, "is_spam": spam,
+	})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.Spam = spam
+	m.SpamReason = reason
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
+func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageID string) ([]model.Attachment, error) {
+	m, err := s.GetMessage(ctx, p, messageID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE message_id=? ORDER BY part_index`, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Attachment{}
+	for rows.Next() {
+		var a model.Attachment
+		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListAttachmentsInternal lists a message's attachments without a principal.
+func (s *Store) ListAttachmentsInternal(ctx context.Context, accountID, messageID string) ([]model.Attachment, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT a.id,a.message_id,a.filename,a.content_type,a.size_bytes,a.part_index,a.content_id FROM attachments a JOIN messages m ON m.id=a.message_id AND m.account_id=? WHERE a.message_id=? ORDER BY a.part_index`, accountID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Attachment{}
+	for rows.Next() {
+		var a model.Attachment
+		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAttachment(ctx context.Context, p model.Principal, id string) (model.Attachment, model.Message, error) {
+	var a model.Attachment
+	err := s.read.QueryRowContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE id=?`, id).Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID)
+	if err == sql.ErrNoRows {
+		return a, model.Message{}, ErrNotFound
+	}
+	if err != nil {
+		return a, model.Message{}, err
+	}
+	m, err := s.GetMessage(ctx, p, a.MessageID)
+	return a, m, err
+}
+
+// ListThreads returns threads with their non-internal, non-Spam message count
+// and latest activity. Spam-only threads are suppressed (the LEFT JOIN count
+// excludes them and the thread is dropped when it has no visible message);
+// hidden Spam must not bump normal thread ordering or choose a visible subject.
+func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Thread, error) {
+	return s.ListThreadsBefore(ctx, p, inboxID, limit, "")
+}
+
+// ListThreadsBefore is ListThreads with a keyset cursor: beforeID, when
+// non-empty, returns threads strictly after that thread's
+// (last_message_at, id) ordering tuple, so a merged account-wide listing can
+// resume one source without losing a thread that sorts below a global key.
+func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID string) ([]model.Thread, error) {
+	if inboxID != "" && !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		q += ` AND t.inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Thread{}, nil
+		}
+		q += ` AND t.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY t.id HAVING count(m.id) > 0`
+	if strings.TrimSpace(beforeID) != "" {
+		var last sql.NullString
+		if cerr := s.read.QueryRowContext(ctx, `SELECT MAX(created_at) FROM messages WHERE thread_id=?`, beforeID).Scan(&last); cerr != nil {
+			return nil, cerr
+		}
+		cur := last.String
+		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		args = append(args, cur, cur, beforeID)
+	}
+	q += ` ORDER BY MAX(m.created_at) DESC, t.id DESC`
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	q += ` LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Thread{}
+	for rows.Next() {
+		var t model.Thread
+		var last string
+		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &last); err != nil {
+			return nil, err
+		}
+		t.LastMessageAt = parseTime(last)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// trashClause returns the SQL fragment that applies Trash visibility. The
+// ordinary read path (trashed=false) excludes trashed messages; the Trash view
+// (trashed=true) selects only them. alias is the messages table alias.
+func trashClause(alias string, trashed bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	if trashed {
+		return " AND " + prefix + "deleted_at IS NOT NULL"
+	}
+	return " AND " + prefix + "deleted_at IS NULL"
+}
+
+// spamClause returns the SQL fragment that applies the Spam visibility rule:
+// an explicit Spam view selects only Spam, an "include" read selects
+// everything, and the ordinary path excludes Spam. alias is the messages table
+// alias (or empty).
+func spamClause(alias string, spamOnly, includeSpam bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	switch {
+	case spamOnly:
+		return " AND " + prefix + "is_spam=1"
+	case includeSpam:
+		return ""
+	default:
+		return " AND " + prefix + "is_spam=0"
+	}
+}
+
+// folderClause returns the SQL fragment that applies folder (single-membership)
+// visibility to a message query. alias is the messages table alias.
+//
+// A message belongs to exactly one folder, recorded in messages.mailbox_id. The
+// system Inbox is the implicit default: mailbox_id is NULL for mail that has
+// never been filed, and an explicit Inbox folder row names the same bucket via
+// its role. This clause therefore treats NULL and the Inbox role as one bucket
+// when role is supplied.
+//
+//   - scoped with id="": the implicit Inbox only (mailbox_id IS NULL).
+//   - scoped with id set: exactly that folder id.
+//   - unscoped with id="": no restriction (every folder), the pre-folder default.
+//   - unscoped with id set: mailbox_id = id (an extra restriction on any read).
+//
+// role, when non-empty and id empty and scoped, widens the implicit Inbox bucket
+// to include any folder carrying that role: the Inbox view uses it so mail filed
+// into an explicit Inbox-role folder is still shown there.
+func folderClause(alias, id, role string, scoped bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	if id != "" {
+		return " AND " + prefix + "mailbox_id=?"
+	}
+	if scoped {
+		if role != "" {
+			return " AND (" + prefix + "mailbox_id IS NULL OR " + prefix + "mailbox_id IN (SELECT f.id FROM inbox_folders f WHERE f.inbox_id=" + prefix + "inbox_id AND f.role=?))"
+		}
+		return " AND " + prefix + "mailbox_id IS NULL"
+	}
+	return ""
+}
+
+// folderArgs returns the bound arguments (if any) that folderClause expects, so
+// the predicate and its parameters can never drift apart. They follow folderClause.
+func folderArgs(id, role string, scoped bool) []any {
+	if id != "" {
+		return []any{id}
+	}
+	if scoped && role != "" {
+		return []any{role}
+	}
+	return nil
+}
+
+// ErrInvalidSearchQuery reports a search query that cannot be expressed to the
+// full-text engine (for example one containing a NUL or other control byte).
+// It is client input, so it maps to a 400-class answer rather than a 500.
+var ErrInvalidSearchQuery = errors.New("invalid search query")
+
+// ftsQuery builds the FTS5 MATCH expression for a user-supplied query.
+//
+// Each whitespace-separated term is quoted, so the caller cannot inject FTS
+// operators. Control bytes are the one input that survives quoting (a NUL byte
+// inside the quoted term makes the driver reject the whole expression), and a
+// rejection there would surface as an unmapped store error — a 500 for what is
+// really bad client input. Control bytes are therefore dropped here, and a raw
+// NUL aborts the search so a hostile query degrades to "no matches" instead of
+// an error. The caller keeps the parameterised binding.
+func ftsQuery(q string) (string, error) {
+	if strings.ContainsRune(q, 0) {
+		return "", ErrInvalidSearchQuery
+	}
+	fields := strings.FieldsFunc(q, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.ReplaceAll(f, `"`, `""`)
+		out = append(out, `"`+f+`"`)
+	}
+	return strings.Join(out, " AND "), nil
+}
+
+type BlockedRecord struct {
+	AccountID, InboxID, Provider, ProviderDeliveryID string
+	// Source is the human label the activity log shows for where the message was
+	// received, mirroring InboundRecord.Source.
+	Source            string
+	EnvelopeRecipient string
+	From              model.Address
+	To                []string
+	Subject, Reason   string
+	SizeBytes         int64
+	ReceivedAt        time.Time
+}
+
+// CommitBlockedInbound records metadata for mail rejected by an inbox's
+// allowed-senders list. It deliberately writes no message row, no raw file, no
+// FTS entry and no event, so the blocked mail can never reach the inbox view,
+// the API or the relay connector.
+func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (model.BlockedMessage, bool, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	defer tx.Rollback()
+	recipient := normalizeAddress(r.EnvelopeRecipient)
+	var existing string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.AccountID, r.Provider, recipient, r.ProviderDeliveryID).Scan(&existing)
+	if err == nil {
+		_ = tx.Rollback()
+		m, e := s.GetBlockedMessage(ctx, r.AccountID, existing)
+		return m, true, e
+	}
+	if err != sql.ErrNoRows {
+		return model.BlockedMessage{}, false, err
+	}
+	id := idgen.New("blk")
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, recipient, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now, r.Source); err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	m, err := s.GetBlockedMessage(ctx, r.AccountID, id)
+	return m, false, err
+}
+
+const blockedSelect = `SELECT id,account_id,inbox_id,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at FROM blocked_messages`
+
+func scanBlockedMessage(row interface{ Scan(...any) error }) (model.BlockedMessage, error) {
+	var m model.BlockedMessage
+	var to string
+	var received, created sql.NullString
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.From.Name, &m.From.Address, &to, &m.Subject, &m.SizeBytes, &m.Reason, &received, &created)
+	if err != nil {
+		return m, err
+	}
+	m.To = decodeStrings(to)
+	m.ReceivedAt = nullableTime(received)
+	m.CreatedAt = parseTime(created.String)
+	return m, nil
+}
+
+func (s *Store) GetBlockedMessage(ctx context.Context, accountID, id string) (model.BlockedMessage, error) {
+	m, err := scanBlockedMessage(s.read.QueryRowContext(ctx, blockedSelect+` WHERE id=? AND account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxID string, limit int) ([]model.Message, error) {
+	return s.SearchMessagesFiltered(ctx, p, q, MessageFilter{InboxID: inboxID, Limit: limit})
+}
+
+// SearchMessagesFiltered searches FTS content and applies the same optional
+// filters as ListMessages (from, to, before, has_attachment).
+func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q string, f MessageFilter) ([]model.Message, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []model.Message{}, nil
+	}
+	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
+	match, err := ftsQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	if match == "" {
+		// The query reduced to nothing once control bytes were stripped (e.g. it
+		// was wholly control bytes). An empty MATCH expression is a syntax error
+		// to FTS5, so short-circuit to "no matches" rather than querying.
+		return []model.Message{}, nil
+	}
+	args := []any{match, p.AccountID}
+	sqlq += trashClause("m", f.Trashed)
+	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
+	sqlq += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
+	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
+	if f.InboxID != "" {
+		if !p.CanRead(f.InboxID) {
+			return nil, ErrForbidden
+		}
+		sqlq += ` AND m.inbox_id=?`
+		args = append(args, f.InboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Message{}, nil
+		}
+		sqlq += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if f.From != "" {
+		sqlq += ` AND m.from_address LIKE ?`
+		args = append(args, "%"+normalizeAddress(f.From)+"%")
+	}
+	if f.To != "" {
+		sqlq += ` AND (m.to_json LIKE ? OR m.cc_json LIKE ?)`
+		like := "%" + normalizeAddress(f.To) + "%"
+		args = append(args, like, like)
+	}
+	if f.HasAttachment != nil {
+		if *f.HasAttachment {
+			sqlq += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		} else {
+			sqlq += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		}
+	}
+	for _, label := range f.Labels {
+		if label = strings.TrimSpace(label); label == "" {
+			continue
+		}
+		sqlq += ` AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id=m.id AND ml.label=?)`
+		args = append(args, label)
+	}
+	if f.Before != "" {
+		var beforeCreated string
+		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		if err == nil {
+			sqlq += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
+			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+		} else if err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	sqlq += ` ORDER BY m.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, sqlq, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

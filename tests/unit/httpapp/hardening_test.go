@@ -1,0 +1,498 @@
+package httpapp_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
+)
+
+func TestSendForbiddenForReadAndAssistant(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	for _, role := range []string{"read", "assistant"} {
+		_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, role, false, map[string]string{box.ID: role})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("POST", "/v1/send", strings.NewReader(`{"inbox_id":"`+box.ID+`","to":["x@y.test"],"subject":"s","text":"t"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("%s send = %d, want 403", role, rr.Code)
+		}
+	}
+}
+
+func TestRawMIMERouteIsCanonical(t *testing.T) {
+	t.Parallel()
+	_, h, _, _, box := httpFixture(t)
+	req := signedMGRequest(t, testMailgunKey, "raw-mime-1", box.Address, inboundRawMessage())
+	req.URL.Path = "/internal/ingest/mailgun/raw-mime"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("raw-mime route = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMessagesScopedBeforeCursorPaginates proves the scoped domain-inbox message
+// listing applies its `before` cursor and returns a cursor while more rows exist,
+// so a client can page past the first page. This is the local counterpart of the
+// merged account-wide pagination.
+func TestMessagesScopedBeforeCursorPaginates(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 5
+	for i := 0; i < total; i++ {
+		rec := store.InboundRecord{
+			Inbox: box, Provider: "mailgun",
+			ProviderDeliveryID: fmt.Sprintf("pg-%d", i),
+			RFCMessageID:       fmt.Sprintf("<pg%d@test>", i),
+			From:               model.Address{Address: "a@outside.test"},
+			To:                 []string{box.Address}, EnvelopeTo: []string{box.Address},
+			Subject: fmt.Sprintf("M%d", i), Text: "x",
+			RawPath: fmt.Sprintf("messages/pg%d.eml", i), SizeBytes: 4,
+			ReceivedAt: time.Now().UTC(),
+		}
+		if _, _, _, err := svc.Store.CommitInbound(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type env struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		NextCursor string `json:"next_cursor"`
+	}
+	seen := map[string]bool{}
+	before := ""
+	for page := 0; page < total+2; page++ {
+		u := "/v1/messages?inbox=" + box.ID + "&limit=2"
+		if before != "" {
+			u += "&before=" + url.QueryEscape(before)
+		}
+		rr := apiGet(t, h, u, key)
+		if rr.Code != 200 {
+			t.Fatalf("page %d = %d: %s", page, rr.Code, rr.Body.String())
+		}
+		var e env
+		if err := json.Unmarshal(rr.Body.Bytes(), &e); err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range e.Items {
+			if seen[it.ID] {
+				t.Fatalf("duplicate message %q across pages", it.ID)
+			}
+			seen[it.ID] = true
+		}
+		if e.NextCursor == "" {
+			break
+		}
+		before = e.NextCursor
+	}
+	if len(seen) != total {
+		t.Fatalf("paged %d of %d messages", len(seen), total)
+	}
+}
+
+func TestEventsWaitReturnsNewEvent(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest("GET", "/v1/events/wait?timeout=5", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		done <- rr
+	}()
+	time.Sleep(100 * time.Millisecond)
+	// Commit an inbound message and publish its event to the hub so the
+	// long-poll wakes up.
+	m, ev, _, err := svc.Store.CommitInbound(ctx, store.InboundRecord{
+		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "wait-1", RFCMessageID: "<wait@test>",
+		From: model.Address{Name: "Sender", Address: "sender@outside.test"}, To: []string{box.Address},
+		EnvelopeTo: []string{box.Address}, Subject: "Wait event", Text: "body",
+		RawPath: "messages/test.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Hub.Publish(ev)
+	select {
+	case rr := <-done:
+		if rr.Code != 200 {
+			t.Fatalf("wait = %d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), m.ID) {
+			t.Fatalf("wait body %s", rr.Body.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("events/wait did not return")
+	}
+}
+
+func TestSSEReplayAndLive(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed an event before connecting.
+	m1, ev1, _, err := svc.Store.CommitInbound(ctx, store.InboundRecord{
+		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "sse-1", RFCMessageID: "<sse1@test>",
+		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address},
+		EnvelopeTo: []string{box.Address}, Subject: "SSE one", Text: "one",
+		RawPath: "messages/test.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Hub.Publish(ev1)
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	req, err := http.NewRequest("GET", ts.URL+"/v1/events/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	// Read the replayed event.
+	readUntil := func(substr string) error {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			if strings.Contains(line, substr) {
+				return nil
+			}
+		}
+		return fmt.Errorf("timed out waiting for %q", substr)
+	}
+	if err = readUntil(m1.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Ingest a live event and confirm it arrives on the same stream.
+	m2, ev2, _, err := svc.Store.CommitInbound(ctx, store.InboundRecord{
+		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "sse-2", RFCMessageID: "<sse2@test>",
+		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address},
+		EnvelopeTo: []string{box.Address}, Subject: "SSE two", Text: "two",
+		RawPath: "messages/test.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Hub.Publish(ev2)
+	if err = readUntil(m2.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchFiltersFromToBefore(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedInbound(t, svc, box, "f-1", "<f1@test>", "Alpha", "alpha body")
+	seedInbound(t, svc, box, "f-2", "<f2@test>", "Beta", "beta body")
+	// from filter
+	req := httptest.NewRequest("GET", "/v1/search?q=body&from=sender@outside.test", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Alpha") || !strings.Contains(rr.Body.String(), "Beta") {
+		t.Fatalf("from filter %d %s", rr.Code, rr.Body.String())
+	}
+	// to filter
+	req = httptest.NewRequest("GET", "/v1/search?q=body&to="+box.Address, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Alpha") {
+		t.Fatalf("to filter %d %s", rr.Code, rr.Body.String())
+	}
+	// before filter (cursor = first message id)
+	msgs, err := svc.Store.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{Limit: 1})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("list %v %#v", err, msgs)
+	}
+	req = httptest.NewRequest("GET", "/v1/search?q=body&before="+msgs[0].ID, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("before filter %d %s", rr.Code, rr.Body.String())
+	}
+	var env struct {
+		Items []model.Message `json:"items"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Items) != 1 {
+		t.Fatalf("before filter returned %d messages, want 1", len(env.Items))
+	}
+}
+
+func TestUnconfiguredInstanceClaimIsOneShot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	st := testdb.OpenAt(t, dir)
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	svc, err := app.New(cfg, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httpapp.New(svc, nil).Handler()
+	// A fresh instance serves the first-run setup form.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("setup get = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `action="/setup"`) {
+		t.Fatalf("fresh instance has no setup form: %s", rr.Body.String())
+	}
+	var csrf *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "mmm_csrf" {
+			csrf = c
+		}
+	}
+	if csrf == nil {
+		t.Fatal("setup page did not set a pre-auth CSRF cookie")
+	}
+	// Without a valid CSRF token the claim is refused, even same-origin.
+	bad := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=wrong"
+	req := httptest.NewRequest("POST", "/setup", strings.NewReader(bad))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("POST /setup with bad csrf = %d, want 403", rr.Code)
+	}
+	if has, _ := st.HasUsers(context.Background()); has {
+		t.Fatal("admin created without a valid CSRF token")
+	}
+	// With a valid token the instance is claimed exactly once.
+	good := "account=A&email=admin@example.com&password=correct-horse-battery-staple&confirm=correct-horse-battery-staple&_csrf=" + csrf.Value
+	req = httptest.NewRequest("POST", "/setup", strings.NewReader(good))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("POST /setup = %d location=%q body=%s", rr.Code, rr.Header().Get("Location"), rr.Body.String())
+	}
+	if has, _ := st.HasUsers(context.Background()); !has {
+		t.Fatal("setup did not create the first administrator")
+	}
+	// Once configured, GET /setup redirects to login and the claim route is
+	// inert: a second claim never runs, even with a valid CSRF token.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("GET /setup when configured = %d location=%q", rr.Code, rr.Header().Get("Location"))
+	}
+	req = httptest.NewRequest("POST", "/setup", strings.NewReader(good))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("second POST /setup = %d location=%q, want redirect to /login", rr.Code, rr.Header().Get("Location"))
+	}
+}
+
+func TestSendRejectsHeaderInjection(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"inbox_id":"` + box.ID + `","to":["victim@example.net\r\nBcc: attacker@example.net"],"subject":"s","text":"t"}`
+	req := httptest.NewRequest("POST", "/v1/send", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("send with injected address = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSecureCookieFollowsBaseURL(t *testing.T) {
+	t.Parallel()
+	newHandler := func(t *testing.T, baseURL, trusted string) http.Handler {
+		t.Helper()
+		dir := t.TempDir()
+		st := testdb.OpenAt(t, dir)
+		t.Cleanup(func() { st.Close() })
+		cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+		if trusted != "" {
+			cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix(trusted)}
+		}
+		svc, err := app.New(cfg, st, events.NewHub())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httpapp.New(svc, nil).Handler()
+	}
+	cookieSecure := func(t *testing.T, h http.Handler, spoofProto bool, remoteAddr string) bool {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/login", nil)
+		if spoofProto {
+			req.Header.Set("X-Forwarded-Proto", "https")
+		}
+		req.RemoteAddr = remoteAddr
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == "mmm_csrf" {
+				return c.Secure
+			}
+		}
+		t.Fatal("no mmm_csrf cookie")
+		return false
+	}
+	// An https BASE_URL marks cookies Secure even on a plain-HTTP request that
+	// arrives behind a TLS-terminating proxy with no trusted proxy configured:
+	// the canonical origin is https, so the browser stores and returns the
+	// cookie over TLS regardless of what the app sees on the wire. A spoofed
+	// X-Forwarded-Proto from an untrusted peer changes nothing.
+	if !cookieSecure(t, newHandler(t, "https://mail.example.test", ""), false, "203.0.113.5:1234") {
+		t.Fatal("https BASE_URL should set Secure cookies behind a bare proxy")
+	}
+	if !cookieSecure(t, newHandler(t, "https://mail.example.test", ""), true, "203.0.113.5:1234") {
+		t.Fatal("https BASE_URL should set Secure cookies regardless of X-Forwarded-Proto")
+	}
+	// An http BASE_URL does not, so a self-hosted plain-HTTP deployment still
+	// receives usable cookies.
+	if cookieSecure(t, newHandler(t, "http://example.test", ""), true, "203.0.113.5:1234") {
+		t.Fatal("http BASE_URL should not set Secure cookies")
+	}
+}
+
+// TestClientIPSpoofingResistsAppendingProxy proves the rate-limit identity
+// cannot be chosen by prepending a fake leftmost X-Forwarded-For entry: an
+// appending proxy preserves the attacker's entry as
+// "fake, real", and the limiter must see the proxy-observed address.
+func TestClientIPSpoofingResistsAppendingProxy(t *testing.T) {
+	t.Parallel()
+	newLoginHandler := func(t *testing.T, trusted string) http.Handler {
+		t.Helper()
+		dir := t.TempDir()
+		st := testdb.OpenAt(t, dir)
+		t.Cleanup(func() { st.Close() })
+		cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 1, SendLimitPerMinute: 60}
+		if trusted != "" {
+			cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix(trusted)}
+		}
+		svc, err := app.New(cfg, st, events.NewHub())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httpapp.New(svc, nil).Handler()
+	}
+	login := func(h http.Handler, remoteAddr, xff string) int {
+		// The pre-auth CSRF token is signed, so fetch a real one from the login
+		// page rather than a fixed dummy. GET /login does not consume the login
+		// rate limit, so the limiter still sees only the POST attempts.
+		grr := httptest.NewRecorder()
+		gre := httptest.NewRequest("GET", "/login", nil)
+		gre.RemoteAddr = remoteAddr
+		h.ServeHTTP(grr, gre)
+		var csrf *http.Cookie
+		for _, c := range grr.Result().Cookies() {
+			if c.Name == "mmm_csrf" {
+				csrf = c
+			}
+		}
+		if csrf == nil {
+			t.Fatal("login page did not set a pre-auth CSRF cookie")
+		}
+		form := url.Values{"email": {"a@b"}, "password": {"x"}, "_csrf": {csrf.Value}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(csrf)
+		req.RemoteAddr = remoteAddr
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	proxy := "203.0.113.5:1234"
+	// Trusted proxy, attacker prepends a rotating fake per attempt: every
+	// attempt must still count against the same proxy-observed key, so the
+	// second attempt is rate limited.
+	h := newLoginHandler(t, "203.0.113.0/24")
+	if code := login(h, proxy, "198.51.100.9, 192.0.2.44"); code != 303 && code != 200 {
+		t.Fatalf("first login attempt = %d", code)
+	}
+	if code := login(h, proxy, "198.51.100.10, 192.0.2.44"); code != 429 {
+		t.Fatalf("spoofed second login = %d, want 429 (same limit key)", code)
+	}
+	// Multi-hop: strip both trusted proxies, keep the originating client. A
+	// prepended fake must not change the key (leftmost parsing would see
+	// 198.51.100.99 and miss the limit).
+	h = newLoginHandler(t, "10.0.0.0/8")
+	if code := login(h, "10.0.0.9:1", "192.0.2.7, 10.0.0.1, 10.0.0.2"); code != 303 && code != 200 {
+		t.Fatalf("multi-hop first = %d", code)
+	}
+	if code := login(h, "10.0.0.9:1", "198.51.100.99, 192.0.2.7, 10.0.0.1, 10.0.0.2"); code != 429 {
+		t.Fatalf("multi-hop spoofed second = %d, want 429", code)
+	}
+	// Untrusted peer: XFF is ignored, the peer itself is the key.
+	h = newLoginHandler(t, "")
+	if code := login(h, "198.51.100.5:1234", "192.0.2.44"); code != 303 && code != 200 {
+		t.Fatalf("untrusted first = %d", code)
+	}
+	if code := login(h, "198.51.100.5:1234", "192.0.2.99"); code != 429 {
+		t.Fatalf("untrusted second with different XFF = %d, want 429 (peer key)", code)
+	}
+}

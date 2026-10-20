@@ -1,0 +1,1054 @@
+package app_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+)
+
+func TestRemoteEventWriteFailureRetriesWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, worker := workerEnv(t)
+	ctx := context.Background()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.DetectInbox(ctx, inbox)
+	db, err := sql.Open("sqlite3", svc.Store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER fail_remote_event BEFORE INSERT ON events WHEN NEW.type='message.received' BEGIN SELECT RAISE(FAIL,'temporary event write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	fake.addMessage("INBOX", "From: sender@outside.test\r\nSubject: retry\r\nMessage-ID: <event-retry@test>\r\n\r\nbody", "<event-retry@test>", "retry")
+	worker.DetectInbox(ctx, inbox)
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil || len(arrivals) != 1 {
+		t.Fatalf("arrivals=%+v err=%v", arrivals, err)
+	}
+	a := arrivals[0]
+	if a.DeliveryState != store.RemoteArrivalPending || !a.NextAttemptAt.After(time.Now()) || a.NextAttemptAt.After(time.Now().Add(5*time.Minute)) {
+		t.Fatalf("recoverable arrival not backed off: %+v", a)
+	}
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("failed write published %d events", len(evs))
+	}
+	if _, ok, err := svc.Store.ClaimNextRemoteArrival(ctx, time.Now(), "probe", time.Minute); err != nil || ok {
+		t.Fatalf("arrival immediately reclaimable: %v %v", ok, err)
+	}
+	// Expire each backoff deterministically; persistence faults must not exhaust
+	// a terminal retry budget, even after more than eight attempts.
+	worker.SetPeriod(5 * time.Millisecond)
+	worker.Start()
+	defer worker.Stop()
+	for range 10 {
+		if _, err := db.Exec(`UPDATE inbox_remote_arrivals SET next_attempt_at='' WHERE id=?`, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			next, err := svc.Store.GetRemoteArrival(ctx, box.AccountID, a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next.Attempts > a.Attempts && next.ClaimOwner == "" {
+				a = next
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("retry did not back off: %+v", next)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if a.DeliveryState != store.RemoteArrivalPending {
+			t.Fatalf("recoverable failure became terminal: %+v", a)
+		}
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_remote_event; UPDATE inbox_remote_arrivals SET next_attempt_at='' WHERE id=?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a, err = svc.Store.GetRemoteArrival(ctx, box.AccountID, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.DeliveryState == store.RemoteArrivalDelivered {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("arrival did not recover: %+v", a)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, emitted, err := svc.Store.RecordRemoteArrivalEvent(ctx, box.AccountID, box.ID, a); err != nil || emitted {
+		t.Fatalf("event guard allowed duplicate: %v %v", emitted, err)
+	}
+	count := 0
+	for _, ev := range drainEvents(ch) {
+		if ev.Type == store.EventRemoteMessageReceived && ev.EntityID == a.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("received %d notifications, want exactly one", count)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE entity_id=? AND type='message.received'`, a.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("durable events=%d err=%v", count, err)
+	}
+}
+
+// workerEnv builds a full app service, standalone inbox with a configured remote
+// binding, a fake session and a running worker. It returns the service, inbox,
+// remote service, fake server and worker.
+func workerEnv(t *testing.T) (*app.Service, model.Inbox, *app.RemoteMailboxService, *fakeRemoteServer, *app.RemoteWorker) {
+	t.Helper()
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	// The fake session must be able to enumerate the INBOX folder scope and
+	// report its UIDVALIDITY; the production fake already does.
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetMaxInboxConnections(2)
+	// Disable demand coalescing: these tests call DetectInbox directly and
+	// expect every call to run a pass. The coalescing behaviour has its own test.
+	w.SetDemandInterval(-1)
+	return svc, box, rm, fake, w
+}
+
+// collectEvents subscribes to the hub and returns a channel of events.
+func collectEvents(svc *app.Service) (<-chan model.Event, func()) {
+	_, ch, cancel := svc.Hub.Subscribe(64)
+	return ch, cancel
+}
+
+// drainEvents returns the events currently buffered on ch.
+func drainEvents(ch <-chan model.Event) []model.Event {
+	var out []model.Event
+	for {
+		select {
+		case e := <-ch:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+// TestRemoteWorkerQuickIndexesNewMail proves the detection pass upserts a new
+// arrival's header into the read index (inbox_remote_messages) so the message is
+// visible in the inbox list immediately, without waiting for a full reconcile.
+func TestRemoteWorkerQuickIndexesNewMail(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old@remote>\r\n\r\nbody", "<old@remote>", "old")
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox) // baseline
+	// No metadata is indexed for the pre-existing backlog by detection alone.
+	before, err := svc.Store.ListRemoteMessages(ctx, box.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("detection indexed %d backlog rows; want 0 (baseline only)", len(before))
+	}
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: fresh\r\nMessage-ID: <fresh@remote>\r\n\r\nbody", "<fresh@remote>", "fresh")
+	w.DetectInbox(ctx, inbox)
+	after, err := svc.Store.ListRemoteMessages(ctx, box.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("quick index rows = %d want 1", len(after))
+	}
+	if after[0].RFCMessageID != "<fresh@remote>" || after[0].Subject != "fresh" {
+		t.Fatalf("quick-indexed row wrong: %+v", after[0])
+	}
+}
+
+// TestRemoteWorkerBaselineNoFlood proves the first detection pass establishes the
+// baseline without emitting any arrival event for pre-existing mail.
+func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old"+string(rune('0'+i))+"@remote>\r\n\r\nbody", "<old@remote>", "old")
+	}
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox)
+	// No event should have been published: the baseline swallowed the backlog.
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("baseline flooded %d events", len(evs))
+	}
+	// A new arrival after the baseline is detected exactly once.
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: new\r\nMessage-ID: <new@remote>\r\n\r\nbody", "<new@remote>", "new")
+	w.DetectInbox(ctx, inbox)
+	evs := drainEvents(ch)
+	if len(evs) != 1 {
+		t.Fatalf("new arrival events = %d want 1", len(evs))
+	}
+	if evs[0].Type != store.EventRemoteMessageReceived {
+		t.Fatalf("event type = %q", evs[0].Type)
+	}
+	// A repeat detect is idempotent.
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("repeat detect emitted %d events", len(evs))
+	}
+}
+
+// TestDetectInboxDemandCoalesced proves the public demand entry runs at most one
+// detection pass per inbox within the quick interval, no matter how many clients
+// ask, and that a manual sync always runs. It counts passes through the dialer,
+// which the detection path invokes exactly once per pass.
+func TestDetectInboxDemandCoalesced(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, w := workerEnv(t)
+	ctx := context.Background()
+	// Re-enable the real time-based gate (workerEnv disables it for determinism)
+	// and set a long interval so the second automatic call is skipped.
+	w.SetDemandInterval(time.Hour)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dials int
+	var mu sync.Mutex
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return &fakeSession{fake: fake}, nil
+	})
+	count := func() int { mu.Lock(); defer mu.Unlock(); return dials }
+
+	// Baseline (first demand call): runs.
+	w.DetectInbox(ctx, inbox)
+	if got := count(); got != 1 {
+		t.Fatalf("baseline passes = %d, want 1", got)
+	}
+	// A burst of automatic demand calls within the interval: all skipped.
+	for i := 0; i < 5; i++ {
+		w.DetectInbox(ctx, inbox)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("burst coalesced to %d passes, want 1", got)
+	}
+	// A manual sync bypasses the gate even inside the interval.
+	w.DetectInbox(app.WithManualRemoteSync(ctx), inbox)
+	if got := count(); got != 2 {
+		t.Fatalf("manual sync did not bypass coalescing: passes = %d, want 2", got)
+	}
+}
+
+// TestWatchIntervalPushAware proves a Microsoft inbox with active push watches on
+// the full-sync safety-net cadence instead of the quick poll, and an inbox
+// without push uses the quick cadence (honoring its per-inbox override).
+func TestWatchIntervalPushAware(t *testing.T) {
+	t.Parallel()
+	svc, _, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetPollInterval(60 * time.Second)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Microsoft-connected inbox, no push: quick cadence.
+	if err := rm.SaveMicrosoftGrant(ctx, store.MicrosoftConnection{AccountID: box.AccountID, InboxID: box.ID, ClientID: "c", Tenant: "common", IdentityID: "id", Mailbox: box.Address}, microsoft.Token{AccessToken: "a", RefreshToken: "r", ExpiresIn: 3600, Scope: microsoft.Scope(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("no-push interval = %s, want 60s", got)
+	}
+	// Per-inbox quick override is honored when push is not active.
+	slower := 120
+	inbox.RemotePollSeconds = &slower
+	if got := w.WatchIntervalForTest(inbox); got != 120*time.Second {
+		t.Fatalf("override interval = %s, want 120s", got)
+	}
+	// The quick floor is one minute, so a sub-minute override (stored before the
+	// floor moved off 15s) is clamped up rather than hammering the server.
+	thirty := 30
+	inbox.RemotePollSeconds = &thirty
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("sub-minute override interval = %s, want the 60s floor", got)
+	}
+	// Active push: the quick poll is dropped for the full-sync safety net.
+	if err := svc.Store.SaveMicrosoftPush(ctx, store.MicrosoftPush{AccountID: box.AccountID, InboxID: box.ID, EncryptedState: "x", StateHash: "h", Status: "push active", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != time.Duration(model.NormalizeRemoteFullSyncMinutes(nil))*time.Minute {
+		t.Fatalf("push-active interval = %s, want the 15m full-sync fallback", got)
+	}
+}
+
+// TestQuickPollDisabled proves an explicit stored 0 turns the new-mail poll off:
+// the watcher and the demand coalescing both fall back to the full-sync cadence,
+// while a nil override still inherits the one-minute quick poll.
+func TestQuickPollDisabled(t *testing.T) {
+	t.Parallel()
+	svc, _, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetPollInterval(60 * time.Second)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := time.Duration(model.NormalizeRemoteFullSyncMinutes(nil)) * time.Minute
+	// A nil override inherits the one-minute quick poll.
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("default interval = %s, want 60s", got)
+	}
+	// An explicit 0 disables the quick poll: watcher and demand both use the
+	// full-sync cadence instead.
+	zero := 0
+	if err := svc.Store.SetInboxRemoteSync(ctx, box.AccountID, box.ID, &zero, nil); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != full {
+		t.Fatalf("disabled watch interval = %s, want the full-sync fallback %s", got, full)
+	}
+	if got := w.DemandIntervalForTest(inbox); got != full {
+		t.Fatalf("disabled demand interval = %s, want the full-sync fallback %s", got, full)
+	}
+}
+
+// TestIdleWatchPushMarksArrivalSource proves an IMAP IDLE mailbox update drives a
+// detection pass that records arrivals with source "imap push", mirroring the
+// Microsoft Graph "microsoft push" source. The bare IDLE signal is logged at
+// Debug only, so there is a single operator-facing "remote received" line whose
+// source reports the push.
+func TestIdleWatchPushMarksArrivalSource(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, _ := workerEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Establish the detection baseline first, so the pushed message is a fresh
+	// arrival rather than backlog swallowed by the baseline or the watcher's
+	// up-front catch-up pass.
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	w.DetectInbox(ctx, inbox)
+
+	sink := &pushLogSink{}
+	w = app.NewRemoteWorker(svc, rm, slog.New(slog.NewJSONHandler(sink, nil)))
+	sess := &idleFakeSession{fake: fake, notes: make(chan imap.Notification, 4), watching: make(chan struct{})}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return sess, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.WatchInboxForTest(ctx, inbox)
+	}()
+	// Wait until the IDLE watch is actually live, so the message below arrives
+	// while watching rather than being picked up by the up-front catch-up pass.
+	select {
+	case <-sess.watching:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("watcher never entered IDLE; logs %q", sink.text())
+	}
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: pushed\r\nMessage-ID: <pushed@remote>\r\n\r\nbody", "<pushed@remote>", "pushed")
+	// Push one server-side mailbox update and wait for the arrival to be recorded.
+	sess.notes <- imap.Notification{Folder: "INBOX", Kind: "idle", NumMessages: 1, HasNumMessages: true}
+	deadline := time.Now().Add(5 * time.Second)
+	// The arrival row is inserted before its preview is queued, and both happen on
+	// the worker's goroutine, so poll until the arrival AND its queued preview are
+	// both visible rather than sampling once. A poll that lands between the two
+	// writes must retry, not fail.
+	pushed := false
+	for !pushed {
+		arrivals, aerr := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+		if aerr != nil {
+			t.Fatal(aerr)
+		}
+		if len(arrivals) == 1 {
+			if arrivals[0].Source != "imap push" {
+				t.Fatalf("arrival source = %q, want imap push", arrivals[0].Source)
+			}
+			// The preview must be queued for a push-discovered arrival exactly as it
+			// is for a poll-discovered one. Matching the arrival source against the
+			// single label "imap" skipped every push arrival, so no IDLE message ever
+			// got a preview while polled ones did. This asserts the family match.
+			rec, rerr := svc.Store.GetRemoteMessageByUID(ctx, box.AccountID, box.ID,
+				arrivals[0].FolderPath, arrivals[0].UIDValidity, arrivals[0].UID)
+			if rerr != nil {
+				t.Fatalf("resolve pushed arrival: %v", rerr)
+			}
+			pending, perr := svc.Store.PendingRemotePreviews(ctx, 10)
+			if perr != nil {
+				t.Fatalf("list pending previews: %v", perr)
+			}
+			for _, p := range pending {
+				if p.ID == rec.ID {
+					pushed = true
+					break
+				}
+			}
+		}
+		if pushed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no pushed arrival with a queued preview recorded; logs %q", sink.text())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The operator-facing arrival line carries the push source. It is logged after
+	// the durable event is persisted, still on the worker's goroutine, so it trails
+	// the row by a scheduling gap under load: poll the sink instead of sampling it
+	// once, or the read races the log write and sees no entry.
+	for {
+		entry, ok := sink.entry("remote received")
+		if ok {
+			if entry["source"] != "imap push" {
+				t.Fatalf("remote received source = %#v", entry)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no remote received line recorded; logs %q", sink.text())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
+// pushLogSink is a race-safe slog sink: the logger writes on the worker's
+// goroutine while the test reads, so every access is mutex-guarded.
+type pushLogSink struct {
+	mu    sync.Mutex
+	lines []string
+	part  []byte
+}
+
+func (s *pushLogSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.part = append(s.part, p...)
+	for {
+		i := bytes.IndexByte(s.part, '\n')
+		if i < 0 {
+			break
+		}
+		s.lines = append(s.lines, string(s.part[:i]))
+		s.part = s.part[i+1:]
+	}
+	return len(p), nil
+}
+
+func (s *pushLogSink) text() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.lines, "\n")
+}
+
+// entry returns the first captured JSON record whose msg matches.
+func (s *pushLogSink) entry(msg string) (map[string]any, bool) {
+	for _, line := range strings.Split(s.text(), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == msg {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
+// idleFakeSession is a fakeRemoteServer that also implements the IDLE watch
+// surface, so the worker takes the realtime path instead of polling.
+type idleFakeSession struct {
+	fakeSession
+	notes chan imap.Notification
+	// watching is closed once Watch is entered, so a test can add mail only after
+	// the watch is live (otherwise the watcher's up-front catch-up pass sees it).
+	watching chan struct{}
+}
+
+func (s *idleFakeSession) IdleCapable() bool { return true }
+
+func (s *idleFakeSession) Watch(ctx context.Context, folder string, _ int) (<-chan imap.Notification, func(), <-chan error, error) {
+	out := make(chan imap.Notification)
+	errCh := make(chan error, 1)
+	if s.watching != nil {
+		select {
+		case <-s.watching:
+		default:
+			close(s.watching)
+		}
+	}
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case n := <-s.notes:
+				n.Folder = folder
+				select {
+				case out <- n:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, func() {}, errCh, nil
+}
+
+func TestRemoteDetectionSurvivesPollingRequestCancellation(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, w := workerEnv(t)
+	inbox, err := svc.Store.GetInboxInternal(context.Background(), box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rm.SetRemoteDialer(func(pass context.Context, _ imap.Config) (app.RemoteSession, error) {
+		cancel() // The polling client disconnects while IMAP work is underway.
+		if err := pass.Err(); err != nil {
+			t.Fatalf("worker inherited request cancellation: %v", err)
+		}
+		return fake, nil
+	})
+	w.DetectInbox(ctx, inbox)
+	cursor, ok, err := svc.Store.GetRemoteCursor(context.Background(), box.AccountID, box.ID, "INBOX")
+	if err != nil || !ok || !cursor.BaselineDone {
+		t.Fatalf("baseline lost after disconnect: %+v %v", cursor, err)
+	}
+	fake.addMessage("INBOX", "body", "<after@test>", "After disconnect")
+	w.DetectInbox(ctx, inbox)
+	cursor, _, err = svc.Store.GetRemoteCursor(context.Background(), box.AccountID, box.ID, "INBOX")
+	if err != nil || cursor.LastUID != 1 {
+		t.Fatalf("arrival cursor lost after disconnect: %+v %v", cursor, err)
+	}
+}
+
+// TestRemoteWorkerLargeFolderBaselineAndDetect proves detection is correct on a
+// folder larger than one search page: the baseline must use the true maximum UID,
+// and a new arrival must still be detected. Under the default ascending search
+// order the truncation would return the OLDEST page, so the baseline would sit far
+// below the true maximum and detection would be permanently suppressed.
+func TestRemoteWorkerLargeFolderBaselineAndDetect(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	// More than one search page (MaxSearchResults = 500) of pre-existing mail.
+	for i := 0; i < 600; i++ {
+		fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old@remote>\r\n\r\nbody", "<old@remote>", "old")
+	}
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("baseline flooded %d events", len(evs))
+	}
+	// A new arrival after the baseline must be detected exactly once.
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: new\r\nMessage-ID: <new@remote>\r\n\r\nbody", "<new@remote>", "new")
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 1 {
+		t.Fatalf("new arrival events = %d want 1", len(evs))
+	}
+}
+
+// TestRemoteWorkerNoReadSideEffect proves a detection pass never marks a message
+// seen on the live server.
+func TestRemoteWorkerNoReadSideEffect(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <s@remote>\r\n\r\nbody", "<s@remote>", "s")
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox)
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: n\r\nMessage-ID: <n@remote>\r\n\r\nbody", "<n@remote>", "n")
+	w.DetectInbox(ctx, inbox)
+	if fake.markSeenCalled {
+		t.Fatal("detection marked a message seen")
+	}
+}
+
+// TestRemoteWorkerOutsideScopeNotDetected proves a message outside the inbox's
+// explicit root scope is never detected.
+func TestRemoteWorkerOutsideScopeNotDetected(t *testing.T) {
+	t.Parallel()
+	st, u, _, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	box, err := st.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
+		Address:   "scoped@remote.example",
+		Namespace: "Archive",
+		Remote:    &model.RemoteConnection{Host: "imap.remote.example", Username: "scoped@remote.example", Security: model.RemoteSecurityPlain, Port: 143},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	fake.addFolder("Archive", 100)
+	fake.addFolder("INBOX", 100)
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: out\r\nMessage-ID: <out@remote>\r\n\r\nbody", "<out@remote>", "out")
+	installFake(t, rm, fake)
+	w := app.NewRemoteWorker(st, rm, nil)
+	w.SetDemandInterval(-1)
+	ch, cancel := collectEvents(st)
+	defer cancel()
+	inbox, _ := st.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	// The watcher observes the inbox's selected folder ("Archive"), so the INBOX
+	// message is never detected.
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("out-of-scope message detected: %d events", len(evs))
+	}
+}
+
+// TestRemoteWorkerAllowlistSkipsProactive proves a message from a disallowed sender
+// is still recorded (live-readable) but raises no proactive notification.
+func TestRemoteWorkerAllowlistSkipsProactive(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	if err := svc.Store.SetInboxAllowedSenders(ctx, box.AccountID, box.ID, []string{"allowed@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetInboxSenderRestricted(ctx, box.AccountID, box.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	fake.addMessage("INBOX", "From: stranger@elsewhere.test\r\nSubject: n\r\nMessage-ID: <n@remote>\r\n\r\nbody", "<n@remote>", "n")
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("disallowed sender raised a proactive event: %d", len(evs))
+	}
+	// The arrival was still durably recorded (live read is not suppressed).
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arrivals) != 1 {
+		t.Fatalf("arrival not recorded: %d", len(arrivals))
+	}
+	if arrivals[0].DeliveryState != store.RemoteArrivalSkipped {
+		t.Fatalf("arrival state = %q want skipped", arrivals[0].DeliveryState)
+	}
+}
+
+// TestRemoteWorkerHandoffEchoExcluded proves a handoff's own frozen draft
+// (identified by its durably-recorded Message-ID) echoed back into the connected
+// inbox is excluded from proactive delivery without a live body fetch, so a
+// handoff never echoes back as a fresh arrival.
+func TestRemoteWorkerHandoffEchoExcluded(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	// Record a handoff whose frozen draft has a Message-ID.
+	asst := model.Principal{AccountID: box.AccountID, MailboxRoles: map[string]string{box.ID: "assistant"}, Admin: true}
+	d, err := svc.Store.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Store.CreateAssistantHandling(ctx, asst, store.AssistantHandlingInsert{
+		DraftID: d.ID, InboxID: box.ID, Mode: model.AuthoringRemoteDraft,
+		ContentHash: "h", HandoffID: "hnd_x", MessageID: "<frozen@remote.example>", RemoteFolder: "Drafts",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	// The frozen draft is found again in the INBOX (e.g. re-synced).
+	fake.addMessage("INBOX", "From: "+box.Address+"\r\nSubject: s\r\nMessage-ID: <frozen@remote.example>\r\n\r\nb", "<frozen@remote.example>", "s")
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("handoff echo raised a proactive event: %d", len(evs))
+	}
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arrivals) != 1 || arrivals[0].DeliveryState != store.RemoteArrivalSkipped {
+		t.Fatalf("arrival not skipped: %+v", arrivals)
+	}
+}
+
+// TestRemoteWorkerControlForcesApproval seeds a pending approval and a control
+// reply from the nominated approver; detection consumes it and never forwards it.
+func TestRemoteWorkerControlForcesApproval(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	req := seedPendingApproval(t, svc, box)
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	// The approver replies with the control reference line.
+	body := "Approve\r\n\r\n[GH-REQUEST:" + req.Token + "]\r\n"
+	raw := "From: " + req.ApproverEmail + "\r\nTo: " + box.Address + "\r\nSubject: Re: approval\r\nMessage-ID: <ctrl@remote>\r\n\r\n" + body
+	fake.addMessage("INBOX", raw, "<ctrl@remote>", "Re: approval")
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	for _, e := range drainEvents(ch) {
+		// A successful approval legitimately publishes draft events; the control
+		// message itself must never be forwarded as a remote arrival.
+		if e.Type == store.EventRemoteMessageReceived {
+			t.Fatalf("control mail was forwarded as a remote arrival: %s", e.EntityID)
+		}
+	}
+	// The approval request must have been consumed (no longer pending).
+	if n, err := svc.Store.CountPendingSendRequests(ctx, box.AccountID, box.ID); err != nil || n != 0 {
+		t.Fatalf("approval not consumed: n=%d err=%v", n, err)
+	}
+}
+
+// TestRemoteWorkerControlFetchFailureFailsClosed proves a control-subject arrival
+// whose body cannot be fetched is never published as an ordinary remote event and
+// remains pending for a retry.
+func TestRemoteWorkerControlFetchFailureFailsClosed(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	req := seedPendingApproval(t, svc, box)
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	// A control-subject message whose body fetch will fail.
+	raw := "From: " + req.ApproverEmail + "\r\nTo: " + box.Address + "\r\nSubject: [GH-APPROVE:" + req.Token + "]\r\nMessage-ID: <ctrlfail@remote>\r\n\r\nApprove"
+	m := fake.addMessage("INBOX", raw, "<ctrlfail@remote>", "[GH-APPROVE]")
+	fake.mu.Lock()
+	if fake.fetchFail == nil {
+		fake.fetchFail = map[uint32]error{}
+	}
+	fake.fetchFail[m.uid] = errors.New("temporary fetch failure")
+	fake.mu.Unlock()
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	for _, e := range drainEvents(ch) {
+		if e.Type == store.EventRemoteMessageReceived {
+			t.Fatalf("control mail whose body fetch failed was forwarded: %s", e.EntityID)
+		}
+	}
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil || len(arrivals) != 1 {
+		t.Fatalf("arrivals=%d err=%v", len(arrivals), err)
+	}
+	if arrivals[0].DeliveryState != store.RemoteArrivalPending {
+		t.Fatalf("arrival state=%q want pending", arrivals[0].DeliveryState)
+	}
+	if n, _ := svc.Store.CountPendingSendRequests(ctx, box.AccountID, box.ID); n != 1 {
+		t.Fatalf("approval unexpectedly consumed: n=%d", n)
+	}
+}
+
+// TestRemoteWorkerACKMarkReadAndAutoTrash proves the ACK mark-read sets \Seen and
+// the delayed auto-trash moves the message, with retry on failure.
+func TestRemoteWorkerACKMarkReadAndAutoTrash(t *testing.T) {
+	t.Parallel()
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	fake.addFolder("Trash", 100)
+	// Configure mark-read and a zero-delay trash by using EnsureRemoteAction directly.
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox)
+	m := fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <s@remote>\r\n\r\nbody", "<s@remote>", "s")
+	w.DetectInbox(ctx, inbox)
+
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil || len(arrivals) != 1 {
+		t.Fatalf("arrivals = %d err=%v", len(arrivals), err)
+	}
+	arr := arrivals[0]
+	if err := w.MarkRemoteArrivalRead(ctx, box.AccountID, box.ID, arr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.markSeenCalled {
+		t.Fatal("ACK did not mark the message read")
+	}
+	// The message is now in the fake with \Seen.
+	found := false
+	fake.mu.Lock()
+	for _, fm := range fake.messages {
+		if fm.uid == m.uid && containsStr(fm.flags, imap.FlagSeen) {
+			found = true
+		}
+	}
+	fake.mu.Unlock()
+	if !found {
+		t.Fatal("live message not marked \\Seen")
+	}
+
+	// Durable auto-trash: a zero-window action moves the message to Trash.
+	act, err := svc.Store.EnsureRemoteAction(ctx, box.AccountID, arr, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the window to have elapsed, then reconcile.
+	if err := svc.Store.SetRemoteActionTrashDueForTest(ctx, box.AccountID, act.ArrivalID, time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	w.ReconcileRemoteActionsForTest(ctx)
+	fake.mu.Lock()
+	moved := false
+	for _, fm := range fake.messages {
+		if fm.uid == m.uid && fm.folder == "Trash" {
+			moved = true
+		}
+	}
+	fake.mu.Unlock()
+	if !moved {
+		t.Fatal("auto-trash did not move the message to Trash")
+	}
+}
+
+// TestRemoteWorkerReconnectNotSkip proves a connection failure during detection
+// does not advance the cursor, so the message is detected on the next pass.
+func TestRemoteWorkerReconnectNotSkip(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, w := workerEnv(t)
+	ctx := context.Background()
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <s@remote>\r\n\r\nbody", "<s@remote>", "s")
+	// Install a dialer that fails, then succeeds.
+	var fail bool
+	var mu sync.Mutex
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if fail {
+			return nil, errors.New("connection refused")
+		}
+		return &fakeSession{fake: fake}, nil
+	})
+	mu.Lock()
+	fail = true
+	mu.Unlock()
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("failed detection emitted %d events", len(evs))
+	}
+	// Cursor did not advance past the unrecorded message.
+	c, _, _ := svc.Store.GetRemoteCursor(ctx, box.AccountID, box.ID, "INBOX")
+	if c.LastUID != 0 {
+		t.Fatalf("cursor advanced past an undetected message: %d", c.LastUID)
+	}
+	// Reconnect succeeds: the message is now detected.
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 1 {
+		t.Fatalf("reconnect did not detect the message: %d events", len(evs))
+	}
+}
+
+// TestRemoteWorkerStopNoLeak proves Start/Stop terminates promptly with no
+// leaked goroutine (a second Stop would deadlock if one leaked the done channel).
+func TestRemoteWorkerStopNoLeak(t *testing.T) {
+	t.Parallel()
+	_, _, _, _, w := workerEnv(t)
+	w.SetPeriod(10 * time.Millisecond)
+	w.Start()
+	time.Sleep(30 * time.Millisecond)
+	done := make(chan struct{})
+	go func() { w.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not stop")
+	}
+}
+
+// ---- helpers ----
+
+type pendingApproval struct {
+	Token         string
+	ApproverEmail string
+	DraftID       string
+}
+
+// seedPendingApproval creates a draft with a pending external approval request,
+// then pins the request's token to a known plaintext so a control reply can be
+// built deterministically. It returns the plaintext token.
+func seedPendingApproval(t *testing.T, svc *app.Service, box model.Inbox) pendingApproval {
+	t.Helper()
+	ctx := context.Background()
+	p := model.Principal{AccountID: box.AccountID, UserID: "u", MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	// Use the MailMoose approval authoring mode so the request creates an external
+	// approval request rather than a remote-draft handoff.
+	if err := svc.Store.SetInboxAuthoringMode(ctx, p, box.ID, model.AuthoringMailMooseApproval); err != nil {
+		t.Fatal(err)
+	}
+	// Set an approver so the external request path can queue.
+	if err := svc.Store.SetInboxApprover(ctx, box.AccountID, box.ID, "approver@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, FromAddress: box.Address, To: []string{"recipient@example.test"}, Subject: "draft", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RequestSend(ctx, p, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	const token = "testtoken0123456789"
+	sum := sha256.Sum256([]byte(token))
+	if err := svc.Store.SetPendingApprovalTokenForTest(ctx, box.AccountID, d.ID, hex.EncodeToString(sum[:])); err != nil {
+		t.Fatal(err)
+	}
+	return pendingApproval{Token: token, ApproverEmail: "approver@example.test", DraftID: d.ID}
+}
+
+// TestRemoteWorkerWebhookForwardRaw proves a detected remote arrival is forwarded
+// to a configured forward-mode webhook client with the raw MIME fetched live from
+// the server, and that a metadata-only read never fetches the body.
+func TestRemoteWorkerWebhookForwardRaw(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, w := workerEnv(t)
+	ctx := context.Background()
+	rm.InstallRemoteBridges()
+
+	const token = "remote-forward-token"
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(box.AccountID, box.ID), []byte(token))
+	cl, err := svc.Store.CreateWebhookClient(ctx, box.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := newForwardCapture()
+	srv := cap.serve()
+	defer srv.Close()
+	if err := svc.Store.UpdateWebhookClient(ctx, box.AccountID, cl.ID, "ep", srv.URL, "forward", "bearer"); err != nil {
+		t.Fatal(err)
+	}
+
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	raw := "From: alice@example.test\r\nTo: " + box.Address + "\r\nSubject: remote fwd\r\nMessage-ID: <rfwd@remote>\r\n\r\nremote body"
+	fake.addMessage("INBOX", raw, "<rfwd@remote>", "remote fwd")
+
+	// Detection records the arrival and settles it Delivered; the durable relay
+	// event was persisted for the webhook client to consume.
+	w.DetectInbox(ctx, inbox)
+
+	wh := app.NewWebhookWorker(svc)
+	wh.SetHTTPClient(srv.Client())
+	if err := wh.RunOnce(ctx); err != nil {
+		t.Fatalf("remote webhook deliver: %v", err)
+	}
+	body, contentType, _, auth := cap.snapshot()
+	if contentType != "message/rfc822" {
+		t.Fatalf("content type %q", contentType)
+	}
+	if auth != "Bearer "+token {
+		t.Fatalf("authorization %q", auth)
+	}
+	if string(body) != raw {
+		t.Fatalf("forwarded raw mismatch:\n got %q\nwant %q", body, raw)
+	}
+	if fake.markSeenCalled {
+		t.Fatal("forward fetch marked the message seen")
+	}
+}
+
+// TestRemoteWorkerWebhookNotifyJSON proves a notify-mode webhook client receives a
+// remote-aware JSON body (no local message id) without fetching a body.
+func TestRemoteWorkerWebhookNotifyJSON(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, w := workerEnv(t)
+	ctx := context.Background()
+	rm.InstallRemoteBridges()
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(box.AccountID, box.ID), []byte("tok"))
+	cl, err := svc.Store.CreateWebhookClient(ctx, box.AccountID, box.ID, "ep", "https://hooks.example.test/x", "notify", "bearer", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := newForwardCapture()
+	srv := cap.serve()
+	defer srv.Close()
+	if err := svc.Store.UpdateWebhookClient(ctx, box.AccountID, cl.ID, "ep", srv.URL, "notify", "bearer"); err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox)
+	fake.addMessage("INBOX", "From: alice@example.test\r\nTo: "+box.Address+"\r\nSubject: s\r\nMessage-ID: <n1@remote>\r\n\r\nb", "<n1@remote>", "s")
+	w.DetectInbox(ctx, inbox)
+	wh := app.NewWebhookWorker(svc)
+	wh.SetHTTPClient(srv.Client())
+	if err := wh.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	body, contentType, _, _ := cap.snapshot()
+	if contentType != "application/json" {
+		t.Fatalf("content type %q", contentType)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["remote"] != true {
+		t.Fatalf("notify body not remote-aware: %v", got)
+	}
+	if got["message_id"] == nil || got["message_id"] == "" {
+		t.Fatalf("notify body missing arrival id: %v", got)
+	}
+}
+
+func containsStr(list []string, v string) bool {
+	for _, x := range list {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
+}
