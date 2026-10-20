@@ -58,13 +58,15 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	body := rr.Body.String()
 	guide := regexp.MustCompile(`(?s)<ol class="steps" id="key-hermes-guide" hidden>(.*?)</ol><p class="muted" id="key-result-label">`).FindString(body)
 	for _, want := range []string{
-		`<div class="banner warn"><b>Optional but recommended — reduce extra emails</b>`,
-		"Create the relay connection:",
+		`<div class="banner warn" style="margin-left:24px;margin-top:12px"><b>Optional but recommended — reduce extra emails</b>`,
+		"<b>Copy the generated block</b> into your gateway's",
+		`<ol type="a">`,
+		`<div class="secret" style="margin-top:12px"><pre id="key-hermes-secret"></pre></div><div class="banner warn"`,
 		"same <code>.env</code>",
 		"EMAIL_HOME_ADDRESS=you@yourdomain.com\nEMAIL_HOME_ADDRESS_NAME=Your Agent Name",
 		"~/.hermes/config.yaml",
 		"merge into any existing <code>display</code> section",
-		"display:\n  memory_notifications: off\n  suppress_warning_notifications: true",
+		"display:\n  memory_notifications: off\n  platforms:\n    email:\n      suppress_warning_notifications: true",
 		"Restart the Hermes gateway (required)",
 	} {
 		if !strings.Contains(guide, want) {
@@ -105,6 +107,8 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		!strings.Contains(asset, "section.remove();") ||
 		!strings.Contains(asset, "insertBefore(bearerFields, webhookAuth.nextElementSibling)") ||
 		!strings.Contains(asset, "key-form-scroll") ||
+		!strings.Contains(asset, "resultSecret.parentElement.hidden = sel.value === 'hermes'") ||
+		!strings.Contains(asset, "document.getElementById('key-hermes-secret').textContent = sel.value === 'hermes' ? (data.secret || '') : ''") ||
 		!strings.Contains(asset, "connector-config-row") ||
 		!strings.Contains(asset, "inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-edit-form')") ||
 		!strings.Contains(asset, "showInboxSubview") ||

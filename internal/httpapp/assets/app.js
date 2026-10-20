@@ -1338,6 +1338,7 @@
     errorBox.hidden = true;
     errorBox.textContent = '';
     resultSecret.textContent = '';
+    document.getElementById('key-hermes-secret').textContent = '';
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
@@ -1352,6 +1353,9 @@
     resultSecret.textContent = data.secret || '';
     document.getElementById('key-openclaw-guide').hidden = sel.value !== 'openclaw';
     document.getElementById('key-hermes-guide').hidden = sel.value !== 'hermes';
+    document.getElementById('key-hermes-secret').textContent = sel.value === 'hermes' ? (data.secret || '') : '';
+    resultSecret.parentElement.hidden = sel.value === 'hermes';
+    resultLabel.hidden = sel.value === 'hermes';
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
