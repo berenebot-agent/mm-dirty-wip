@@ -3,8 +3,9 @@
 //
 // The Go suite asserts the operation itself. This harness drives the real
 // app.js closure against a DOM stand-in to assert the queue presentation the
-// server cannot observe: the parent row stays visible after completion, shows
-// discovery and purge progress, keeps its Dismiss control, and sorts first.
+// server cannot observe: the parent row leaves the drawer once it completes,
+// shows discovery and purge progress while it runs, and keeps its Retry and
+// Dismiss controls when it fails.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -142,7 +143,7 @@ function texts(row, className) {
   return find(row, el => (el.className || '').split(/\s+/).includes(className)).map(el => el.textContent);
 }
 
-// A completed parent operation stays visible with its progress and Dismiss.
+// A completed parent operation leaves the drawer as soon as it completes.
 {
   const { window, body, document } = run();
   window.mailmooseActionUpdateForTest({
@@ -153,11 +154,8 @@ function texts(row, className) {
     ]
   });
   const rendered = rows(body);
-  assert.equal(rendered.length, 2, 'both queue rows render');
-  assert.equal(rendered[0].getAttribute('data-state'), 'done', 'parent sorts first');
-  assert.ok(texts(rendered[0], 'aq-kind')[0].includes('Empty trash'), 'parent row names the operation');
-  assert.deepEqual(texts(rendered[0], 'aq-meta'), ['501 of 501 purged'], 'parent row shows purge progress');
-  assert.deepEqual(texts(rendered[0], 'aq-btn'), ['Dismiss'], 'completed parent row can be dismissed');
+  assert.equal(rendered.length, 1, 'the completed parent row leaves the drawer');
+  assert.equal(rendered[0].getAttribute('data-state'), 'pending', 'the live child row stays');
 }
 
 // Discovery phase reports finding messages, not a purged count.

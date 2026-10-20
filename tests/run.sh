@@ -249,6 +249,9 @@ for t in "${SELECTED[@]}"; do
                 node tests/empty-trash-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
+                node tests/queue-clear-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
                 node tests/release-config-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             ;;

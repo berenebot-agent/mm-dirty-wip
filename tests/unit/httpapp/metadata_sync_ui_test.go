@@ -178,12 +178,15 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		"Downloading metadata",
 		"estimated_total",
 		"syncDenominator",
-		// Initial-sync-only banner/queue wiring: visible rows and counts use
-		// the filtered list while the spinner reads every status.
+		// Initial-sync-only banner/queue wiring: the banner reads the filtered
+		// list, the rows and counts read the drawer's own list, and the spinner
+		// reads every status. A row the person cleared leaves the drawer but
+		// keeps the banner on its own inbox page.
 		"shouldDisplaySync",
-		"displaySyncs",
-		"displaySyncs.forEach",
-		"displaySyncs.slice",
+		"displaySyncs.length",
+		"drawerSyncs.forEach",
+		"drawerSyncs.slice",
+		"syncs.some",
 		// The reconnect verdict rides the same poll: its own banner carries the
 		// control, so the strip must not repeat the line and a verdict recorded
 		// while the page is open must be actionable without a reload.
