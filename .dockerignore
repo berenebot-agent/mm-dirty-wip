@@ -11,3 +11,13 @@ tests/logs
 *.log
 **/__pycache__
 .hermes-tmp
+# Untracked local build artifacts. They are not repo content, but they are the
+# bulk of a local build context (~710 MB): the OpenClaw plugin's npm tree, the
+# `make build` binary and the `make mx-fixture` binary. Prune them or every
+# local `docker build` transfers hundreds of megabytes for nothing.
+**/node_modules
+server
+tests/fixtures/mailmoose-mx
+# `server` above is root-anchored on purpose: it prunes the root-level binary
+# only. Do not widen it to `**/server` — that would prune `cmd/server/` and
+# break the build.
