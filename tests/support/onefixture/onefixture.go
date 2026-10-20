@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,11 @@ type Fixture struct {
 	// ListQuery records the q parameter of the last /messages list call, so
 	// tests can assert the history horizon is applied.
 	ListQuery string
+	// RetiredKeys are connection keys a test has removed from Connections to
+	// simulate a rotation. Import schedules an index refresh, so a request
+	// carrying the old key can still be in flight when the rows change; it is
+	// answered instead of failing the test. Discovery never returns them.
+	RetiredKeys []string
 }
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -98,7 +104,7 @@ func New(t *testing.T) *Fixture {
 			_ = json.NewEncoder(w).Encode(map[string]any{"page": 1, "pages": 1, "rows": f.Actions})
 			return
 		}
-		selectorOK := false
+		selectorOK := slices.Contains(f.RetiredKeys, r.Header.Get("X-One-Connection-Key"))
 		profileEmail := Email
 		for _, connection := range f.Connections {
 			if connection["key"] == r.Header.Get("X-One-Connection-Key") {
@@ -109,7 +115,7 @@ func New(t *testing.T) *Fixture {
 			}
 		}
 		if !selectorOK || r.Header.Get("X-One-Action-Id") == "" {
-			t.Error("missing server-resolved selector/action")
+			t.Errorf("missing server-resolved selector/action: %s %s selector=%q action=%q", r.Method, r.URL.Path, r.Header.Get("X-One-Connection-Key"), r.Header.Get("X-One-Action-Id"))
 			w.WriteHeader(403)
 			return
 		}
