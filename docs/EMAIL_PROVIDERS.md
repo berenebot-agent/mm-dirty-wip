@@ -46,10 +46,11 @@ MailMoose makes an **outbound connection** to the hosted Antler receivers. Antle
 2. Open the domain's **Receiving** settings and select **Antler MX**.
 3. Enter a contact email and save. This is for service updates only, not a mailbox login.
 4. Copy the **MX** and `_mailmoose-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by MailMoose.
-5. Wait for the **DNS** and **receiver** status indicators to show ready.
-6. Send a test email to an address on your domain.
+5. Continue to **Receivers** and wait for at least one receiver to show **Ready to receive**. Each receiver checks the TXT key and its own MX routing; DNS-step record indicators follow those proofs, not a separate local DNS cache.
+6. Continue to the spam/authentication policy, choose the enforcement level, and select **Finish** to save and close. Reopen **Receiving** any time to view status or edit settings.
+7. Send a test email to an address on your domain.
 
-The TXT record proves that you authorized this MailMoose installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel identifies missing or incorrect DNS records.
+The TXT record proves that you authorized this MailMoose installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel shows repair instructions when a receiver reports a key or routing problem. A local cached negative DNS answer does not override a ready receiver; additional MX servers still produce a separate routing warning.
 
 **No inbound ports are needed on your MailMoose host for Antler MX.** The host does need outbound HTTPS access to Antler. If your instance is offline, Antler cannot deliver into it and the sending mail server must retry; Antler is not a mailbox or a durable mail queue.
 

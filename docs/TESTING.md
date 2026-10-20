@@ -42,7 +42,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `vet` | `go vet ./...` |
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
-| `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash and release-config checks |
+| `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash, passkey and release-config checks |
 | `smoke` | slow gated tests with `MAILMOOSE_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**

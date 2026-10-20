@@ -146,6 +146,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D139: Relay replies resolve the wire form a stock Hermes gateway sends](#d139-relay-replies-resolve-the-wire-form-a-stock-hermes-gateway-sends)
 - [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
 - [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
+- [D143: Passkey controls are hidden where WebAuthn cannot run](#d143-passkey-controls-are-hidden-where-webauthn-cannot-run)
 
 ---
 
@@ -4662,6 +4663,11 @@ timeout (it is not gated by the Argon2 slots — that path is now removed, see t
 status note at the end of this section); and the Mailgun/Cloudflare unattested
 envelope sender accepted risk (`D058`) is untouched.
 
+**Refined by D143:** a plain-HTTP deployment no longer shows a short
+explanation in place of the passkey controls — it shows no passkey section at
+all, and the browser glue removes the passkey controls on an origin that
+cannot run a ceremony instead of disabling them.
+
 ## D117 — Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF
 
 **Context:** A follow-up external review surfaced low-severity and edge-case
@@ -5138,6 +5144,18 @@ the two shells).
 ## D124 — Receiving DNS checks are a hard gate: four states, and only `ok` is green
 
 **Date:** 2026-10-15. **Approved by:** Ben.
+
+**Antler UI update (2026-10-21, approved by Ben):** The local-DNS hard-gate
+presentation below is superseded for Antler setup and status. A current receiver
+grant proves TXT authority and that receiver's MX routing; an independently cached
+negative DNS result must not contradict it. DNS-step record lights follow receiver
+proofs, and repair prompts follow explicit receiver refusals (`not_mx` or
+`key_unavailable`). Unknown, expired, or unreachable receiver states do not prove
+that records are missing. A ready sibling does not hide another receiver's MX
+refusal. The local watcher, API verdicts, extra-MX warning, and receiver security
+gates are unchanged. Busy refresh requests are coalesced, stale snapshots get a
+bounded retry, and successful setup Finish saves and closes the dialog; reopening
+shows status. Rotation retains its separate completion flow.
 
 **Requirement:** On a brand-new domain in Antler MX mode the MX check read
 `mismatch` while the TXT check reported `pending`, which the operator read as
@@ -5797,3 +5815,36 @@ proactive validation is introduced.
 permanent-error classification and retries are unchanged. This is diagnostic
 classification only, not a general attachment restriction. No UI, API schema,
 dependency or runtime service change.
+
+## D143 — Passkey controls are hidden where WebAuthn cannot run
+
+**Context:** D116 gated passkeys on a browser secure context and left a
+plain-HTTP deployment to explain itself: the account page kept a "Passkeys"
+heading and a paragraph saying passkeys need HTTPS. The browser glue did the
+same for the case where the deployment is secure but the page is not — the
+"Sign in with a passkey" and "Add a passkey" buttons were rendered disabled,
+next to a red "Passkeys require a secure (HTTPS) connection and a supported
+browser." Both are dead controls and an explanation of a requirement the page
+simply does not meet, on a page whose job is to offer working sign-in methods.
+
+**Decision (2026-10-20):** Where a ceremony cannot run, the passkey controls
+are not offered. A deployment without a WebAuthn service — the canonical origin
+is plain HTTP — renders no passkey section at all, exactly as it already
+rendered no passkey list and no passkey controls. The browser glue removes the
+sign-in button, the add button and the status line that carried the
+explanation when the page is not a secure context, instead of disabling them
+and writing a message. The registered passkey list, the rename and remove
+dialogs, and "Re-enable password sign-in" stay reachable, so a user whose
+password sign-in is disabled keeps the recovery path when the browser cannot
+run a ceremony.
+
+**Reason:** A control that cannot work reads as a broken feature, and the
+explanation tells the operator about a requirement they cannot change from the
+page. Hiding matches how the interface already treats the clipboard API over
+plain HTTP — a control that cannot work is not offered — and it keeps the
+account page about what the operator can do.
+
+**Complexity:** Local to `internal/httpapp`: one template branch and one
+`pageData` field removed, one availability check and one removal helper added
+to the browser glue, and the unmatched `</section>` in the settings template
+removed. No API, schema, dependency or runtime service change.
