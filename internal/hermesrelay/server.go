@@ -208,6 +208,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
+	s.Hub.CancelScope("hrm:" + conn.ID)
 	s.Log.Info("relay enrolled", "gateway_id", conn.GatewayID, "account_id", conn.AccountID, "inbox_id", conn.InboxID, "kind", conn.Kind)
 	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, Tenant: conn.AccountID, GatewayID: req.GatewayID, Kind: conn.Kind, Name: conn.Name})
 }

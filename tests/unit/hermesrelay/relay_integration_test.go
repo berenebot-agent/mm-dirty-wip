@@ -86,6 +86,9 @@ func (w *rawWS) readFrame() ([]byte, error) {
 	if _, err := io.ReadFull(w.r, h); err != nil {
 		return nil, err
 	}
+	if h[0]&0x0f == 8 {
+		return nil, io.EOF
+	}
 	n := uint64(h[1] & 0x7f)
 	if n == 126 {
 		b := make([]byte, 2)
@@ -190,6 +193,23 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	}
 	if updated.LastAckEventID < ev.ID {
 		t.Fatalf("ack not persisted: %d", updated.LastAckEventID)
+	}
+	enrollmentToken, err := st.CreateRelayEnrollToken(ctx, u.AccountID, box.ID, "Hermes", store.KindHermes, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentBody, err := json.Marshal(hermesrelay.EnrollRequest{EnrollmentToken: enrollmentToken, GatewayID: conn.GatewayID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollment := httptest.NewRequest(http.MethodPost, "/relay/enroll", bytes.NewReader(enrollmentBody))
+	enrollmentResponse := httptest.NewRecorder()
+	rs.Enroll(enrollmentResponse, enrollment)
+	if enrollmentResponse.Code != http.StatusOK {
+		t.Fatalf("re-enroll status %d: %s", enrollmentResponse.Code, enrollmentResponse.Body.String())
+	}
+	if _, err = client.readFrame(); err == nil {
+		t.Fatal("existing relay socket remained open after secret rotation")
 	}
 }
 
