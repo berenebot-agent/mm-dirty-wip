@@ -1,0 +1,5799 @@
+# Design decisions
+
+This is a record of technical decisions made during development, including approaches that have since changed. It is **not** a description of the current implementation. Start with [Architecture](ARCHITECTURE.md) for that.
+
+Earlier decisions are left in place for context. Where a decision has been superseded, follow the later decision or the current code. In October 2026, duplicate IDs for three later entries were corrected: D101 → **D129** (delivery-failure notice), D107 → **D130** (Microsoft callback logging), and D119 → **D131** (label projection). The earlier D101, D107 and D119 keep their IDs.
+
+## Decision index
+
+- [D001: One codebase for hosted and self-hosted](#d001-one-codebase-for-hosted-and-self-hosted)
+- [D002: Go runtime](#d002-go-runtime)
+- [D003: Single-container runtime](#d003-single-container-runtime)
+- [D004: SQLite + FTS5](#d004-sqlite-fts5)
+- [D005: Local filesystem MIME store](#d005-local-filesystem-mime-store)
+- [D006: Mailgun reference inbound transport](#d006-mailgun-reference-inbound-transport)
+- [D007: BYO outbound](#d007-byo-outbound)
+- [D008: Replayable event history](#d008-replayable-event-history)
+- [D009: Hermes Relay integration](#d009-hermes-relay-integration)
+- [D010: REST is canonical](#d010-rest-is-canonical)
+- [D011: openagent.email compatibility](#d011-openagentemail-compatibility)
+- [D012: Lightweight web UI](#d012-lightweight-web-ui)
+- [D013: Account storage as hosted capacity control](#d013-account-storage-as-hosted-capacity-control)
+- [D014: Mailbox roles plus account Admin](#d014-mailbox-roles-plus-account-admin)
+- [D015: SQLite concurrency](#d015-sqlite-concurrency)
+- [D016: Mail integrity boundaries](#d016-mail-integrity-boundaries)
+- [D017: Root encryption key](#d017-root-encryption-key)
+- [D018: Direct relay credential issuance](#d018-direct-relay-credential-issuance)
+- [D019: Dedicated inbound webhook listener](#d019-dedicated-inbound-webhook-listener)
+- [D020: Account-owned inbound credentials, domain assignments](#d020-account-owned-inbound-credentials-domain-assignments)
+- [D021: HTML sanitization with bluemonday](#d021-html-sanitization-with-bluemonday)
+- [D022: Resend adapter and webhook-triggered pull inbound](#d022-resend-adapter-and-webhook-triggered-pull-inbound)
+- [D023: Same-origin sandbox for the HTML mail frame](#d023-same-origin-sandbox-for-the-html-mail-frame)
+- [D024: Domain-owned sending and receiving configuration](#d024-domain-owned-sending-and-receiving-configuration)
+- [D025: Draft send requests with human approval](#d025-draft-send-requests-with-human-approval)
+- [D026: External email approval for draft sends](#d026-external-email-approval-for-draft-sends)
+- [D027: Explicit sender restriction toggle (migration 016)](#d027-explicit-sender-restriction-toggle-migration-016)
+- [D028: Public-routable outbound destinations](#d028-public-routable-outbound-destinations)
+- [D029: Approval sender bound to the provider envelope sender](#d029-approval-sender-bound-to-the-provider-envelope-sender)
+- [D030: Inbox aliases: inbound address routing (migration 021)](#d030-inbox-aliases-inbound-address-routing-migration-021)
+- [D031: Optional Go SMTP (MX) edge with signed core handoff](#d031-optional-go-smtp-mx-edge-with-signed-core-handoff)
+- [D032: Send-as-alias: outbound identity (migration 024)](#d032-send-as-alias-outbound-identity-migration-024)
+- [D033: Outbox worker panic containment](#d033-outbox-worker-panic-containment)
+- [D034: Alias sender display names (migration 025)](#d034-alias-sender-display-names-migration-025)
+- [D035: External review remediation (security, correctness, UX)](#d035-external-review-remediation-security-correctness-ux)
+- [D036: One-shot draft writes and consistent draft API](#d036-one-shot-draft-writes-and-consistent-draft-api)
+- [D037: External sending aliases (migration 028)](#d037-external-sending-aliases-migration-028)
+- [D038: Embedded MX: single-container mode with a separate-uid child](#d038-embedded-mx-single-container-mode-with-a-separate-uid-child)
+- [D039: Minimal default Compose enables embedded MX; webhook-only is the opt-out](#d039-minimal-default-compose-enables-embedded-mx-webhook-only-is-the-opt-out)
+- [D040: Separate edge image for remote MX](#d040-separate-edge-image-for-remote-mx)
+- [D041: Workflow mail has its own outbound queue (migration 022)](#d041-workflow-mail-has-its-own-outbound-queue-migration-022)
+- [D042: In-process privilege drop (no gosu, bind-mounted ./data)](#d042-in-process-privilege-drop-no-gosu-bind-mounted-data)
+- [D043: Free-text message labels (migration 020)](#d043-free-text-message-labels-migration-020)
+- [D044: Control-message log label (migration 019)](#d044-control-message-log-label-migration-019)
+- [D045: Message client attribution (migration 017)](#d045-message-client-attribution-migration-017)
+- [D046: Atomic migration runner (BUG-04)](#d046-atomic-migration-runner-bug-04)
+- [D047: Draft storage accounting (SEC-04)](#d047-draft-storage-accounting-sec-04)
+- [D048: Idempotency semantics (SEC-03, SIMP-05)](#d048-idempotency-semantics-sec-03-simp-05)
+- [D049: Outbound claim lease (BUG-05)](#d049-outbound-claim-lease-bug-05)
+- [D050: Revocation cancels live connections (SEC-05)](#d050-revocation-cancels-live-connections-sec-05)
+- [D051: In-transaction hydration (BUG-02)](#d051-in-transaction-hydration-bug-02)
+- [D052: One source of truth for API discovery](#d052-one-source-of-truth-for-api-discovery)
+- [D053: Proxy-chain trust and canonical HTTPS redirect](#d053-proxy-chain-trust-and-canonical-https-redirect)
+- [D054: Operator MX edge secrets require 256 bits](#d054-operator-mx-edge-secrets-require-256-bits)
+- [D055: Operator password reset (superseded in part by D060)](#d055-operator-password-reset-superseded-in-part-by-d060)
+- [D056: Product rename to MailMoose](#d056-product-rename-to-mailmoose)
+- [D057: Self-hosted Direct MX outbound delivery](#d057-self-hosted-direct-mx-outbound-delivery)
+- [D058: Strix security review remediation](#d058-strix-security-review-remediation)
+- [D059: Unattested inbound envelope senders: extended acceptance and containment](#d059-unattested-inbound-envelope-senders-extended-acceptance-and-containment)
+- [D060: System administrator, account Admins, and mailbox operators](#d060-system-administrator-account-admins-and-mailbox-operators)
+- [D061: The trusted-proxy per-request WARN is removed (D059 correction)](#d061-the-trusted-proxy-per-request-warn-is-removed-d059-correction)
+- [D062: Unified clients and webhook delivery](#d062-unified-clients-and-webhook-delivery)
+- [D063: Subdomains inherit their parent domain's receiver and sender](#d063-subdomains-inherit-their-parent-domains-receiver-and-sender)
+- [D064: Self-hosted-only product; hosted mode removed](#d064-self-hosted-only-product-hosted-mode-removed)
+- [D065: In-flight delivery attempts are durably recorded](#d065-in-flight-delivery-attempts-are-durably-recorded)
+- [D066: Persist the transport envelope sender; forward envelope metadata; terminal webhook skips](#d066-persist-the-transport-envelope-sender-forward-envelope-metadata-terminal-webhook-skips)
+- [D067: Dial MX: an outbound-dialing standalone receiver](#d067-dial-mx-an-outbound-dialing-standalone-receiver)
+- [D070: One MX receiver transport, private single-core and public shared modes](#d070-one-mx-receiver-transport-private-single-core-and-public-shared-modes)
+- [D071: MX receiver configuration is persisted and reconciled at runtime](#d071-mx-receiver-configuration-is-persisted-and-reconciled-at-runtime)
+- [D072: Bounded shared MX shards and dial-time destination policy](#d072-bounded-shared-mx-shards-and-dial-time-destination-policy)
+- [D073: Trash: soft-delete, restore, configurable retention](#d073-trash-soft-delete-restore-configurable-retention)
+- [D074: OpenClaw is a second relay connector kind over the same transport](#d074-openclaw-is-a-second-relay-connector-kind-over-the-same-transport)
+- [D075: Passkey backup flags, sysadmin break-glass, and atomic auth-method changes](#d075-passkey-backup-flags-sysadmin-break-glass-and-atomic-auth-method-changes)
+- [D076: Account-admin settings separation and per-inbox Trash retention](#d076-account-admin-settings-separation-and-per-inbox-trash-retention)
+- [D077: Sign in to the web UI with a non-admin mailbox API key](#d077-sign-in-to-the-web-ui-with-a-non-admin-mailbox-api-key)
+- [D078: Delivery-triggered per-inbox auto-actions for agent connectors](#d078-delivery-triggered-per-inbox-auto-actions-for-agent-connectors)
+- [D079: Per-inbox storage quotas](#d079-per-inbox-storage-quotas)
+- [D080: Configurable HTTP receiver listener and public origin](#d080-configurable-http-receiver-listener-and-public-origin)
+- [D081: Delivery auto-actions default to the `all` trigger](#d081-delivery-auto-actions-default-to-the-all-trigger)
+- [D082: Antler MX: a named shared receiver service with live endpoint discovery](#d082-antler-mx-a-named-shared-receiver-service-with-live-endpoint-discovery)
+- [D083: Cleartext shared-mode sessions from a trusted TLS-terminating proxy](#d083-cleartext-shared-mode-sessions-from-a-trusted-tls-terminating-proxy)
+- [D084: Remote MX: an account-owned single-mode receiver](#d084-remote-mx-an-account-owned-single-mode-receiver)
+- [D085: First-run HTTP setup wizard (supersedes D055 in part)](#d085-first-run-http-setup-wizard-supersedes-d055-in-part)
+- [D086: Private outbound is allowed by default (amends D028)](#d086-private-outbound-is-allowed-by-default-amends-d028)
+- [D087: Receiver cleartext and remote-MX URLs default to allow, with a warning](#d087-receiver-cleartext-and-remote-mx-urls-default-to-allow-with-a-warning)
+- [D088: Release follow-up: delivery bounds, safe diagnostics and approval limits](#d088-release-follow-up-delivery-bounds-safe-diagnostics-and-approval-limits)
+- [D089: Per-inbox Clients & Access tab](#d089-per-inbox-clients-access-tab)
+- [D090: Activity-log source names the receiving receiver](#d090-activity-log-source-names-the-receiving-receiver)
+- [D091: Domain-scoped failure cooldown on the Dial MX receiver](#d091-domain-scoped-failure-cooldown-on-the-dial-mx-receiver)
+- [D092: Configurable outbound provider HTTP timeout](#d092-configurable-outbound-provider-http-timeout)
+- [D093: Concurrent outbox senders](#d093-concurrent-outbox-senders)
+- [D094: Live web-UI updates: session SSE stream, state snapshot, and read-state events](#d094-live-web-ui-updates-session-sse-stream-state-snapshot-and-read-state-events)
+- [D095: Dial MX receiver owns MX-routing verification (gate 2), replacing the core's separate MX cross-check](#d095-dial-mx-receiver-owns-mx-routing-verification-gate-2-replacing-the-cores-separate-mx-cross-check)
+- [D096: Postmark inbound connector](#d096-postmark-inbound-connector)
+- [D097: Standalone mailboxes and the common mailbox service boundary](#d097-standalone-mailboxes-and-the-common-mailbox-service-boundary)
+- [D098: BYO Google connected inboxes](#d098-byo-google-connected-inboxes)
+- [D099: Standalone IMAP quick sync, configurable cadence and manual refresh](#d099-standalone-imap-quick-sync-configurable-cadence-and-manual-refresh)
+- [D100: Microsoft connected mailboxes with public-client OAuth and delta polling](#d100-microsoft-connected-mailboxes-with-public-client-oauth-and-delta-polling)
+- [D101: Microsoft own-mailbox push with durable delta catch-up](#d101-microsoft-own-mailbox-push-with-durable-delta-catch-up)
+- [D102: Remote metadata counts toward the storage quota](#d102-remote-metadata-counts-toward-the-storage-quota)
+- [D103: Shared durable inbox action queue](#d103-shared-durable-inbox-action-queue)
+- [D104: Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling](#d104-demand-coalesced-standalone-detection-with-a-microsoft-quick-pass-and-push-aware-polling)
+- [D105: Preserve and expose remote arrival source provenance](#d105-preserve-and-expose-remote-arrival-source-provenance)
+- [D106: One import shows a message count and offers a bounded history window](#d106-one-import-shows-a-message-count-and-offers-a-bounded-history-window)
+- [D107: Dial MX published-record checks are one watcher-owned verdict, pushed over SSE](#d107-dial-mx-published-record-checks-are-one-watcher-owned-verdict-pushed-over-sse)
+- [D108: One/Gmail metadata sync shows a normalised estimate and never a "waiting" state](#d108-onegmail-metadata-sync-shows-a-normalised-estimate-and-never-a-waiting-state)
+- [D109: One native API message schema across inbox kinds and routes](#d109-one-native-api-message-schema-across-inbox-kinds-and-routes)
+- [D110: Useful common message metadata, internal-only IMAP locators, and safe direction inference](#d110-useful-common-message-metadata-internal-only-imap-locators-and-safe-direction-inference)
+- [D130: Microsoft push callbacks are silent fetch hints](#d130-microsoft-push-callbacks-are-silent-fetch-hints)
+- [D111: Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule](#d111-local-dns-checks-distinguish-absent-from-unknown-and-share-the-receivers-mm1-rule)
+- [D112: Antler setup keeps its receiver snapshot, and its settings are editable in place](#d112-antler-setup-keeps-its-receiver-snapshot-and-its-settings-are-editable-in-place)
+- [D069: DKIM signing on the Direct MX outbound path](#d069-dkim-signing-on-the-direct-mx-outbound-path)
+- [D113: DKIM published-record indicator on the Direct MX sending side](#d113-dkim-published-record-indicator-on-the-direct-mx-sending-side)
+- [D114: Review remediation: partial fan-out acknowledgement, account-settings scope, and config honesty](#d114-review-remediation-partial-fan-out-acknowledgement-account-settings-scope-and-config-honesty)
+- [D129: Terminal outbound failures are surfaced as a local delivery-failure notice](#d129-terminal-outbound-failures-are-surfaced-as-a-local-delivery-failure-notice)
+- [D115: Domain-wide sending: a per-key grant anchored on the catch-all inbox](#d115-domain-wide-sending-a-per-key-grant-anchored-on-the-catch-all-inbox)
+- [D116: Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness](#d116-second-review-remediation-redirect-cookie-csrf-flash-throttle-argon-admission-and-inbound-fairness)
+- [D117: Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF](#d117-lowedge-security-review-round-parameter-bounds-csp-cache-and-pre-auth-csrf)
+- [D118: Stored secrets always carry an AAD binding; the PBKDF2 password path is removed](#d118-stored-secrets-always-carry-an-aad-binding-the-pbkdf2-password-path-is-removed)
+- [D119: Standalone workflow delivery no longer fails on a NULL inbox domain, and a failed action reports its real cause](#d119-standalone-workflow-delivery-no-longer-fails-on-a-null-inbox-domain-and-a-failed-action-reports-its-real-cause)
+- [D120: A move destination may be a folder id or a folder path](#d120-a-move-destination-may-be-a-folder-id-or-a-folder-path)
+- [D131: One label membership projection, one filter resolution, and catalogue capabilities](#d131-one-label-membership-projection-one-filter-resolution-and-catalogue-capabilities)
+- [D121: Remote-draft mode just places the draft: no notification, no approver, no handoff UI](#d121-remote-draft-mode-just-places-the-draft-no-notification-no-approver-no-handoff-ui)
+- [D122: Immediate, folder-scoped pull after a confirmed remote write](#d122-immediate-folder-scoped-pull-after-a-confirmed-remote-write)
+- [D123: `NOINDEX` asks crawlers to skip the human UI](#d123-noindex-asks-crawlers-to-skip-the-human-ui)
+- [D124: Receiving DNS checks are a hard gate: four states, and only `ok` is green](#d124-receiving-dns-checks-are-a-hard-gate-four-states-and-only-ok-is-green)
+- [D125: Transient hub notifications are wake hints; SQLite remains event truth](#d125-transient-hub-notifications-are-wake-hints-sqlite-remains-event-truth)
+- [D126: A provider-accepted send is never resent automatically](#d126-a-provider-accepted-send-is-never-resent-automatically)
+- [D127: `attention` is an authorization verdict, not any provider error](#d127-attention-is-an-authorization-verdict-not-any-provider-error)
+- [D128: The root encryption key is generated when the operator does not supply one](#d128-the-root-encryption-key-is-generated-when-the-operator-does-not-supply-one)
+- [D132: The first public MX session protocol is v1](#d132-the-first-public-mx-session-protocol-is-v1)
+- [D133: Strix remediation: delegated authority, destination-bound secrets and approval delivery](#d133-strix-remediation-delegated-authority-destination-bound-secrets-and-approval-delivery)
+- [D134: A settled receiver refusal is an error state, not a retry](#d134-a-settled-receiver-refusal-is-an-error-state-not-a-retry)
+- [D135: The public database baseline replaces the pre-release migration lineage](#d135-the-public-database-baseline-replaces-the-pre-release-migration-lineage)
+- [D136: Retire the completed developer database transition](#d136-retire-the-completed-developer-database-transition)
+- [D137: Published image names, and one edge image for both modes](#d137-published-image-names-and-one-edge-image-for-both-modes)
+- [D138: Relay replies carry their trigger; slow handlers heartbeat; remote metadata accounting is incremental](#d138-relay-replies-carry-their-trigger-slow-handlers-heartbeat-remote-metadata-accounting-is-incremental)
+- [D139: Relay replies resolve the wire form a stock Hermes gateway sends](#d139-relay-replies-resolve-the-wire-form-a-stock-hermes-gateway-sends)
+- [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
+- [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
+
+---
+
+## D001 — One codebase for hosted and self-hosted
+
+**Decision:** Hosted and self-hosted deployments share the same core binary, API, mailbox model, and UI.
+
+**Reason:** Dogfooding, simple maintenance, user trust, and easy portability.
+
+## D002 — Go runtime
+
+**Decision:** Implement V1 in Go.
+
+**Reason:** Compact deployment, low idle resource use, strong networking/concurrency, and suitable standard-library primitives.
+
+## D003 — Single-container runtime
+
+**Decision:** Package V1 as one prebuilt Docker image containing one application process.
+
+**Reason:** Simple self-hosting, backup, upgrade, and ARM64/amd64 deployment.
+
+## D004 — SQLite + FTS5
+
+**Decision:** Use SQLite in WAL mode for hosted and self-hosted V1.
+
+**Reason:** Workload is initially modest, inbox records are lightweight, and SQLite keeps the operational footprint very small.
+
+**Extension point:** Add a PostgreSQL store when measured load makes it beneficial.
+
+## D005 — Local filesystem MIME store
+
+**Decision:** Store canonical raw MIME under `/data/messages`.
+
+**Reason:** Simple persistence and backup, efficient streaming, and minimal runtime dependencies.
+
+**Extension point:** Add object storage when storage scale warrants it.
+
+## D006 — Mailgun reference inbound transport
+
+**Decision:** V1 inbound internet transport uses Mailgun HTTPS delivery, with Cloudflare Email Routing (via a Worker) as a second adapter.
+
+**Reason:** It removes public SMTP/MX protocol operation from the application while keeping each provider adapter small.
+
+**Boundary:** Provider-specific code remains isolated in `/internal/transport/mailgun` and `/internal/transport/cloudflare`. Adapters authenticate their own webhook and return the explicit binding they verified; the shared mailbox core is transport-neutral.
+
+## D007 — BYO outbound
+
+> **Superseded in part by [D024](#d024--domain-owned-sending-and-receiving-configuration).**
+> The account-level outbound credential pool, named connector reuse, and
+> `domains.outbound_credential_id` assignment below were replaced by one optional
+> sending configuration owned by each domain. The BYO rationale, provider
+> registry, and adapter-schema boundary remain. Text below is retained as the
+> historical decision.
+
+**Decision:** Users provide outbound credentials.
+
+**V1 adapters:**
+- Mailgun HTTP API
+- generic SMTP
+- Brevo HTTP API
+
+Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific configuration. The Admin UI renders provider-specific fields from a schema each adapter exposes, so users enter an API key and the relevant settings rather than raw JSON.
+
+An account may hold multiple outbound credentials. Each domain designates the credential it sends through (`domains.outbound_credential_id`); there is no account-level default, so mail can only leave through the provider explicitly attached to its domain. Per-inbox credential assignment is removed and no longer accepted by the API.
+
+A domain with no credential is valid: mail is still accepted and queued as `pending` (the outbox worker holds it without consuming retry attempts) until a provider is assigned, rather than being rejected or sent through another domain's provider. On upgrade, existing domains are left with no credential and start paused until an admin assigns one.
+
+**Reason:** Provider credentials are sending-domain-scoped (for example Mailgun's sending domain or an SMTP `from_domain`), and an account-level default risked sending a domain's mail through the wrong provider. Forcing an explicit per-domain choice removes that failure mode while keeping one credential reusable across domains. Queuing instead of rejecting avoids losing mail during setup or a provider outage.
+
+## D008 — Replayable event history
+
+**Decision:** SQLite events are the persistent realtime history.
+
+**Interfaces:**
+- incremental REST
+- long-poll
+- SSE
+
+**Reason:** One recovery model supports both realtime and disconnected clients.
+
+## D009 — Hermes Relay integration
+
+**Decision:** Hermes Relay is the preferred realtime Hermes integration.
+
+**Reason:** Hermes can maintain an outbound-only authenticated connection and receive new mail through native gateway messaging semantics.
+
+**Boundary:** Relay remains an adapter over the mailbox/event core because its protocol is externally versioned.
+
+## D010 — REST is canonical
+
+**Decision:** REST/event APIs are the canonical generic agent interface.
+
+**Reason:** Small token footprint, direct debugging, self-documentation, and client independence.
+
+**Extension point:** MCP can be provided as an optional adapter.
+
+## D011 — openagent.email compatibility
+
+**Decision:** Preserve compatible endpoint names/fields where semantics align cleanly.
+
+**Reason:** Familiar integration and easier migration.
+
+**Boundary:** Native MailMoose models remain authoritative for richer features.
+
+## D012 — Lightweight web UI
+
+**Decision:** Use embedded server-rendered or similarly compact web assets served by the Go binary.
+
+**Reason:** Human administration requires forms, lists, search, and message inspection rather than a separate application runtime.
+
+## D013 — Account storage as hosted capacity control
+
+**Decision:** Account-level storage is the capacity control while logical inbox
+identities remain cheap to create.
+
+**Reason:** Storage reflects real infrastructure consumption more closely than inbox count.
+
+## D014 — Mailbox roles plus account Admin
+
+**Decision:** Permissions use three mailbox-level roles plus one account-level administrative role.
+
+Mailbox roles are assigned independently per inbox:
+
+```text
+Read       → read messages/threads, search, attachments
+Assistant  → Read + delete messages + create/edit drafts
+Owner      → Assistant + send/reply + mailbox settings
+```
+
+A single key can have different roles on different inboxes.
+
+Account administration is separate:
+
+```text
+Admin      → full account access
+```
+
+Admin can create/delete inboxes, manage domains, keys/users, outbound providers, Hermes connections, and account-wide settings.
+
+**Reason:** This matches agent delegation: mailbox Owner grants full mailbox operation, while Admin grants account-wide administration.
+
+## D015 — SQLite concurrency
+
+**Decision:** Use one serialized SQLite writer connection plus a small bounded read pool, with WAL and a busy timeout.
+
+**Reason:** Predictable concurrent behaviour with minimal runtime complexity.
+
+## D016 — Mail integrity boundaries
+
+**Decision:** Inbound delivery idempotency is scoped to `(account_id, provider, canonical original envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated webhook `token`; Cloudflare uses its delivery id or a raw-MIME hash. Thread matching is scoped to the same account and inbox. Unknown recipients use a configured catch-all or receive a terminal transport rejection.
+
+**Reason:** Stable retry behaviour and isolation between mailboxes/accounts. Including the original recipient prevents a catch-all from collapsing distinct deliveries, and excluding the credential row means replacing a credential does not turn a retry into a new delivery.
+
+## D017 — Root encryption key
+
+**Decision:** `APP_ENCRYPTION_KEY` is the root secret for recoverable provider credentials and is backed up separately from `/data`.
+
+**Reason:** Restoring encrypted credentials requires both application data and the root secret.
+
+**Status note:** the "operator supplies it" half is superseded by `D128`, which generates a key into `<DATA_DIR>/encryption_key` when `APP_ENCRYPTION_KEY` is unset. A supplied key still wins and is still kept out of `/data`; the separate-backup requirement applies to it, not to a generated key.
+
+## D018 — Direct relay credential issuance
+
+**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block.
+
+**Reason:** A self-hosted operator should be able to create a relay connection and paste the resulting environment variables without a separate token-exchange step or a hosted identity token.
+
+**Status note:** the "remains for CLI provisioning" half of this decision was never implemented for Hermes. `POST /relay/enroll` works, but only the OpenClaw kind can mint a code for it (`CreateRelayEnrollCode` rejects every other kind), so a Hermes `hermes gateway enroll` cannot complete. The store-level `CreateHermesEnrollToken` is reachable from tests only. Either wire a Hermes mint path or treat the token flow as OpenClaw-only; until then, the direct block is the only Hermes path. See `docs/CONNECTORS.md` §3.
+
+## D019 — Dedicated inbound webhook listener
+
+**Decision:** The application always runs a second HTTP listener on `:8082` that serves the authenticated inbound webhook routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/cloudflare`, and `/internal/ingest/{provider}`), the optional MX routes (`/internal/mx/resolve` and `/internal/mx/ingest`, present only when `MX_ENABLE=true|remote`), and `/healthz`. The main listener continues to serve all routes.
+
+**Reason:** This lets an operator expose only the inbound connector to the public internet while keeping the API, web UI, and Relay WebSocket on a private interface or firewall, reducing public attack surface. It remains one process, one container, and one store, so D003 is preserved. Ingest routes stay on the main listener for backward compatibility. The port is fixed rather than configurable so the split works with no extra configuration.
+
+## D020 — Account-owned inbound credentials, domain assignments
+
+> **Superseded in part by [D024](#d024--domain-owned-sending-and-receiving-configuration).**
+> Inbound secrets are no longer account-owned credentials selected by a nullable
+> assignment; each domain owns at most one receiving configuration. The
+> provider-boundary and encryption-at-rest rationale below remain. Text below is
+> retained as the historical decision.
+
+**Decision:** Inbound provider secrets are stored as account-owned, encrypted credentials (`inbound_credentials`), and each domain selects one nullable receive credential (`domains.inbound_credential_id`) independent of its outbound credential. Credential reuse is restricted to the same account. Provider identity is immutable on update. The process environment no longer supplies inbound secrets (`MAILGUN_SIGNING_KEY`, `CLOUDFLARE_WEBHOOK_SECRET` are removed).
+
+**Reason:** The concrete BYO requirement is that a self-hosted operator can add a domain, add or select its receive path, and follow the provider's setup steps without editing environment variables or restarting. This supports multiple providers and multiple credentials per account while keeping encryption at rest on the existing `APP_ENCRYPTION_KEY` AES-GCM path. One receive connection per domain is a V1 simplification; provider overlap and failover are deferred. A domain with no receive path is valid to save but cannot accept mail.
+
+**Boundary:** Provider-specific webhook parsing and authentication stay in the transport adapters. The service resolves the account/domain/credential binding and the shared core persists the message.
+
+## D021 — HTML sanitization with bluemonday
+
+**Decision:** Untrusted email HTML is sanitized with `github.com/microcosm-cc/bluemonday` at the rendering boundary (`internal/htmlsanitize`), not escaped at parse time.
+
+**Reason:** Escaping stored markup made HTML messages unreadable in the UI. The parser now stores the raw parsed HTML; the message iframe route and the REST API sanitize it against an allowlist that preserves email formatting (tables, inline styles, images) while stripping scripts, event handlers, forms and embedded objects. Sanitization runs after CID rewriting and before base-target injection.
+
+**Licence:** bluemonday is BSD-3-Clause; attribution is in `THIRD_PARTY_NOTICES.md`.
+
+## D022 — Resend adapter and webhook-triggered pull inbound
+
+**Decision:** Resend is supported as both an inbound and outbound provider in `internal/transport/resend`. Because a Resend `email.received` webhook carries only metadata, the inbound adapter verifies the Svix HMAC signature, resolves the receive binding from the first recipient that maps to a configured domain, then fetches the raw MIME from `GET /emails/receiving/{email_id}` with the account API key before staging it to the bounded temp path. The pull and provider-specific auth stay inside the adapter; the shared core still consumes a staged `InboundMessage`. Delivery dedup uses the Resend `email_id`. Non-`email.received` events return the new `transport.ErrInboundIgnored` sentinel, which the HTTP layer maps to `200` so the provider does not retry an event that requires no ingest.
+
+**Reason:** Resend deliberately excludes bodies, headers, and attachments from webhooks to support large attachments in serverless environments, so a receive webhook must trigger an authenticated fetch. Keeping the fetch inside the adapter preserves the provider-neutral core and the existing dedup/persistence transaction, while the ignore sentinel prevents unrelated event types from becoming retried `500`s.
+
+**Boundary:** Provider auth material, the Svix verification, and the raw-content fetch remain in `internal/transport/resend`. The service resolves the account/domain/credential binding; the core persists the staged message.
+
+## D023 — Same-origin sandbox for the HTML mail frame
+
+**Decision:** The message HTML iframe keeps its sandbox but adds `allow-same-origin`, still without `allow-scripts`.
+
+**Reason:** Without `allow-same-origin` the frame has an opaque origin, so the browser does not send the `SameSite=Lax` session cookie for inline `cid:` images served from `/ui/attachments/{id}/inline`; those images fail authentication and render broken. Scripts remain blocked by the absent `allow-scripts` token, the iframe CSP (`default-src 'none'`, no `script-src`) and the sanitizer, so the residual risk is that sanitized mail can trigger authenticated same-origin GETs. The only state-changing GET is opening a message, which marks it read.
+
+**Scope:** HTML message rendering only.
+
+## D024 — Domain-owned sending and receiving configuration
+
+**Decision:** Each domain owns at most one optional sending configuration and at
+most one optional receiving configuration. There is no account-level connector
+pool, no named or reusable connector, no shared assignment, and no standalone
+connector API. Sending and receiving are managed directly on the domain:
+
+```http
+GET    /v1/admin/domains/{id}/sending
+PUT    /v1/admin/domains/{id}/sending
+DELETE /v1/admin/domains/{id}/sending
+GET    /v1/admin/domains/{id}/receiving
+PUT    /v1/admin/domains/{id}/receiving
+DELETE /v1/admin/domains/{id}/receiving
+GET    /v1/admin/domains/{id}/sending/deliveries
+GET    /v1/admin/domains/{id}/receiving/deliveries
+```
+
+`PUT` takes `{provider, config}` (receiving also takes `regenerate_secret`). A
+generated Cloudflare Worker secret is created only when missing, preserved by a
+normal same-provider save, and replaced only by an explicit regenerate. Domain
+creation accepts `name` only; `PATCH /v1/admin/domains/{id}` accepts
+`catch_all_inbox_id` only. Supersedes the affected portions of
+[D007](#d007--byo-outbound) and [D020](#d020--account-owned-inbound-credentials-domain-assignments).
+
+**Requirement:** The old model exposed an account-level pool of named
+credentials plus explicit per-domain assignment selectors in both the API and
+the UI. It was insufficient because the underlying provider configuration is
+already sending/receiving-domain-scoped (for example Mailgun's sending domain or
+an SMTP `from` domain), so a reusable named connector invited sending a domain's
+mail through another domain's provider. The separate connector lifecycle also
+required orphan handling and an assignment step that had no product value, and
+the UI split configuration across a connector screen and a domain screen. A
+domain-first model makes ownership, the pause-on-missing-provider behaviour, and
+the per-domain two-way activity log (outbound attempts plus delivered and
+blocked inbound mail) explicit.
+
+**Complexity:** Qualitative, not measured. The change removes the standalone
+connector CRUD, assignment fields, and orphan handling while adding two
+domain-keyed tables, one forward migration, and domain-scoped handlers. It
+introduces no new runtime service and no new dependency: it reuses the existing
+SQLite store, AES-GCM encryption with `APP_ENCRYPTION_KEY`, provider registry,
+and adapters. Net surface area is smaller than the connector model.
+
+**Migration:** Migration 013 copies assigned connector bytes into independent
+per-domain configs without re-keying, drops connectors not assigned to any
+domain, and preserves mailbox, auth, message, storage, and delivery-log data.
+The `domains` table loses the credential-assignment columns;
+`outbound_delivery_log.credential_id` becomes a nullable `domain_id`
+(`ON DELETE SET NULL`, no foreign key to a config row), with attempts backfilled
+from the attempt's message and inbox and unattributable attempts retained with a
+NULL domain. The schema baseline (`001`) is gated on the absence of the
+`schema_migrations` marker table, so a routine boot of an existing database
+cannot resurrect the dropped connector tables; a partially applied upgrade fails
+with an actionable error rather than retrying into a duplicate-column crash
+loop. Back up `/data` and `APP_ENCRYPTION_KEY` before running the new binary.
+
+## D025 — Draft send requests with human approval
+
+**Decision:** An Assistant may draft and request send; an Owner authorizes. A
+send request is recorded as a durable `draft_send_requests` row independent of
+the draft, because a successful send consumes (deletes) the draft. The request
+stores the requester, a fingerprint of the reviewed content, the decision
+(actor, method, optional feedback), and the delivery outcome separately from the
+decision. A draft is frozen (`drafts.status = pending_approval`) while a request
+is outstanding; edits are refused until the request is cancelled. Approving
+claims the pending request in the same transaction that enqueues the outbound
+message, so a request can never authorize two sends. UI approval and eventual
+external approval converge on the existing draft-send/outbound path.
+
+**Requirement:** The product rule is that an agent expresses intent to send but
+cannot self-authorize. The existing draft model had no workflow state, and
+sending deleted the draft atomically, so approval could neither be recorded nor
+reported after the fact. Separating the decision from delivery also satisfies
+the rule that a provider failure must not require a second approval.
+
+**Complexity:** Qualitative. Adds one column and one table (migration 014), a
+store workflow module, service methods, API endpoints, durable `draft.*` events,
+and UI for review and decisions. No new runtime service, dependency, or
+infrastructure: it reuses the existing draft, outbound, event, and storage
+subsystems. External email approval is deliberately out of scope for this phase;
+the request table is shaped so approver identity, a hashed token, and an expiry
+can be added by a later migration.
+
+**Migration (014):** `drafts.status` is one of `draft`, `pending_approval` or
+`rejected`. `draft_send_requests` is the durable record of the request, decision
+and delivery outcome; it survives the draft being consumed by an approved send
+(`draft_id` is a plain column with no foreign key, while `account_id` and
+`inbox_id` cascade so purging an account or inbox removes requests). A partial
+unique index allows at most one `pending` request per draft, and approval updates
+that row conditionally inside the enqueue transaction. Decision (`status`) and
+delivery (`delivery_status`) are tracked separately so a provider failure never
+invalidates an approval. Draft bytes stay charged until send consumes them.
+
+## D026 — External email approval for draft sends
+
+**Decision:** Phase 2 lets an external person authorize a draft send entirely
+by email, with no MailMoose account. An inbox may configure one optional
+`approver_email` (Owner/Admin via `PATCH /v1/inboxes/{id}`). A configured
+approver makes `request-send` external automatically: MailMoose freezes the
+draft, records a request carrying the approver, a hashed one-time token and an
+expiry, and queues an approval email from the agent inbox through the existing
+outbound path in the same transaction. The optional `{"external": true}` flag
+is accepted for clarity but is not required and only errors when the inbox has
+no approver. The email carries the reviewed draft and its real attachment
+bytes, plus `mailto:` Approve/Reject actions that pre-address a control reply
+to the inbox; nothing happens until the approver sends that reply.
+
+**Trigger:** External approval is a property of the inbox, not the request. An
+agent that simply calls `request-send` gets approval by email whenever the
+inbox has an approver configured; it never has to know the transport. An inbox
+with an approver cannot create a MailMoose-only request (the owner can still
+approve or reject in the UI).
+
+An inbound message whose decoded subject contains exactly one strict
+`[GH-APPROVE:<token>]` or `[GH-REJECT:<token>]` is consumed as workflow input.
+The token is 96-bit (12 random bytes, 16 base64url characters), stored only as a
+SHA-256 hash, and the reply subject appends the draft subject so the reply links
+back to the draft; the parser tolerates surrounding text.
+An approver may also decide by replying to the approval email directly, without
+using the buttons. The email body carries a visible `[GH-REQUEST:<token>]`
+reference line; a plain-text or HTML reply quotes it, binding the reply to the
+same one-time request whether or not the client honours `mailto:`. The action is
+read only from the first non-empty line of the approver's own text, after
+cutting at the first quoted-history boundary: a first token of
+`Approve`/`Approved` or a common affirmative (`yes`, `yep`, `yeah`, `ok`,
+`okay`, `accept`/`accepted`, `confirm`/`confirmed`, `authorize`/`authorized`/
+`authorised`, `lgtm`, `y`) in any case approves, and any other readable line
+rejects (an empty or unreadable reply rejects too). A first affirmative is
+honoured even when the rest of the line qualifies it ("Yes, don't approve"),
+because no negation is parsed; the emailed instruction names the exact word and
+the gate remains the nominated approver's reply. This is the deliberate, narrow
+exception to the rule that a parser must not look for natural-language words
+like "approve": the word is only the action selector, while the token, the
+stored request and the sender binding remain the authentication, and it is read
+solely from the approver's new text so the quoted original — which always
+contains the word "Approve" and the control tokens — can never select it. The
+`mailto:` buttons are retained for clients that open them.
+Control-format mail is handed to the control handler regardless of the sender
+allow-list, because the handler validates the live token and the exact stored
+approver and because the inbox's approver setting may have changed after the
+request was created; non-control mail still passes the allow-list. The
+configured approver is always an accepted sender (shown as a locked,
+non-removable entry in the allowed-senders UI).
+Consumed control mail is never stored as a message, FTS-indexed, relayed or
+marked unread; it is recorded in `inbound_control_messages` for the per-domain
+activity log and webhook dedup, labelled `Approval: <draft subject>` for an
+approval or `Rejected: <draft subject>` for a rejection (the raw
+inbound subject, which carries the token, is never stored or shown). A decision
+is valid only when the token is live
+(not expired/decided), the request is pending, the RFC From equals the stored
+approver, and the frozen content fingerprint still matches. A valid approve
+claims the request and enqueues the frozen draft through the shared outbound
+primitive; a valid reject stores optional feedback and returns the draft to
+`rejected`. The inbox approver may be changed at any time; an outstanding
+request keeps the approver it was created with.
+
+**Requirement:** The product rule is that an agent expresses intent but cannot
+self-authorize, and that a nominated human approves without needing a MailMoose
+account. Email is the lowest-friction transport, but a bare subject token is
+weak: it can be guessed, replayed, forwarded or forged. The design therefore
+pairs the secret token with a nominated sender address, enforces single use at
+the same store primitive as UI approval, and keeps expiry (default 48h, global
+`APPROVAL_EXPIRY_HOURS`, `0`=never) actively releasing the draft.
+
+**Complexity:** Qualitative. Adds migration 015 (send-request approver/token/
+expiry columns, inbox approver columns, `draft_attachments.content_hash`, and
+`inbound_control_messages`), a strict control-subject parser and feedback
+extractor, a dedicated internal external-approval entry point, an expiry sweep
+in the outbox worker, an approval-email builder, API/UI approver settings, and
+the `draft.approval_expired` event. No new dependency or runtime service; it
+reuses the outbound, event, storage and SQLite subsystems.
+
+**Sender binding:** the decision is bound to the transport-reported envelope
+sender (`transport.InboundMessage.EnvelopeFrom`) rather than the attacker-
+controlled MIME `From:` header; both must equal the stored approver and a
+missing envelope is rejected (see D029). Full SPF/DKIM/DMARC evidence capture
+remains deferred. Per-request arbitrary approvers and approval-token resend are not
+supported; the approver is an inbox setting and a new request issues a new
+token. Section 20 of `roadmap/roadmap_assistant.md` (arbitrary per-request
+approver) is superseded by the inbox-level setting.
+
+**Integrity fix:** the frozen fingerprint now covers each attachment's SHA-256
+bytes (not just filename/type/size), and the bytes are re-verified at send, so
+an approval binds to the exact content reviewed. This closes a Phase 1 gap.
+
+**Migration (015):** `draft_send_requests` gains `approver_email`, `token_hash`,
+`token_expires_at` and `approval_message_id`, and a request status may now be
+`expired`. `inboxes` gains `approver_email`; when set, the approver is always an
+accepted inbound sender and is shown locked in the allowed-senders UI, and the
+approver may be changed at any time while an outstanding request keeps the
+approver it was created with. `draft_attachments.content_hash` stores each
+attachment's SHA-256 (a Go backfill hashes existing files; the fingerprint covers
+these bytes and they are re-verified at send). `inbound_control_messages` records
+every consumed approval control email; it feeds the per-domain receiving log
+(kind `approval`) and is the webhook dedup key. A configured inbox approver makes
+`request-send` external automatically and queues the approval email in the same
+transaction as the request; external approval is a dedicated internal path (not a
+fabricated Principal) that reuses the shared claim/enqueue primitive, so UI and
+email decisions race safely and a decision is single-use. Expiry is global
+(`APPROVAL_EXPIRY_HOURS`, default 48, `0`=never), evaluated lazily on
+request-send and by a sweep in the outbox worker, emitting
+`draft.approval_expired`. Sender-authentication (SPF/DKIM/DMARC) capture is
+deferred.
+
+## D027 — Explicit sender restriction toggle (migration 016)
+
+**Decision:** An inbox's sender allow-list is only enforced when an explicit
+`sender_restricted` flag is set. When it is off, `allowed_senders` is ignored
+and any sender is accepted; when on, only matching senders (plus the configured
+approver) are accepted. The web inbox editor exposes this as a "Block senders
+to this inbox except the allow list below" checkbox and hides the allow-list
+editor while it is off. `PATCH /v1/inboxes/{id}` accepts `sender_restricted`;
+supplying `allowed_senders` without it infers restriction from a non-empty list
+so existing API clients keep working. Migration 016 backfills existing inboxes
+with a non-empty list to restricted.
+
+**Reason:** The previous rule (empty list = open, non-empty = restricted) could
+not distinguish "restricted with no senders" from "open", and made the locked
+approver entry look like it enabled filtering. Setting an approver must never
+restrict general receiving — it did not in practice, but the UI implied it
+could. An explicit flag makes the intent unambiguous in the API, the UI and the
+inbound check.
+
+**Complexity:** One column, one backfill, a store setter, an API field and a UI
+checkbox; no new dependency or runtime service.
+
+## D028 — Public-routable outbound destinations
+
+**Decision:** Every outbound transport (HTTP provider clients, generic SMTP,
+Direct MX, and the per-account Remote MX receiver) can be held to a
+public-routable destination policy. The operator controls this globally with
+`ALLOW_PRIVATE_OUTBOUND`; because self-hosting is the primary model the guard is
+**off by default** (`ALLOW_PRIVATE_OUTBOUND=true`), so private gateways, local
+relays and LAN receivers work out of the box. An operator who wants public-only outbound sets
+`ALLOW_PRIVATE_OUTBOUND=false` to confine every outbound connection to the public
+internet, and that global policy also governs the per-account Remote MX receiver
+so a tenant cannot re-enable private destinations on their own. When enforcement
+is on, provider HTTP API bases must also be HTTPS and must not name a loopback,
+private or link-local IP literal. The shared `netutil` client validates inside
+`DialContext` (so DNS cannot rebind between validation and connection), refuses
+redirects, and bypasses the proxy environment while enforcement is active;
+enforcement off restores the default transport and proxy behaviour.
+
+**Reason:** MailMoose is self-hosted (D064). Blocking private destinations by
+default breaks legitimate private gateways, local relays and LAN receivers.
+An operator may still restrict outbound reachability, including provider bases
+that would otherwise reach local services or cloud metadata endpoints. The guard
+is an explicit operator choice, and the
+per-account Remote MX `allow_private` flag is effective only when the operator
+permits private outbound. See D086 (superseding the default) for the change
+record.
+
+**Complexity:** One config flag, a shared `netutil` gate, and adapter wiring; no
+new dependency or runtime service.
+
+## D029 — Approval sender bound to the provider envelope sender
+
+**Decision:** An email approval is accepted only when the transport-reported
+envelope sender presented in the inbound webhook equals the stored approver
+address, and the message's MIME `From:` header equals it too. A missing or
+mismatched envelope is consumed and recorded as invalid, never as a decision.
+
+**Reason:** Comparing both reported sender values fails closed on a missing or
+mismatched envelope, but does not guarantee independent sender authentication.
+The original assumption that it protected against a leaked token on every
+provider was incorrect (D058/D059/D133). Tokens remain hidden from requesting-inbox
+read surfaces; a separate nominated approver inbox may read its notification.
+Possession of a live token plus spoofable matching addresses remains an accepted
+Low risk, not a proven human-in-the-loop boundary after token compromise.
+
+**Boundary:** The envelope sender is already normalized across the Mailgun,
+Cloudflare and Resend adapters (`transport.InboundMessage.EnvelopeFrom`).
+Providers that do not supply it fail closed; the generated Cloudflare Worker
+sends it. Full SPF/DKIM/DMARC evidence capture remains a future extension.
+
+Normalization is **not** the same as attestation, and the difference matters for
+the approval decision (`D058`, `D027`): the value is normalized on every adapter
+but a provider signature is not evidence of original sender authentication.
+Resend's reported `data.from` comes from the Svix-signed
+payload. Mailgun passes an unsigned form field and Cloudflare passes an unsigned
+request header (`X-MailMoose-Envelope-From`), so on both the transport is
+authenticated while the sender **content** is caller-controlled. A consumer that
+needs an attested sender must require a provenance flag, not the provider name
+(round-2 retest, finding A).
+
+**Superseded in part by D140:** the envelope-sender equality was removed from the
+approval decision. The token, nominated-approver, expiry and content-fingerprint
+binding stand; the sender is now the message `From:` address alone.
+
+## D030 — Inbox aliases: inbound address routing (migration 021)
+
+**Decision:** An inbox may carry aliases: alternate inbound addresses
+(`local@domain`) that deliver to that inbox instead of creating a separate
+mailbox. An alias owns no messages, storage or settings; it is a pure
+address-to-inbox mapping. Aliases may live on any domain the account owns, so an
+alias on one domain can deliver to an inbox on another domain of the same
+account. Resolution precedence per envelope recipient is: exact inbox, then
+alias on the recipient's domain, then the domain catch-all. Resolution returns
+the matched route, and the ingest core applies a route-aware binding check:
+exact and catch-all matches must stay on the authenticated domain and account
+(unchanged), while an alias only must belong to the authenticated account. The
+alias set is replaced wholesale via `PATCH /v1/inboxes/{id}` (`aliases`) and the
+inbox add/edit dialog's Aliases tab; collisions with a real mailbox local part
+are rejected in Go because SQLite cannot express cross-table uniqueness. Aliases
+are inbound-only: replies still send from the inbox's primary address.
+
+**Reason:** Cross-domain routing and address consolidation are common agent
+needs (many public addresses → one working inbox). Modelling them as a
+mailbox-to-mailbox forward would have required a second delivery path, loop
+detection, and a fan-out/dedup model change, and would have split mailbox
+settings between source and target. An address-to-inbox alias reuses the
+existing resolver, threads, events, quota, FTS and Relay unchanged, and lets the
+target inbox's allow-list/approver rules apply uniformly. Cross-domain is safe
+because the mail still authenticates against the recipient domain's receiving
+provider and both domains belong to the same account; relaxing only the alias
+route keeps the stricter domain binding on the exact and catch-all paths.
+
+**Complexity:** Qualitative. Adds migration 021 (`inbox_aliases`), a
+route-aware `ResolveRecipient`, transactional alias set/reconcile, an Aliases
+tab with an alias editor and a flag-column indicator, and the `aliases` API
+field. No new dependency or runtime service. Reply-as-alias (send-as) is
+deferred; aliases are inbound only.
+
+## D031 — Optional Go SMTP (MX) edge with signed core handoff
+
+**Decision:** Direct internet mail on TCP port 25 is received by an optional Go
+sidecar, `cmd/mx`, built from this repo into the same image as `cmd/server` and
+run as a separate non-root process (an explicit exception to
+[D003](#d003--single-container-runtime); one image is not one process). The
+edge owns SMTP framing, bounded staging of the original bytes, and
+SPF/DKIM/DMARC computation; it is policy-free. All routing authorization,
+policy, quota and durable storage stay in the core behind two authenticated
+endpoints on the inbound connector:
+
+```http
+POST /internal/mx/resolve   # bounded recipient list -> per-recipient routing
+POST /internal/mx/ingest    # one recipient + original MIME -> durable disposition
+```
+
+The edge holds no domain/policy snapshot, no database mount and no
+`APP_ENCRYPTION_KEY`. Authentication failures are a durable Spam delivery, not
+an SMTP rejection. Authentication-based SMTP rejection and `on_auth_fail=delete`
+are deferred. Per-domain `enforcement=moderate|hard` selects the local Spam
+disposition; the published DMARC policy is preserved and displayed, not
+pretended to be enforced.
+
+**Reason:** The provider-webhook architecture (D006) has no way to receive mail
+for a domain that does not already route through Mailgun/Cloudflare/Resend, and
+those providers are the wrong trust and cost model for a self-hosted operator
+who owns the domain. An in-repo Go edge reuses the existing module, build and
+image, keeps one artifact to ship, and stays small (standard library plus three
+narrow, MIT-licensed protocol libraries). Keeping policy and durable state in
+the core means the edge cannot authorize a domain, grant quota or forge durable
+truth, and a compromised edge credential is separately revocable.
+
+**Dependencies:** `github.com/emersion/go-smtp` v0.25.0 (MIT),
+`github.com/emersion/go-msgauth` v0.7.0 (MIT) and `blitiri.com.ar/go/spf`
+v1.6.0 (MIT), with transitive `go-sasl`, `go-message`, `go-milter` and the
+test-only `yaml.v3`. Recorded in `THIRD_PARTY_NOTICES.md`; approved in the root
+`AGENTS.md`.
+
+**Wire contract:** HMAC-SHA256 over the SHA-256 digests of the request metadata
+and body (protocol version, timestamp, request ID, key ID, envelope sender,
+client IP, HELO, normalized auth evidence, content digest, size, accepted
+recipient set) with constant-time verification and overlapping accepted keys
+for rotation. Signing digests lets both ends stream a large body through its
+hash with bounded memory. The ingest body is a raw two-part stream (a 4-byte
+metadata length, the metadata JSON, then the original MIME), so the message is
+never base64-buffered or JSON-escaped; resolve, being tiny, uses the same framing
+for one code path. The core parses the MIME once and fans out internally to the
+accepted recipient set, so neither side holds a copy per recipient. Key IDs map
+to configured operator credentials; remote links require verified TLS. Timestamp
+skew bounds replay duration, not replay itself; request IDs are bound to the
+authenticated fingerprint and conflicting reuse is rejected. Replayed retries
+return the recorded durable disposition.
+
+**Retry identity (refines [D016](#d016--mail-integrity-boundaries)):** the
+edge delivery fingerprint is a versioned digest over canonical envelope sender,
+canonical recipient and SHA-256 of the original incoming MIME, computed before
+any local trace/header change. RFC Message-ID is descriptive metadata, never the
+delivery token. Core deduplicates with durable, bounded delivery receipts scoped
+by account, provider and envelope recipient, serialized with message/quota/event
+persistence so concurrent MX nodes cannot duplicate side effects. Receipts are
+retained **7 days**, which covers the supported sender retry window, HTTP replay
+window and expected outage recovery, survive message deletion for that horizon,
+and are swept by the existing worker.
+
+**Spam:** `is_spam` is a computed view over `messages` (not a separate table),
+with bounded `auth_results_json` and a classification reason. Spam counts toward
+quota and retains MIME, attachments, identity and recovery. Every read/action
+path (lists, unread counts, default search, threads, replies, message waits,
+Relay payload rebuilds) excludes or revalidates Spam consistently, and release
+commits a durable `message.spam_state_changed` state-change event with old/new
+state.
+
+**Complexity:** Qualitative. Adds `internal/mxwire`, a pure policy engine and
+normalized auth types, a `mx` receiving provider, an explicit authenticated MX
+service entry point, migrations for receipts/`is_spam`/`auth_results_json`, the
+`cmd/mx` edge with `MX_VERIFY_SPF|DKIM|DMARC` toggles, and Spam UI/API/Relay
+handling. It stays within the existing SQLite store, event bus and filesystem
+MIME store. No new runtime service beyond the optional edge; no caching, ARC,
+BIMI, durable edge queue or SMTP rejection in V1. A separate embedded
+single-container mode later superseded the "all-in-one supervisor" deferral:
+`cmd/server` spawns the edge as a separate-uid child before dropping, and the
+shipped `docker-compose.yml` enables it by default; see D038 and D039 below.
+
+**Deferrals:** authentication-based SMTP rejection / `on_auth_fail=delete`; ARC
+verification and trusted-forwarder policy; BIMI; a Haraka/mailauth alternate
+edge; policy snapshots and local rejection; durable edge queue and end-to-end
+HA; scoped credential-to-domain binding; reputation and content filtering; DMARC
+report generation; authenticated submission/relay.
+
+## D032 — Send-as-alias: outbound identity (migration 024)
+
+**Decision:** An inbox may send from any address in its alias set, not only its
+primary address. The sender is chosen per message (`sender` on `POST /v1/send`
+and on reply; a `From` select in the UI compose/reply form), with a per-inbox
+`default_sender` that preselects it. A draft stores its chosen sender
+(`drafts.from_address`) so an approved send uses it; the sender is folded into
+the draft's approval content fingerprint, and the approval-request notification
+continues to send from the inbox primary while stating the intended From in its
+body. The sending provider is resolved from the **chosen address's own domain**:
+for an alias this is the alias's domain, which may differ from the inbox's.
+`messages.sending_domain_id` records that domain at enqueue so delivery,
+per-domain log attribution and requeue-on-save resolve the correct config
+without re-parsing MIME (NULL falls back to the inbox domain for pre-024 rows).
+Assistants may set a draft's sender (they can draft), but executing a send —
+and therefore any non-primary send — remains Owner-only under the existing send
+authorization path. This revisits D030's "aliases are inbound only; reply-as-
+alias (send-as) is deferred".
+
+**Reason:** Aliases already exist as account-controlled addresses; letting them
+send completes the identity, so a consolidated inbox can correspond as `sales@`
+or `billing@` rather than only its primary. Resolving the provider by the From
+domain is what makes cross-domain aliases deliverable: the provider credentials
+and DKIM identity must match the domain on the envelope, not the inbox's. A
+recorded `sending_domain_id` keeps the durable log, quota and retry semantics
+correct when the sender differs from the inbox domain, and keeps
+`RequeuePendingForDomain` working when the alias domain's config is (re)saved.
+
+**Complexity:** Qualitative. Adds migration 024
+(`inboxes.default_sender`, `drafts.from_address`,
+`messages.sending_domain_id`), sender resolution in the store, sender plumbing
+through `SendInput`/draft approval, the `sender`/`default_sender` API fields, and
+the UI From select plus default-sender cascade. No new dependency, no new
+runtime service, no new transport adapter. Hermes Relay send-as remains
+deferred (the Relay send protocol has no sender field yet).
+
+## D033 — Outbox worker panic containment
+
+**Decision:** The background outbox worker contains panics per unit of work
+rather than letting them exit the process. Each maintenance/delivery pass
+(`tick`) is wrapped in a per-step recover, and each individual message and
+workflow delivery is wrapped again so a panic in one item is recorded as a
+failed attempt (with backoff) and the loop continues. The panic **value** is
+never logged, only its type and the goroutine stack — matching the HTTP
+recoverer's secret-safety rule; stack frames carry no request or credential
+values. Recording a recovered failure runs under a second, absorbing recover so
+a fault while persisting the outcome cannot itself terminate the process.
+
+**Reason:** Under the single-process, `restart: unless-stopped` deployment, a
+deterministically panicking message previously exited the process, was
+reclaimed on restart, and panicked again — a crash loop that could take mail
+down for every inbox on a shared instance. Containing the fault at the message
+granularity converts it into one failed message plus a healthy queue. A single
+recover around the whole worker loop would be worse: it would silently kill the
+worker goroutine with the process still running, stalling all mail.
+
+**Complexity:** Local. Adds `tick`/`recoverUnit`/`safeFail` in
+`internal/app/worker.go` and `failMessagePanic`/`failWorkflowPanic` helpers; no
+schema change, no new dependency, no new runtime service.
+
+## D034 — Alias sender display names (migration 025)
+
+**Decision:** Each inbox alias may carry an optional sender display name.
+Sending from an alias uses `Name <alias@domain>` when a name is set, and falls
+back to the inbox's `display_name` when it is not; the primary address always
+uses the inbox display name. The inbox UI requires a name when adding or editing
+an alias (the API still accepts an empty name and falls back, for compatibility
+with older clients and imports). A draft records the resolved name
+(`drafts.from_name`), it is part of the draft's frozen approval fingerprint, and
+the approval-request body shows the intended `Name <address>`. Names are
+operator-controlled: alias management requires account Admin in both the store
+and HTTP callers (D133 supersedes the former Owner/Admin API permission), so an
+inbox-scoped Owner cannot mint an identity or set its alias display name.
+Names may not contain commas, newlines or control characters and
+are length-capped at 128. The API adds a `alias_names` object map (address →
+name) alongside the existing `aliases` array, so older clients that send only
+`aliases` are unaffected.
+
+**Reason:** The display name is a property of the sending identity, not the
+mailbox: every major provider (Gmail "send mail as", Fastmail identities)
+supports a per-address name. Without it, a role alias like `sales@` sends as the
+inbox's personal name, which reads wrong and is a common cause of misfiled mail.
+Routing and SPF/DKIM/DMARC key off the address/domain, so the name is purely
+cosmetic — but it is still a phishing surface, which is why it stays
+operator-only and is frozen into the approval so an approver reviews the exact
+name that will be shown.
+
+**Complexity:** Qualitative. Adds migration 025
+(`inbox_aliases.display_name`, `drafts.from_name`), name plumbing through alias
+set/draft storage and the send path, the `alias_names` API field, and an
+alias editor where each row shows the sender name with its address beneath and
+an add/edit popup collects both. The Aliases tab lists aliases first (with the
+add button above them), then a Primary / Default Address section whose dropdown
+lists the main address and each alias as `Name (email)` — the primary name being
+the inbox display name. No new dependency or runtime service.
+
+## D035 — External review remediation (security, correctness, UX)
+
+**Decision:** A consolidated review of the V1 tree produced a batch of fixes
+across the approval boundary, MX edge, outbound queue, crypto and UI:
+
+- **Approval preview is the exact sendable message.** The approval-request
+  email and the UI review page now show Bcc (which the generated MIME never
+  carries) and both the text and HTML body alternatives. The HTML alternative
+  is included as escaped source in the email and never rendered inside
+  MailMoose's own approval mail; only the sandboxed UI view renders it.
+- **Approval/rejection processing is retry-safe.** A transient store failure
+  while recording a decision is returned, so the webhook provider re-delivers
+  and the MX edge answers a temporary SMTP failure; only terminal outcomes
+  (already decided, expired, forbidden, not found) are acknowledged and
+  consumed.
+- **MX ingest authenticates before staging.** The declared `content_digest` is
+  part of the signed canonical string, so the core verifies the HMAC from the
+  bounded metadata prelude before writing any body byte; the streamed body is
+  then checked against that digest. No wire change was needed.
+- **DMARC organizational domain uses the full Public Suffix List.**
+  `golang.org/x/net/publicsuffix` replaces the hand-maintained approximation, so
+  multi-label, wildcard and private suffixes (and therefore two tenants of a
+  hosted suffix such as `*.github.io`) are handled correctly.
+- **Sender allow-listing is described honestly.** It matches the spoofable
+  RFC5322.From address and the UI/API copy says so. An opt-in MX-only
+  `require_authenticated` inbox flag additionally requires a DMARC pass or an
+  aligned SPF/DKIM pass; it has no effect on webhook providers.
+- **MX supervisor shutdown is non-blocking and idempotent.** The child exit is a
+  closed broadcast channel plus a stored error, so the monitor and `Stop` can
+  both observe it; the forced-kill path waits with a bounded deadline.
+- **MX staging is cancellable.** A DATA timeout cancels the reader so the
+  staging goroutine cannot outlive the transaction and the RAM-budget release
+  remains accurate; the buffer is zeroed before release.
+- **MX protects per-source IPs** with a concurrency cap, and can require
+  STARTTLS (`MX_REQUIRE_TLS`).
+- **MX alias fan-out deduplicates by resolved inbox**, matching the webhook
+  path, while still returning one result per envelope recipient.
+- **Outbox cancellation vs in-flight delivery** is handled by tolerating a row
+  deleted mid-send: the provider may still have accepted the mail (which no
+  local action can recall), but the message is not resurrected and the outcome
+  is logged as ambiguous rather than retried.
+- **Resend sends an `Idempotency-Key`** so a retry after a lost success
+  response does not duplicate; SMTP/Mailgun/Brevo have no provider idempotency,
+  and that residual ambiguity is documented.
+- **Tooling hygiene:** a 16-byte approval token, fail-closed RNG for ids and
+  the embedded edge credential, a versioned PBKDF2 key derivation with legacy
+  fallback, special-use SSRF ranges, lazy startup chown, an authenticated
+  MX-only Hermes outbound role, per-mailbox UI role checks, a bounded
+  attachment-upload body, remote-image opt-in, and a slower maintenance ticker
+  than the delivery poll.
+
+**Reason:** The review identified the approval preview and decision durability,
+the unauthenticated MX staging write, the public-suffix approximation and the
+supervisor deadlock as release-gating, and the remainder as material hygiene or
+UX risks. Each fix preserves the existing security defaults (fail-closed
+approval, token hygiene, public-routable outbound) or makes them opt-in.
+
+**Deliberately unchanged:** Control-mail replies whose token is stale/invalid
+are still consumed rather than delivered, and a reply whose first line is not an
+explicit approval still rejects. These are intentional fail-closed/token-hygiene
+choices; changing them was judged riskier than the UX they would improve.
+
+**Dependencies:** `golang.org/x/net` (publicsuffix) and `golang.org/x/crypto`
+(pbkdf2) are promoted from indirect to direct. Both are BSD-3-Clause Go
+sub-repositories already present in the module graph; notices updated in
+`THIRD_PARTY_NOTICES.md`.
+
+**Complexity:** Qualitative; migrations 026 (inbox `require_authenticated`) and
+027 (Hermes `outbound_role`). No new runtime service.
+
+## D036 — One-shot draft writes and consistent draft API
+
+**Decision:** Draft writes accept the same base64 JSON `attachments` array as
+send/reply, plus an `action` of `draft` (default), `request-send` or `send`.
+This lets an agent create a draft, attach files and submit it for approval (or
+send it, as an owner) in a single request, instead of the previous mandatory
+create → multipart upload → request-send sequence. The same optional body is
+accepted by `POST /v1/drafts/{id}/send` and `/request-send`, so an owner or
+assistant can edit and act in one call.
+
+Supporting consistency fixes on the same surface:
+
+- `PATCH /v1/drafts/{id}` is now a true partial update: only fields present in
+  the body are changed. Previously an omitted field was written empty, silently
+  wiping a draft.
+- Draft read responses include an `attachments` array, and
+  `GET /v1/drafts/{id}/attachments/{attId}` downloads one attachment's bytes.
+- `sender` is accepted as an alias for `from_address` on draft writes.
+- `POST /v1/drafts/{id}/send` returns `provider_message_id`, matching `/v1/send`.
+- `GET /v1/drafts` supports `limit` and `before` keyset paging.
+- `PATCH /v1/messages/{id}` carries explicit JSON tags.
+- `POST /v1/inboxes` accepts `localpart` as well as `local_part`.
+
+Attachments added inline are appended to any already uploaded, and inline bytes
+are covered by the existing per-attachment and total size checks and by the
+frozen approval fingerprint (SHA-256 per attachment), so an approved send still
+applies to the exact reviewed bytes.
+
+**Reason:** The draft workflow was the only write path that required a
+pre-existing draft and a separate multipart upload, while send/reply already
+accepted inline attachments. This was a real integration hazard for agents and
+the direct cause of repeated failed client sends. The PATCH semantics change is
+the only backward-incompatible behaviour change; it prevents silent data loss
+and there are minimal live clients to protect.
+
+**Complexity:** No new migrations, services or dependencies. A shared
+`persistDraftAttachments` helper replaces the file-write loop duplicated across
+the API and UI paths, with cleanup on partial failure.
+
+**Deliberately unchanged:** `{"external": true}` on `request-send` is retained
+for compatibility; it remains optional because a configured inbox approver makes
+the request external automatically. `/v1/drafts/{id}/attachments` multipart
+upload is kept for incremental uploads.
+
+## D037 — External sending aliases (migration 028)
+
+**Decision:** An inbox may carry one or more **external sending aliases**: full
+email addresses on domains MailMoose does not manage, used only as outbound
+identities. Each external alias owns its own sending connector (any existing
+outbound provider, encrypted with `APP_ENCRYPTION_KEY`) and an optional sender
+display name. External aliases are strictly send-only: they never participate in
+inbound recipient resolution (`ResolveRecipient` is unchanged), add no receiving
+connector, no mailbox sync, and no external-domain ownership claim. They are
+self-hosted Admin-only, in both management and read paths.
+
+Key invariants:
+
+- **Stable ids.** `external_aliases.id` is the immutable identity. A sender is
+  resolved to either a managed domain or an external alias id; `messages`
+  records `sending_external_alias_id` and `drafts` records
+  `from_external_alias_id` so a queued message or a reviewed draft stays pinned
+  to the alias it was created with. Deleting an alias clears any `default_sender`
+  that referenced it, and subsequent delivery attempts for its queued messages
+  fail permanently with a clear missing-alias error — they never fall back to a
+  domain connector or a recreated alias with the same address.
+- **No replace-set for external aliases.** Unlike managed aliases (which keep
+  D030's replacement semantics), external aliases are created, edited and deleted
+  only through their admin endpoints, one at a time. An ordinary inbox save can
+  never drop an external alias or its connector. This is why `SetExternalAliases`
+  does not exist.
+- **Connector lifecycle.** A send whose selected/default sender is an external
+  alias with no connector is held pending (not failed) with a sender-specific
+  reason; saving that alias's connector requeues only pending messages targeting
+  that alias. Removing the connector clears its credentials and requeues the same
+  set, which then hold again.
+- **Sender identity is frozen at draft time.** `ResolveSendingTargetByID`
+  resolves a frozen external-alias id and returns `ErrExternalAliasDeleted` when
+  it is gone; an empty/unchanged sender keeps the frozen id through owner sends,
+  approval and retries. The approval-request notification itself stays on the
+  inbox primary managed address and its domain connector.
+- **Hermes Relay** sends with the inbox's configured `default_sender`, falling
+  back to the primary, for both direct sends and Assistant-mode drafts. When the
+  default is an external alias, so is the relay send.
+- **Delivery attribution.** `outbound_delivery_log.external_alias_id` records
+  the alias for each attempt; per-alias outbound history reuses the domain
+  delivery renderer's query (`ListExternalAliasDeliveryAttempts`).
+- **API/UI.** Inbox responses gain an `external_aliases` metadata collection
+  (ids, addresses, names, connector status; never secrets). Admin endpoints live
+  under `/v1/admin/inboxes/{id}/external-aliases` (create/metadata/delete,
+  `/sending` GET/PUT/DELETE, `/sending/deliveries`). An alias address is
+  immutable after creation; display name and connector remain editable.
+
+**Reason:** The motivating case is an address you control but cannot attach a
+domain connector to (for example a Gmail address, or a provider that offers no
+webhook). Domain connectors remain the primary model and are untouched; this adds
+a narrow outbound-only identity for exactly that gap. Reusing the existing
+provider schema, encryption, CAS/revision, requeue-on-save and delivery-log code
+means no new runtime service, transport adapter or dependency. Keeping external
+aliases out of inbound routing avoids any "why didn't my mail arrive" ambiguity:
+a managed domain is authoritative for its own namespace, and an external alias
+never claims one.
+
+**Complexity:** Qualitative. Migration 028 adds `external_aliases`,
+`messages.sending_external_alias_id`, `drafts.from_external_alias_id` and
+`outbound_delivery_log.external_alias_id`. New store module
+(`internal/store/external_aliases.go`), service admin surface
+(`internal/app/external_aliases.go`) and admin API
+(`internal/httpapp/external_alias_api.go`). No new dependency or runtime service.
+
+**Deferrals:** an external alias may not be used for inbound or for a per-alias
+DKIM/SPF identity MailMoose cannot prove; address immutability avoids migration
+of queued attribution.
+
+**UI:** the inbox Aliases tab presents managed and external aliases as two
+separate lists; external rows are display-only ("External · sending only",
+connector status) and link to a dedicated server-rendered page per alias holding
+its editable sender name, connector editor and full outbound activity. External
+aliases are added only to a saved inbox (the Add-inbox dialog points to this
+step). The compose/reply From select and the default-sender selector include
+external aliases, and sending readiness follows the selected/default sender's
+connector, so a missing external connector shows a sender-specific pause banner.
+
+## D038 — Embedded MX: single-container mode with a separate-uid child
+
+**Decision:** `MX_ENABLE=true` makes `cmd/server` spawn `mailmoose-mx` as a child
+process in the same container, under a different uid/gid (`MX_UID`/`MX_GID`,
+default 65533) with a scrubbed environment, then drop its own privileges to the
+app runtime user (default 65532). The edge has no `/data` access, no
+`APP_ENCRYPTION_KEY`, no `DATA_DIR` and no `MX_EDGE_KEYS`, and stages messages in
+memory. The single switch `MX_ENABLE` has three values: `false` (no MX), `true`
+(embedded, above), and `remote` (edge runs as its own container/image,
+`mailmoose-mx`, or on another host, sharing `MX_EDGE_KEYS`). The shipped
+`docker-compose.yml` selects `true` by default; see D039.
+
+- **Why:** operators want `docker compose up -d` to receive mail directly with
+  no second service, while still keeping the edge out of the app's data and
+  secrets. A separate process under a separate uid gives that with DAC, without
+  a new binary or a supervisor package.
+- **No separate supervisor, no `MAILMOOSE_ROLE`:** the existing app process is
+  already PID 1, so it spawns the child before its privilege drop and keeps
+  running to coordinate shutdown. There is no `cmd/mailmoose`.
+- **Shutdown is a pipe, not a signal:** after the parent drops uid it cannot
+  signal a child owned by a different uid, so the parent passes an inherited
+  write pipe and closing it (EOF) tells the edge to stop (`MX_SHUTDOWN_FD`).
+- **Refuses rather than degrading:** if the container cannot start as root to
+  spawn the child (strict `user:` or `cap_drop: [ALL]`), startup fails with the
+  two remedies (remove the hardening, or use `MX_ENABLE=remote` with the
+  separate edge image). Silent same-uid degradation would defeat the isolation.
+- **Isolation is weaker than `remote`:** DAC + separate uid, no mount or
+  network namespaces. The remote mode (the `mailmoose-remote-mx` image, see
+  README.md) remains the recommended mode when two containers are acceptable;
+  the embedded mode trades namespace isolation for a one-container deployment.
+- **In-memory staging, capped:** the edge holds the original bytes in RAM for
+  one transaction and releases them after the core ingest, bounded by
+  `MX_STAGING_BYTES` (default 256 MiB) across concurrent transactions. A
+  reservation that would exceed the budget fails the transaction temporarily
+  (SMTP `451`) rather than risking an OOM kill; a single oversize message is a
+  permanent `552`, with the configured limit advertised to senders as the ESMTP
+  `SIZE` value at `EHLO` and echoed in the rejection text. This is a deliberate
+  reversal of the earlier disk-staging design, and it means the
+  sidecar/embedded edge needs no writable filesystem and no privilege at all.
+- **Credential:** the operator normally sets no secret; the embedded mode
+  generates one and shares it with its own core in-process. Supplying
+  `MX_EDGE_KEYS` overrides it (the lexicographically smallest key id is used,
+  deterministically). `MX_ENABLE=remote` requires `MX_EDGE_KEYS`, since the core
+  cannot generate a secret the operator's separate edge would know.
+
+## D039 — Minimal default Compose enables embedded MX; webhook-only is the opt-out
+
+**Decision:** `docker-compose.yml` is the minimal default and enables the
+embedded MX edge (`MX_ENABLE=true`, host port 25 published) so a plain
+`docker compose up -d` can receive internet mail directly. An operator who
+receives mail only through a webhook provider (Mailgun, Cloudflare Email
+Routing, Resend) sets `MX_ENABLE=false` in `.env` to run webhook-only; the port
+is then published but has no listener. Compose supplies the `true` default via
+`MX_ENABLE: "${MX_ENABLE:-true}"`, so `.env` still overrides it; the server
+binary itself defaults to `false` when `MX_ENABLE` is unset. A separate,
+self-contained `docker-compose.advanced.yml` mirrors the same MX default and adds
+the hardened stack (`read_only`, `/tmp` tmpfs, `no-new-privileges`, the optional
+`cap_drop`/`user` block, `MAILMOOSE_RUN_UID`/`GID`).
+The two-container sidecar deployment (see README.md) forces `MX_ENABLE=remote`.
+
+**Requirement:** the earlier minimal Compose set no `MX_ENABLE` yet published
+host port 25, while the docs claimed embedded MX was the default. That was the
+worst of both: an exposed port with MX actually off, and prose that did not
+match the artifact. The deployment default is now stated in one place and the
+artifact implements it.
+
+**Reason:** a self-hoster who owns the domain wants `docker compose up -d` to
+receive mail directly without a second service, and leaving MX enabled is safe
+because a domain is not an MX receiver until its receiving provider is set to
+`MX` in the Admin UI: unconfigured recipients are rejected. Operators who only
+want webhooks opt out with one variable. Keeping the server default `false`
+preserves the provider-webhook baseline for anyone running the binary directly.
+
+- **Hardening is opt-in:** the default now ships the real minimum; operators who
+  want `read_only`/`tmpfs`/`no-new-privileges` opt in with one `-f`. Defaults
+  that restate code defaults (the app's privilege drop already defaults to
+  `65532:65532`) made the shipped compose look far more complex than the
+  actual minimum.
+- **Embedded privilege model:** the app chowns `/data`, spawns the edge under
+  `MX_UID`/`MX_GID`, then self-drops. `cap_drop: [ALL]`/`user:` disable this;
+  embedded (`true`) MX refuses to start and points at `MX_ENABLE=remote`.
+
+**Complexity:** one `environment` line in each of the two single-container
+compose files and the matching documentation; no Go code, no new dependency, no
+new runtime service. Changing the settled default was made under the
+change-discipline rule for a settled decision (this entry).
+
+## D040 — Separate edge image for remote MX
+
+The remote edge runs from its own image, `mailmoose-remote-mx`
+(`dialmx/Dockerfile`), not the app image with an entrypoint override. The app
+image still builds the edge binary for `MX_ENABLE=true`; the separate image is
+edge-only. One image serves both `DIALMX_MODE=shared` and `DIALMX_MODE=single`.
+
+- **Why:** "which container is this?" should be obvious. A standalone MX host or
+  remote receiver previously ran the full app image (including `mailmoose` and
+  `libsqlite3`) with a different entrypoint. The edge links no SQLite and opens
+  no files, so the edge image builds `CGO_ENABLED=0` static, ships only
+  ca-certificates/tzdata, and runs as a non-root user with no `/data` volume.
+- **Debuggable base:** `debian:bookworm-slim` (not distroless) so the container
+  has a shell and tools when diagnosing DNS/TLS issues.
+- **Credential unchanged:** `remote` still requires `MX_EDGE_KEYS` shared with
+  the edge (the receiver's `DIALMX_CORE_KEY` environment variable).
+
+## D041 — Workflow mail has its own outbound queue (migration 022)
+
+The draft approval-request email (and any future system mail) is **not mailbox
+content**. It now lives in `outbound_workflow`, a small queue with its own
+status/attempts/claim columns, instead of a `messages` row flagged `internal`.
+
+- **Why:** the `internal` flag leaked through the mailbox model. Workflow mail
+  consumed account storage quota, created a user-visible thread when it was the
+  only message in one (a "ghost thread"), and its delivery was never reflected
+  on the send request — so a draft could be shown as "awaiting approval" even
+  when the notification was never delivered. A separate queue removes that whole
+  class of bugs by construction.
+- **No thread, no quota, no read surface:** workflow mail creates no `threads`
+  row, never touches `accounts.storage_used_bytes`, and is invisible to every
+  mailbox read path. It carries no `messages.id`, so it cannot be used as a
+  forward/reply source. Raw MIME is stored under `$DATA_DIR/workflow/`.
+- **Truthful notification state:** `draft_send_requests.notification_status`
+  moves `none` → `queued` → `sent`/`failed`. The approval token's expiry clock
+  starts only on `sent` (the provider accepted the handoff), so a request whose
+  notification failed does not silently lapse; the failure is surfaced to the
+  API/UI and the agent.
+- **Retention and redaction:** terminal workflow jobs are kept for a fixed 30
+  days (matching the outbound delivery log), then swept row + raw file. On
+  terminal state the worker redacts `[GH-REQUEST|APPROVE|REJECT:<token>]`
+  markers from the retained copy; the token is already dead, this is
+  defense-in-depth. The `draft_send_requests` audit row is never swept.
+- **Delivery log:** `outbound_delivery_log.workflow_id` attributes a workflow
+  attempt in the per-domain log without a `messages` row.
+- The `messages.internal` column and its filters remain for backward
+  compatibility with already-migrated rows, but new code never writes it.
+
+## D042 — In-process privilege drop (no gosu, bind-mounted ./data)
+
+The container image has no `USER` and installs no `gosu`. It boots as root so
+`internal/privdrop` can recursively `Lchown` a fresh, root-owned `./data` bind
+mount to the runtime UID/GID, then `Setgroups`/`Setgid`/`Setuid` before the
+database is opened. `MAILMOOSE_RUN_UID`/`MAILMOOSE_RUN_GID` (default
+65532:65532) select the runtime user; the drop is a no-op when the process is
+already non-root, so the opt-in hardened compose (`user:`, `cap_drop: [ALL]`)
+needs no setuid capability: there is no host `chown` step, and the hardened
+`docker-compose.advanced.yml` ships `read_only`, `tmpfs /tmp`
+and `no-new-privileges`.
+
+## D043 — Free-text message labels (migration 020)
+
+Migration 020 adds `message_labels(message_id, label, created_at)`, a many-to-many
+tag on messages, plus an index on `(label, message_id)`.
+
+- There is deliberately **no label catalogue**. A label exists only while at
+  least one message carries it, so there is no definition lifecycle, namespace,
+  ownership, slug or orphan state to manage. "Creating" a label is just
+  assigning it; "deleting" every occurrence makes it disappear.
+- `label` is `TEXT COLLATE NOCASE` and Go (`model.NormalizeLabel`) trims and
+  collapses whitespace first, so `Invoices`, `invoices` and `" Invoices "` are
+  the same tag. Display casing is the first-assigned form. NOCASE folds ASCII
+  only, which is acceptable for typical tags. Labels may not contain control
+  characters, `/` or `\`; the path separators are rejected so a label can be
+  addressed by its own URL query parameter without path-encoding ambiguity.
+- The web UI renders the inbox's in-use labels in the mailbox sidebar under a
+  Labels heading; selecting one filters the list via
+  `GET /ui/inboxes/{id}/label?name=...`.
+- Assignment is a replace-set: `PATCH /v1/messages/{id}` with
+  `{"labels":[...]}` sets the exact set, `[]` clears, omission leaves it
+  unchanged. It requires Assistant or Owner on the message's inbox, matching
+  `UpdateMessageState`. Reads require no label-specific role.
+- `GET /v1/messages?label=a&label=b` and the same on `/v1/search` combine labels
+  with AND (every listed label must be present). Labels are not indexed in
+  `message_fts`; the filter is a join, so it composes with full-text search.
+- `GET /v1/labels` derives the distinct in-use labels from `message_labels`,
+  scoped to the caller's authorized inboxes.
+- A label change emits one durable `message.labels_changed` event carrying the
+  resulting set, written in the same transaction as the rows.
+- Account-wide rename and delete are deferred: with no catalogue they are bulk
+  operations rather than object lifecycle, and no V1 requirement needs them yet.
+  Labels carry no color in V1.
+- The assistant UI renders chips on message rows (as `<span>`, not a nested
+  anchor inside the clickable row) and on the message detail, filters the
+  mailbox with `?label=`, and offers message-level and bulk add/remove.
+
+## D044 — Control-message log label (migration 019)
+
+Migration 019 adds `inbound_control_messages.subject`, the reviewed draft's
+subject snapshotted when an approval control message is consumed.
+
+- The dashboard Recent messages list and the per-domain activity log label such
+  rows `Approval: <draft subject>` for approved decisions and
+  `Rejected: <draft subject>` for rejected decisions (bare `Approval`/`Rejected`
+  when the request could not be resolved), so an operator can tell which draft a
+  decision was about and how it went.
+- The subject is snapshotted at decision time because an approved send deletes
+  the draft in the same transaction; a later lookup would find nothing.
+- The raw inbound subject is never stored or shown, because it carries the
+  one-time approval token. The record keeps only From, request, action, outcome,
+  reason and the draft subject.
+- Existing control rows keep the empty default and render as bare `Approval`.
+
+## D045 — Message client attribution (migration 017)
+
+Migration 017 adds `messages.client_label` and `messages.client_id` so the admin
+Recent messages list and the per-domain activity log can show which client sent
+an outbound message.
+
+- The columns are denormalized snapshots of the sending credential, resolved at
+  enqueue time from the request principal through the same `ActorIdentity`
+  helper the draft send-request flow already uses. A rename or deletion of the
+  key does not rewrite history.
+- A web-UI session send has no credential; it records the literal label `UI`. An
+  email-approved send has no client. Inbound, blocked and consumed control mail
+  have no client.
+- The dashboard renders approval-control rows with the literal label `Control`
+  (there is no sending credential to name), and empty client as `—`.
+- Existing outbound messages keep the empty default; the information simply did
+  not exist before this migration.
+
+## D046 — Atomic migration runner (BUG-04)
+
+> **Superseded by D135.** The historical migration runner and its
+> `internal/store/schema.go` migration constants are removed. The public
+> database is now a single baseline owned by `internal/dbschema`.
+
+Schema migrations and their `schema_migrations` marker are applied in one
+transaction on a pinned connection. Migrations that rebuild a table set
+`PRAGMA foreign_keys=OFF` outside the transaction and run
+`PRAGMA foreign_key_check` before committing. Migrations also declare a
+detector so a database whose schema work committed but whose marker was lost
+(an interrupted upgrade under the old runner) is reconciled; a partially
+applied schema fails fast with an actionable error instead of retrying into a
+duplicate-column crash loop.
+
+Runtime migrations are the Go constants in `internal/store/schema.go`. The
+duplicate SQL trees (`/migrations`, `internal/store/migrations`) were removed.
+
+## D047 — Draft storage accounting (SEC-04)
+
+`accounts.storage_used_bytes` counts message raw MIME plus draft bodies plus
+draft attachment files:
+
+```text
+storage_used_bytes = Σ messages.size_bytes
+                   + Σ len(draft.text_body) + len(draft.html_body)
+                   + Σ draft_attachments.size_bytes
+```
+
+All draft mutations and attachment add/delete adjust the account in the same
+transaction as the row change. Sending a draft consumes its rows in the same
+transaction as the message insert, so draft bytes are refunded before the
+message is charged and are never double-counted. Migration 012 backfills
+existing draft usage once.
+
+## D048 — Idempotency semantics (SEC-03, SIMP-05)
+
+An idempotency key is scoped to the account but records the mailbox it was
+used for. A replay is only returned when the requested mailbox matches the
+recorded one and the caller owns it; otherwise the request is rejected with a
+conflict. The key-to-message mapping is committed with enqueueing (inside
+`CommitOutbound`), not at delivery, so queued and failed messages replay
+normally. Replay returns the current message state; `provider_message_id` is
+empty until delivery.
+
+## D049 — Outbound claim lease (BUG-05)
+
+Claiming a pending message records `claim_owner` and `claim_expires_at` and
+leaves `next_attempt_at` for retry scheduling. Startup clears abandoned claims
+(safe under the single-process model) and the worker uses a bounded,
+cancellation-independent context to record delivery outcomes, so a crash or
+cancellation no longer parks a message for 24 hours.
+
+## D050 — Revocation cancels live connections (SEC-05)
+
+SSE streams and Relay sockets register the credential scopes they depend on
+(`key:`, `sess:`, `user:`, `hrm:`). Revoking, rotating, or rescoping a
+credential, deleting a relay connection, logging out, or changing a password
+cancels the matching scopes so already-open connections terminate immediately.
+Relay outbound operations also revalidate the connection row.
+
+## D051 — In-transaction hydration (BUG-02)
+
+Write paths build their return value from a read inside the same transaction
+instead of reading after commit. This removes the failure mode where a
+post-commit read error caused the caller to delete MIME that committed rows
+already referenced. A commit error is only treated as failure if the row is
+genuinely absent.
+
+## D052 — One source of truth for API discovery
+
+`internal/apispec` is a stdlib-only leaf package holding the canonical `Route`
+table for the authenticated `/v1` surface. Every discovery artifact renders from
+that one table:
+
+- `/agent` — the served Markdown guide;
+- `/openapi.json` — an OpenAPI 3.0.3 document covering the complete operation
+  list;
+- `docs/API.md` — the generated reference, checked in and verified by
+  a staleness test;
+- `/examples/python`, `/examples/bash` and `/examples/curl` — the embedded
+  Python client, Bash client and curl cookbook.
+
+The authenticated `/v1` registrations are a single registration table in
+`internal/httpapp/server.go`, so the documented surface and the live mux cannot
+drift apart in isolation. `tests/unit/httpapp/route_coverage_test.go` fails when
+a registered `/v1` route is missing from the table, or when a table entry has no
+registration.
+
+`/openapi.json` is valid OpenAPI 3.0.3 because every operation carries a
+non-empty `responses` object (the primary success response plus `401` and
+`default`). Per-operation request, response and query schemas were subsequently
+added (`internal/apispec/schemas.go` and `route_io.go`; wired in `openapi.go`,
+covered by `tests/unit/apispec/openapi_test.go`), superseding the original
+deferral. Every operation now references named `components.schemas`.
+
+## D053 — Proxy-chain trust and canonical HTTPS redirect
+
+> **Amended by D116:** the `Secure`-cookie decision now follows `BASE_URL`
+> alone (`https://` ⇒ always `Secure`). The per-request `X-Forwarded-Proto`
+> gate described below no longer controls cookie security; the XFF/XFP parsing
+> rules for client identity and the `FORCE_HTTPS` redirect are unchanged.
+
+**Decision:** `X-Forwarded-For` is walked from the right (closest to us):
+trusted `TRUSTED_PROXIES` entries are stripped and the first untrusted address
+is the client identity used for rate limiting; a single trusted hop yields the
+last entry. Under legacy `TRUST_PROXY_HEADERS` trust-all the last entry is
+used, which requires the proxy to overwrite (not append to) `X-Forwarded-For`.
+`X-Forwarded-Proto` follows the same rightmost rule. `FORCE_HTTPS` redirects
+target only the canonical `BASE_URL` host (validated as a bare origin at
+startup; `FORCE_HTTPS=true` requires an `https://` base), never the request
+`Host`. Discovery documents (`/openapi.json`, `/examples/*`) still advertise
+the request origin; only the 308 is canonical.
+
+**Reason:** An appending proxy preserves attacker-supplied leading XFF/XFP
+entries, so leftmost parsing lets a caller pick its own rate-limit key and
+spoof `https` to bypass the redirect and `Secure` cookies. Request `Host`
+headers are attacker-controlled, so echoing them in a 308 enables phishing
+redirects and cache poisoning.
+
+> **Amended by D141:** a WebSocket upgrade to `/relay` from a caller inside
+> `TRUSTED_PROXIES` is not redirected. Every other path, including
+> `POST /relay/enroll`, keeps the redirect above.
+
+## D054 — Operator MX edge secrets require 256 bits
+
+**Decision:** Every operator-supplied MX edge HMAC secret (`MX_EDGE_KEYS`
+entries, `MX_EDGE_SECRET`) must carry 32 bytes / 256 bits of entropy as hex,
+base64 or 32+ raw bytes, enforced fail-closed at startup by both
+`config.Load` and `mxagent.Load` via `mxwire.CheckEdgeSecret`. Embedded mode
+already generates 32 random bytes; only operator values are gated. Rotation
+uses overlapping `MX_EDGE_KEYS` entries.
+
+**Reason:** The secret authenticates every edge->core request and the core
+trusts the edge's SPF/DKIM/DMARC evidence on a valid signature, so a guessable
+secret lets anyone inject mail, forge auth evidence and burn quota. Length is
+an enforceable proxy for unguessability; it cannot prove randomness.
+
+## D055 — Operator password reset (superseded in part by D060)
+
+> **Superseded in part by D060:** the one-shot `INITIAL_ADMIN_*` bootstrap was
+> replaced by the deployment-authoritative `ADMIN_*` system administrator, and
+> `admin reset-password` now refuses the system administrator (the configured
+> secret owns that login). The remainder of this decision still stands.
+
+**Decision:** Remove `ADMIN_BOOTSTRAP_TOKEN` and the unauthenticated `/setup`
+claim flow. A fresh self-hosted database is initialised from one-shot
+`INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (either may be supplied via a
+`*_FILE` secret) at startup, creating the first administrator inside a single
+`BEGIN IMMEDIATE` transaction so two processes cannot both initialise the
+database. Once any user exists the bootstrap settings have no effect. If no
+credentials are supplied the service starts and serves a static
+"not configured" page; there is no HTTP path that can claim the instance.
+Password recovery is operator-driven through
+`mailmoose admin reset-password <email>`, which reuses the normal password
+rules, revokes all browser sessions, leaves API keys intact, and writes an
+audit event; `mailmoose admin revoke-api-keys <email>` is a separate command.
+
+**Reason:** A bootstrap token that must be read from logs and re-entered on a
+web form is easy to mishandle, and an unauthenticated setup form is a standing
+claim risk on a fresh instance. Deployment-time credentials fit Docker secrets
+and match how the rest of the configuration is supplied, while the guaranteed
+server-side reset covers lost access without depending on outbound email. API
+keys are treated as independent machine integrations, so they are not torn down
+by a human password reset.
+
+## D056 — Product rename to MailMoose
+
+**Decision:** Rename the product, Go module (`github.com/dellarb/mailmoose`),
+binaries (`mailmoose`, `mailmoose-mx`), env prefix (`MAILMOOSE_*`), HTTP
+headers (`X-Mailmoose-*`), discovery path (`/.well-known/mailmoose`), API key
+prefix (`mmm_`), cookies (`mmm_csrf`, `mmm_session`), and embedded brand
+assets to MailMoose. No compatibility shims for the old names.
+
+**Reason:** The product launches under the MailMoose name with its own logo
+pack. A breaking rename before first deployment avoids carrying two brands.
+
+## D057 — Self-hosted Direct MX outbound delivery
+
+**Decision:** Add a `mx` outbound provider. It resolves the recipient domain's
+MX records and delivers raw MIME directly to port 25, using the configured HELO
+hostname and opportunistic STARTTLS without SMTP credentials. Each queued
+message is limited to one unique envelope recipient, so the existing atomic
+outbox state remains correct. All resolved destinations continue to pass the
+public-routable outbound guard.
+
+**Reason:** Operators who own their sending IP and DNS should be able to send
+without paying for an SMTP relay. The single-recipient constraint avoids
+claiming success for recipients that were not accepted when one SMTP
+transaction partially succeeds.
+
+**Operational requirements:** Operators are responsible for port 25 egress,
+forward and reverse DNS for the HELO identity, SPF, DMARC alignment, and IP
+reputation. A future extension may add durable per-recipient delivery state and
+signing support.
+
+> **Update (`D069`):** DKIM signing is now implemented for this path. MailMoose
+> generates an RSA-2048 signing key by default (an operator may paste their own
+> RSA key instead) and signs each queued message at queue time. The
+> operator-arranges-DKIM wording above is superseded for the signing key; the
+> remaining operational requirements stand, and per-recipient durable delivery
+> state is still deferred.
+
+## D058 — Strix security review remediation
+
+**Decision:** Apply the confirmed and hardening fixes from an external
+security review of this codebase:
+
+- **Events feed role parity (vuln-0004).** `ListEvents` withholds the
+  assistant-scoped payload fields `approver_email`, `decision_actor`,
+  `decision_method` and `feedback` from a principal that cannot assist the
+  event's inbox, matching the `CanAssist` gate `ListSendRequests` already
+  applies. Admin principals see every field.
+- **Durable control receipts (vuln-0001).** Consumed control mail on the MX
+  path records an MX receipt with disposition `control`, so a byte-identical
+  signed replay is deduplicated by the existing receipt lookup even though no
+  message row exists.
+- **Authenticated evidence for MX approvals (vuln-0002).** The MX edge's
+  trusted SPF/DKIM/DMARC evidence is required before a control message may act
+  on the sender's identity, regardless of the inbox's `require_authenticated`
+  setting. Webhook providers carry no edge evidence and are unaffected.
+- **Trusted-proxy startup guard (vuln-0005).** `config.Load` refuses
+  `TRUST_PROXY_HEADERS=true` and any `/0` `TRUSTED_PROXIES` entry, both of which
+  make the peer check meaningless. This supersedes the legacy trust-all fallback
+  described in D053; `TRUSTED_PROXIES` is now the only way to trust forwarded
+  headers.
+- **Path containment (hardening).** `internal/safepath.Join` resolves a stored
+  relative path beneath `DataDir` and rejects absolute paths, `..`, NUL and
+  backslash, and is used at every raw-MIME/attachment open, read and remove.
+- **Per-credential long-lived bounds (hardening).** SSE streams and long-polls
+  are capped per credential so one key cannot park unbounded connections. The
+  MX replay cache remains in-process and is documented as single-instance,
+  consistent with the one-process/one-container architecture.
+- **Error hygiene and HSTS (hardening).** Unrecognised storage-engine and
+  filesystem errors answer a generic 500 instead of echoing schema, query or
+  path text; `Strict-Transport-Security` is sent when `FORCE_HTTPS=true`.
+
+**Accepted risk — Mailgun unattested envelope sender (vuln-0003).** The Mailgun
+webhook HMAC covers only `timestamp+token`, so the `sender` form field is not
+provider-attested. The approval path continues to treat it as the envelope
+sender to preserve email-based approvals for Mailgun deployments. Exploitation
+requires *both* valid Mailgun signing material (the signing key, or one captured
+triple replayable within the 24-hour window) and the 128-bit single-use
+approval token, so the practical bar is high. A future change should either
+fail closed on unattested envelopes (breaking Mailgun email approvals) or
+authenticate the reply locally (for example DKIM verification of the staged
+MIME) before revisiting this.
+
+**Correction (round-2 retest):** the acceptance originally rested in part on the
+claim that the Cloudflare adapter carried a genuinely attested envelope sender and
+was therefore unaffected. **That claim was false** — Cloudflare reads the envelope
+sender from an unsigned request header, so it is a second unattested entry point to
+the same decision (finding A, `LOW`). The later claim that Resend was unaffected
+was also incorrect: its signature authenticates the reported From, not an
+independent SMTP envelope or the original sender (D133). The
+"failing closed breaks Mailgun" argument is correspondingly weaker: a single
+provenance flag on `transport.InboundMessage` closes Mailgun and Cloudflare together.
+
+**Reason:** The review found no privilege escalation to `owner`/`admin`, no
+cross-inbox rights bleed and no MX HMAC bypass. The confirmed issues are a
+role-parity gap on the events surface, a missing control-mail receipt, and an
+approval-identity gap on the MX path; the remainder are hardening. The Mailgun
+gap is a deliberate product trade-off recorded here rather than silently
+resolved.
+
+## D059 — Unattested inbound envelope senders: extended acceptance and containment
+
+**Context:** A second review round (Strix run `<review-run>`, live-app
+assessment) found that the accepted risk `D058` rested partly on a claim that was
+false. `D058` asserted the Cloudflare inbound adapter carried a "genuinely
+attested" envelope sender and was therefore unaffected by the envelope-sender
+risk. It does not: `internal/transport/cloudflare/inbound.go` reads the envelope
+sender from the `X-MailMoose-Envelope-From` request header, and the shared
+per-domain bearer authenticates the caller without attesting the value. Cloudflare
+is therefore a second unattested entry to the approval decision. Resend's
+Svix-signed `data.from` is also not proof of SMTP-envelope or sender identity;
+the former claim that it was unaffected is corrected by D133.
+
+**Decision:** Accept the Cloudflare exposure under the same reasoning as `D058`
+rather than changing approval behaviour at this time. The maintainer's judgement:
+the practical bar remains possession of the domain's receiving secret *and* the
+128-bit single-use approval token, and the approver identity is server-fixed, so
+the attacker's gain is limited to forcing approval of the specific draft whose
+token they hold.
+
+**Consequences:**
+
+- The accepted risk now covers **two** providers (Mailgun and Cloudflare) and is
+  documented for reporters in `SECURITY.md`.
+- The "failing closed would break Mailgun" rationale is weaker than it appeared.
+  A single provenance flag on `transport.InboundMessage` would close Mailgun and
+  Cloudflare together, which is the preferred eventual fix — the blocker is that
+  fail-closed loses email approvals for every provider that passes an unattested
+  sender, not Mailgun alone.
+- **Attestation is a property of what a signature covers, never of a provider's
+  name.** Any future adapter is attested only if its verified signature or secret
+  covers the sender value the adapter reports. Recorded as a general rule in
+  `SECURITY.md`.
+
+**Also in this change (retest follow-ups, not part of the acceptance):**
+
+- `internal/store`: a NUL or control byte in a search query no longer reaches the
+  FTS5 engine. A NUL is a typed client-input error (`ErrInvalidSearchQuery`) and a
+  control byte is stripped; an emptied expression short-circuits to "no matches".
+  Previously the malformed expression surfaced as an unmapped store error and an
+  HTTP 500 (retest finding B, informational).
+- `internal/httpapp`: `ErrInvalidSearchQuery` maps to a 400 rather than falling
+  through to the generic 500 branch.
+- `internal/config`: a `TRUSTED_PROXIES` entry wider than `/8` is now refused at
+  load, closing the "equivalent-but-not-literal /0" gap recorded as a retest open
+  item; a peer found inside the trust set is logged at WARN so a covering-set
+  misconfiguration is visible at runtime, which startup cannot detect. (The second
+  clause is superseded by D061; the load-time `/8` floor stands.)
+
+## D060 — System administrator, account Admins, and mailbox operators
+
+**Context:** The app already modelled separate accounts and users, but only ever
+created one human user per account and every human login was an account Admin
+(the web UI and `/v1` admin surface required `p.Admin`; non-admin sessions failed
+closed). Provisioning another person meant public registration, which is closed
+by default and creates a fresh account each time.
+
+**Decision:** Add three explicit human roles and an installation-level admin
+plane:
+
+- **System administrator** — one configured login (`ADMIN_EMAIL` /
+  `ADMIN_PASSWORD`, `*_FILE` supported), marked by `users.is_system_admin`. The
+  configured credentials are authoritative while present: they create the login
+  on first start, or **adopt an existing user with that email** (forcing it to
+  account Admin and system Admin, and resetting its password), and rotate the
+  stored email/password (revoking its sessions) on later starts; when both are
+  absent the stored login is preserved. The login is never editable in the UI
+  and `admin reset-password` refuses it, both pointing at the deployment
+  secret. The system administrator has an ordinary account of its own but does
+  **not** automatically gain access to other accounts' mail.
+- **Account Admin** — unchanged `users.is_admin`; full control of one account's
+  domains, clients and mailboxes. Each account has one Admin.
+- **Mailbox operator** — a non-admin member of an account whose access is a set
+  of per-inbox Owner grants in `user_mailbox_roles`. Operators are Owners of the
+  mailboxes assigned to them and nothing else; they get no domain, client or
+  account controls.
+
+Provisioning is by **invitation** (`invites`), not stored initial passwords. An
+invite is either a new, separate account with its own Admin or a mailbox
+operator on an existing account. The invitee chooses their password from a
+single-use, expiring (7 day) link; only the token hash is stored. Sending the
+invitation email goes through the **ordinary outbound queue** from the
+inviter's account **mailer** (`accounts.mailer_inbox_id`) — a mailbox that
+account owns, so no account ever sends from another's — and the same setup link
+can be copied and shared out of band instead.
+
+**UI:** the system administrator's **Admin** page lists accounts (with their
+Admin or a pending invitation) and offers a `Create invitation` dialog. An
+account Admin manages the account's operators and its mailer on the **Account**
+page, using the same list-plus-dialog pattern. There is no separate account
+"Members" page, so an account Admin keeps a single nav button.
+
+**Consequences:**
+
+- `SessionPrincipal` now resolves per-inbox roles for non-admin users from
+  `user_mailbox_roles`, so the previously unimplemented
+  `userMailboxRoles` path is live.
+- The account-level UI and `/v1` admin routes still require `Admin`; the
+  mailbox-level UI routes check the per-inbox role, so an operator can read,
+  draft, send/reply, approve and manage only their assigned mailboxes.
+- `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (and `INITIAL_ACCOUNT_NAME`)
+  are renamed to `ADMIN_*` in place; the project is not yet deployed, so no
+  compatibility shim is carried.
+- `users`, `user_mailbox_roles`, `invites`, and the `is_system_admin` column are
+  added by migration `030`; `accounts.mailer_inbox_id` replaces the discarded
+  installation-wide `system_settings` in migration `031`.
+
+**Reason:** Separate accounts keep each person's domains and settings isolated,
+which the existing account boundary already supports. Keeping the system
+administrator out of other accounts' mail preserves the account boundary rather
+than making system administration a superuser. Reusing existing Owner semantics
+for operators avoids inventing another permission tier, and routing invitations
+through the normal outbound queue avoids a second mail path. A per-account
+mailer keeps invitations inside the account's own sending credentials.
+
+## D061 — The trusted-proxy per-request WARN is removed (D059 correction)
+
+**Context:** D059 hardened the trusted-proxy path in two ways: `config.Load` refuses
+a `TRUSTED_PROXIES` entry wider than `/8` (`minTrustedProxyBits`), and
+`Config.IsTrustedProxy` logged at WARN on every request whose socket peer fell inside
+the trust set, on the reasoning that a covering-set misconfiguration cannot be
+detected at startup. In practice the second half reports the healthy case. With the
+proxy actually in front, every proxied request wrote
+
+    WARN request peer is inside the trusted-proxy set; forwarded headers will be honoured
+        peer=203.0.113.10 prefix=203.0.113.10/32
+
+and the same line appeared in the test-run logs for every trusted fixture peer, so the
+WARN carried no information beyond "the configured proxy is proxying", and buried real
+warnings.
+
+**Decision:** `IsTrustedProxy` returns `true` for an in-set peer without logging.
+The load-time `/8` floor remains and is the control that keeps the trust set from
+covering ordinary clients; the runtime log line is not part of the control, so
+removing it removes no protection. The matching prefix is still resolved the same
+way, and `clientIP`, `cookieSecure` and the request-scoped trust checks in
+`internal/httpapp` are unchanged.
+
+**Reason:** A warning that fires on correct configuration trains an operator to
+ignore warnings. The signal it was meant to carry is already enforced at load, where
+it is enforced before the first request rather than after it.
+
+**Consequences:**
+
+- No behaviour change: trust decisions, rate-limit identity and the `Secure`-cookie
+  decision are byte-for-byte the same.
+- `log/slog` is no longer imported by `internal/config`; the file's only other
+  logging call was this one.
+- The reviewed round's report recorded the WARN as a delivered remediation. That
+  record is superseded by this decision on the behaviour, not the history of the
+  review round.
+- D059's closing paragraph in this file is superseded on its second clause ("a peer
+  found inside the trust set is logged at WARN").
+
+## D062 — Unified clients and webhook delivery
+
+> **Superseded in part by D135.** The client tables remain current; the legacy
+> `api_keys` / `api_key_mailbox_roles` / `hermes_connections` tables are no
+> longer retained or dual-written — the public baseline drops them.
+
+**Context:** The product had two consumer kinds for an inbox: account-scoped API
+keys (pull, with per-mailbox roles) and inbox-bound Hermes relay connections
+(push over an outbound WebSocket). Both the dashboard and the operating model
+already treated them together as "Clients". A third consumer was wanted: a
+generic HTTP webhook that pushes incoming mail to a URL, with either a small
+notification (the receiver fetches the body later with its own API key) or a
+full forward of the raw MIME.
+
+**Decision:** Model every consumer as a row in a single `clients` base table
+with a `type` discriminator (`api_key`, `hermes`, `webhook`), plus type detail
+tables: `client_api_keys` (hashed bearer), `client_inbox_bindings` (per-inbox
+roles, formerly `api_key_mailbox_roles`) and `client_push` (inbox-bound push
+config: gateway id, encrypted secrets, cursor, URL, payload mode, auth mode,
+enabled). `webhook_deliveries` is the durable per-event delivery queue.
+
+- Migration 032 creates the client tables and copies existing API keys and
+  Hermes connections into them, preserving their ids (`key…`, `hrm…`) so
+  `messages.client_id`, `draft_send_requests` and role bindings keep resolving.
+  The legacy `api_keys` / `api_key_mailbox_roles` / `hermes_connections` tables
+  are retained and dual-written for API-key lifecycle, so any not-yet-migrated
+  reader stays correct; all runtime reads go through the client tables.
+- Webhook clients are bound to exactly one inbox, delivery-only: no bearer, no
+  `/v1` access, no outbound send. Hermes keeps its `outbound_role`.
+- Payload modes: `notify` (fixed small JSON: event, cursor, inbox_id,
+  message_id; the receiver fetches the rest with its own API key) and `forward`
+  (byte-for-byte raw MIME streamed as `message/rfc822`, bounded by
+  `MAX_MESSAGE_BYTES`). Both modes deliver `message.received` and
+  `message.spam_state_changed`, skipping currently-Spam mail, matching Hermes.
+- Auth is chosen per client: `signature` (timestamped
+  `X-MailMoose-Signature: t=…,v1=…`, HMAC-SHA256 over `t + "." + body`) or
+  `bearer` (static `Authorization: Bearer`). The secret is generated once,
+  shown once, stored encrypted, and rotatable.
+- Delivery reuses the durable event log and a background worker (the same
+  outbox worker pass): one inbox-ordered head event per client, HTTP 2xx acks
+  and advances the cursor, failures retry with capped exponential backoff, and
+  a delivery that has not succeeded within `WEBHOOK_RETRY_WINDOW_DAYS`
+  (default 7) is marked failed and the cursor advances so a dead endpoint
+  cannot block a mailbox forever. `enabled` pauses delivery without losing the
+  cursor.
+- The destination is validated as HTTPS at save and dialled with the existing
+  `netutil` public-routable guard when the operator enables it with
+  `ALLOW_PRIVATE_OUTBOUND=false`. Private, loopback and link-local destinations
+  are allowed by the self-hosted default (`true`, D086/D133); redirects are not
+  followed and response bodies are discarded in either mode.
+- `/v1/admin/clients` is the canonical listing; `/v1/admin/clients/webhooks*`
+  manages webhook clients; the existing `/v1/admin/keys` and
+  `/v1/admin/hermes` routes remain as compatibility aliases.
+
+**Reason:** One identity table gives one list, one id space and one revoke
+path for every way mail reaches a consumer, and the webhook is structurally
+the Hermes connection with an HTTP transport instead of a WebSocket, so it
+shares the same cursor, secret custody and cancellation machinery. Keeping
+API-key and Hermes HTTP routes as aliases preserves existing integrations.
+
+**Consequences:**
+
+- A webhook is a delivery accelerator like Relay: SQLite remains the durable
+  source of truth and the cursor is what makes retries and catch-up correct.
+- The legacy client tables still exist on upgraded databases. Dropping them is
+  deferred until every reader is migrated; this is recorded here so it is not
+  mistaken for an oversight.
+- Mode and auth are editable without resetting the cursor; mode changes only
+  the shape of future payloads.
+
+## D063 — Subdomains inherit their parent domain's receiver and sender
+
+**Context:** Cloudflare Email Routing is a zone-level feature whose catch-all
+rule is stored only on the apex domain, yet mail sent to an explicitly onboarded
+subdomain (Email Routing → Settings → Subdomains) is delivered to the single
+Worker that the zone catch-all points at. In other words one Cloudflare Worker
+and its generated shared secret connect a whole zone, and no separate Worker or
+secret is needed per subdomain. (Cloudflare documents the catch-all as
+apex-only and the "match every address" selector lists only apex domains; the
+observed behaviour that an onboarded subdomain is still delivered to that Worker
+is relied on, but Cloudflare's documentation does not state it explicitly, so a
+future change is a risk to watch.) MailMoose's model, however, required every
+recipient domain to have its own `domains` row with its own receiving config, so
+routing `foo@agent.example.com` needed a second domain row and a second receiver
+config/secret — even though Cloudflare already delivered it to the same Worker.
+The product goal is that adding one top-level domain and one connector lets new
+addresses be created on any of its (onboarded) subdomains without configuring
+another receiver.
+
+**Decision:** A domain may be a subdomain of another domain in the same account
+and optionally inherit the parent's receiving and/or sending configuration,
+resolved at read time rather than copied.
+
+- Migration 033 adds `domains.parent_domain_id` (nullable, self-reference,
+  `ON DELETE CASCADE`), `inherit_receiving` and `inherit_sending`.
+  `CreateDomainWithOptions` records the nearest same-account ancestor whose name
+  is a proper label-suffix of the new name and, by default, sets both inherit
+  flags; the operator can opt out per slot on create or toggle later.
+- `ResolveDomainReceivingConfig` / `ResolveDomainSendingConfig` return the
+  domain's own configuration when present, otherwise the nearest ancestor's
+  while the matching inherit flag is set. A domain explicitly configured for a
+  *different* provider does not fall through — it is simply unconfigured for the
+  requested provider.
+- `ResolveInboundBinding` resolves the recipient's own domain row (so the
+  downstream account/domain scope check is unchanged and always names the child)
+  but takes the credential from the effective resolver. This covers every
+  webhook provider and the MX edge, because they all resolve bindings the same
+  way. `ResolveRecipient` is untouched: a subdomain is an ordinary domain owning
+  its own inboxes, aliases and catch-all.
+- Inheritance is provider-agnostic. Rotating the parent's secret or switching
+  the parent's provider applies to every descendant automatically.
+- Sending inherits the same way, but a provider may still reject an outbound
+  From on a subdomain it has not authorised (for example Cloudflare Email
+  Sending onboarding, or Mailgun domain verification); the UI warns rather than
+  blocks, since the operator may have provisioned it externally.
+
+**Reason:** It keeps subdomain addresses first-class (each is its own `domains`
+row with its own catch-all, storage and future per-subdomain settings) while
+removing the receiver duplication that Cloudflare's zone model already implies.
+Resolving at read time means the connector stays singular per zone: one Worker,
+one secret, no repaste per subdomain. The alternative — treating subdomain mail
+as the parent's namespace with a wildcard flag — would collapse address identity
+and make subdomain `From:` impossible, so it was rejected.
+
+**Consequences:**
+
+- External routing is still per-provider: Cloudflare requires each subdomain to
+  be onboarded under Email Routing → Settings → Subdomains before its mail
+  reaches the Worker. Inheritance removes the *app-side* receiver duplication,
+  not the provider-side onboarding.
+- `ResolveRecipient` and the ingest scope check are unchanged; a subdomain's
+  catch-all inbox must belong to the subdomain, not the parent.
+- Domain-ownership rules for subdomains and parent domains are out of scope
+  here; this decision settles the Cloudflare subdomain inheritance behaviour only.
+- `docs/EMAIL_PROVIDERS.md#inbound-cloudflare-email-routing` is corrected: catch-all is apex-only, each
+  subdomain must be onboarded, and one connector serves the zone.
+
+**Amendment — linking a parent added after the subdomain.** Creation-time
+detection only links a subdomain to an ancestor that already exists, so a
+subdomain added first stays a root domain when its parent is added later.
+Rather than back-fill automatically (which would silently change the routing of
+existing mail), linking is an explicit action:
+
+- `Store.SetDomainParent` links or unlinks a domain. Linking validates that the
+  target is a proper suffix ancestor in the same account and is not the domain
+  itself or one of its descendants (cycle guard bounded by
+  `maxDomainAncestorDepth`), records the parent, and turns both inherit switches
+  on — matching the create-time default. An empty parent id unlinks and clears
+  both switches. No parent configuration is copied; resolution stays read-time.
+- The dashboard's sending/receiving provider menus offer **Inherited (from
+  <parent>)** for such a domain, naming the nearest existing ancestor; saving
+  that choice links the domain and turns on the matching inherit switch. The
+  Admin API accepts `parent_domain_id` on `PATCH /v1/admin/domains/{id}` (empty
+  string to unlink, omission to leave unchanged). `POST /v1/admin/domains` and
+  the UI creation dialog are unchanged.
+
+## D064 — Self-hosted-only product; hosted mode removed
+
+**Context:** The product was scoped for two deployment shapes from one codebase:
+a free multi-tenant hosted service and a self-hosted container. The hosted
+multi-tenant implementation was explored on a separate branch and then
+abandoned; it is archived outside this repository. The project is published as
+free, open-source, self-hosted software.
+
+**Decision:** MailMoose is self-hosted-only. `MODE` accepts only `selfhosted`.
+The hosted branches are removed from the codebase:
+
+- the `SelfHostedOnlyProvider` transport gate and the `OutboundAllowed` helper;
+- the hosted branch of `Config.RequirePublicOutbound`;
+- the hosted refusal in external-alias authorization and the UI/API gates;
+- the `(Admin, self-hosted)` distinction in the API spec;
+- the hosted design and review documents.
+
+**Reason:** Carrying a multi-tenant mode the project does not operate and does
+not test is a liability in a public repository: it advertises behaviour that has
+no implementation, and it keeps dead gating paths alive in security-relevant
+code. Behaviour for a self-hosted deployment is unchanged; the only
+user-visible difference is that `MODE=hosted` is now a startup error rather than
+a silently self-hosted boot.
+
+**Consequences:**
+
+- `the removed hosted design notes` and the hosted implementation are not part of this repository.
+- The account-level storage controls and the self-hosted Direct MX provider are
+  retained; only the hosted-mode gating around them is gone.
+- Account registration remains configuration-controlled and defaults to closed.
+
+## D065 — In-flight delivery attempts are durably recorded
+
+**Context:** A large outbound message (~19 MB) sent over Direct MX was delivered
+to the recipient, but the message stayed `pending`, its claim lease was left
+set, and the sending log had no row for it: the only writers of
+`outbound_delivery_log` were the terminal `MarkSent`/`MarkFailed`, which run
+after the provider call returns. An interrupted send — a process restart, crash
+or dropped connection during the upload — therefore left no trace at all and
+silently looped as pending even though the remote had accepted the message. A
+second defect compounded it: `smtpTransaction` applied a single 45-second
+deadline to the entire SMTP transaction, including the multi-megabyte `DATA`
+upload, and treated a failed cosmetic `QUIT` as a delivery failure even after
+the remote had accepted the message with a `250`.
+
+**Decision:** A delivery attempt is recorded durably when it starts, before the
+provider call:
+
+- `outbound_delivery_log.status` gains `sending` (in flight) and `interrupted`
+  (an in-flight attempt abandoned before an outcome was written). Migration 034
+  rebuilds the table with the widened CHECK; existing rows are carried over.
+- `Store.RecordDeliveryStarted` / `RecordWorkflowDeliveryStarted` append a
+  `sending` row before `provider.Send` and mark any earlier `sending` row for the
+  same message/job `interrupted`, so a re-claim records the previous attempt's
+  fate instead of leaving a dangling row.
+- The MX outbound transaction uses a per-command deadline that each SMTP command
+  phase refreshes and that is cleared for the body upload; the body is bounded
+  only by the caller's context. The acceptance of `DATA` (`w.Close()` returning a
+  2xx) is the delivery outcome, and a failed `QUIT` afterwards is ignored.
+
+**Reason:** Durable truth before notification is the project's core invariant.
+Recording a send only on its terminal outcome inverts it: an interrupted send is
+invisible, so an operator cannot see that the remote may already have accepted
+the message, and the worker re-claims and re-sends it. A whole-transaction SMTP
+deadline is wrong for a large message, and treating a post-acceptance `QUIT`
+failure as a failure would itself cause duplicate delivery.
+
+**Consequences:**
+
+- The sending log and outbox show an in-flight message as "Sending…" and an
+  abandoned attempt as "Interrupted"; the outbox listing sets `sending` on a
+  message with an in-flight row.
+- A message that is actually delivered but whose outcome is lost is now visible
+  as `sending`/`interrupted` rather than an empty log, so an operator can
+  reconcile it instead of re-sending blind.
+- Retry and success/failure semantics are unchanged for genuine provider errors.
+- The delivery-log retention (newest 5000 rows / 30 days) is unchanged; the
+  extra in-flight row counts toward it.
+
+## D066 — Persist the transport envelope sender; forward envelope metadata; terminal webhook skips
+
+**Context:** Two gaps surfaced while wiring MailMoose to an agent that consumes
+forwarded inbound mail:
+
+1. Inbound messages persisted the canonical original envelope recipient
+   (`messages.envelope_recipient`, D029/D030) but **dropped the transport-supplied
+   envelope sender** at the shared ingest boundary. Every adapter already parsed
+   it into `transport.InboundMessage.EnvelopeFrom` (Cloudflare Worker header,
+   Mailgun `sender` form field, Resend Svix payload, MX `MAIL FROM`), but
+   `deliverStaged` never wrote it to the message row. The approval workflow used
+   the in-memory value and then lost it, so a durable consumer had no way to
+   read the original envelope sender.
+2. D062 stated that webhook delivery "skips currently-Spam mail, matching
+   Hermes", but `NextWebhookDelivery` did not filter on Spam (or anything else).
+   A message that was Spam, internal, or deleted could pin the head of a
+   client's queue indefinitely, and a forward of a deleted message failed on
+   every retry.
+
+**Decision:**
+
+- **Persist the envelope sender.** Migration 035 adds
+  `messages.envelope_from TEXT NOT NULL DEFAULT ''`. The shared ingest
+  (`deliverStaged`) normalizes the relay value once and passes it through
+  `store.InboundRecord.EnvelopeFrom` for both the approval control path and the
+  message row. It is bounded to 254 octets (RFC 5321 address maximum) and
+  rejected as empty if it exceeds that or contains control characters. A
+  missing/null sender stays empty: there is **no MIME-header fallback and no
+  backfill guessing**, on upgraded or fresh databases. The message reads back
+  `envelope_from` and `envelope_recipient` on the normalized API model.
+- **Forward envelope metadata on the wire.** A forward webhook adds two headers
+  to the byte-for-byte `message/rfc822` body: `X-MailMoose-Envelope-From` and
+  `X-MailMoose-Envelope-To`. Values are percent-encoded UTF-8 using RFC 3986
+  escaping (space `%20`, plus `%2B`, `@` `%40`; not query/`form` encoding where
+  `+` means space). Exactly one header each; a missing sender is sent as an
+  empty value so the receiver fails closed. The values come from the persisted
+  transport metadata, so they are identical on retries. Existing event,
+  delivery, message and cursor headers, the `message/rfc822` content type, the
+  raw MIME bytes, and the bearer/signature scheme are unchanged. The sender is
+  **relay-supplied**, not provider-attested (D029/D058): this is metadata a
+  receiver may record and display, not authority it should trust without a
+  provenance check.
+- **Skip non-deliverable events terminally.** Migration 035 widens
+  `webhook_deliveries.status` to include `skipped`. Immediately before dispatch
+  the worker re-checks the message: if the event is a "moved to Spam"
+  transition, or the message is currently Spam, internal, or has been deleted,
+  it records a terminal `skipped` delivery and advances the cursor, with no
+  network call. `message.spam_state_changed` uses the event's own new state, so
+  a stale spam transition is skipped even if the message is later released
+  (releasing enqueues its own deliverable event). The worker drains a run of
+  skipped events and then delivers the first genuine head, so a Spam/deleted/
+  internal event cannot block the queue and the `skipped` status is filtered
+  from future head selection.
+
+**Reason:** Durable truth before notification applies to inbound metadata too:
+persisting the envelope sender makes the approval boundary's input auditable and
+lets downstream consumers read exactly what the transport observed without
+re-parsing MIME. The webhook skip completes D062's stated behaviour and closes a
+head-of-line stall: a delivery accelerator must never be able to wedge a
+mailbox's event stream because one message was later quarantined or deleted.
+Bounding the value and rejecting malformed metadata keeps the persisted field
+safe and prevents a crafted relay value from being echoed as authority.
+
+**Consequences:**
+
+- A forward receiver that needs an attested sender must establish provenance
+  itself; the header is documented as relay-supplied in `SECURITY.md`.
+- Older messages keep an empty `envelope_from`; nothing is fabricated for them.
+- Webhook clients gain a terminal `skipped` state; a delivery in that state is
+  not retried and does not advance a client's error state. The dashboard-facing
+  `last_error` is not set by a skip.
+- No backward-compatibility alias is needed for a capability that has not yet
+  shipped.
+- The joint wire contract with the consuming agent (Billbot) is documented in
+  `docs/integrations/BILLBOT_WEBHOOK_CONTRACT.md`, with a byte-identical fixture committed at
+  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. Both
+  are maintained by hand; the generating worker test is
+  `TestWebhookForwardContractFixture`.
+
+## D067 — Dial MX: an outbound-dialing standalone receiver
+
+**Context:** Direct SMTP ingress needs the core to accept a connection. The
+existing optional edge (`D031`) runs as a policy-free process that calls the core
+over signed HTTPS, but the core still exposes an inbound `:8082`. A deployment
+that cannot publish an inbound port — behind NAT, with no reverse proxy, or with
+a policy against opening one — could not use direct SMTP at all. The requirement
+is to receive direct SMTP for a domain with only **outbound** HTTPS/2 from the
+core to a receiver the operator runs.
+
+**Decision:** Add Dial MX, a second, independent direct-SMTP path. Per domain,
+the receiving provider is either `mx` (the edge calls the core) or `dialmx` (the
+core dials a receiver); never both. The receiver is one pure-Go process, built
+from `dialmx/cmd/receiver` and shipped as a separate minimal image
+(`dialmx/Dockerfile`), that:
+
+- terminates SMTP and computes SPF/DKIM/DMARC evidence on the original bytes,
+  exactly as the MX edge does (`MX_VERIFY_*` reuses the documented surface);
+- exposes an HTTPS/2 session endpoint (`POST /mx/v2/session`) to which the core
+  dials out, proves control of the domain's Ed25519 signing key via a
+  DNS-anchored challenge against `_mailmoose-mx.<domain>`, and then serves
+  `Resolve`/`Ingest` requests;
+- holds no `/data`, no database, no `APP_ENCRYPTION_KEY` and no core HMAC
+  secret, stages messages in memory, and returns SMTP success only after the
+  core durably handled every accepted recipient (a partial/lost ack is `451`).
+
+The core stores a per-domain Ed25519 key pair encrypted with
+`APP_ENCRYPTION_KEY`; the matching public record is published in DNS. A
+subdomain may inherit receiver settings but always has its own exact-domain key
+and DNS proof. Key rotation uses the credential revision, independently of the
+receiving configuration revision, and never copies inherited settings.
+Receiver URLs are bounded (at most eight, HTTPS origins with no path, userinfo,
+query or fragment) and each is authorised independently. `MX_ENABLE` governs
+only the existing inbound MX edge. Local/remote MX domains and Dial MX domains
+can coexist, and a Dial-MX-only deployment needs no shared edge secret.
+
+**Reason:** Reversing the connection direction removes the public inbound-core
+requirement while retaining synchronous SMTP disposition. The new `mx-v2`
+session contract (24-byte header, bounded JSON metadata, chunked body) is shared
+by the dialer and receiver; existing `mx-v1` POST/HMAC behaviour is retained.
+Making the receiver stateless with in-memory staging preserves the project's
+invariants — durable truth stays in the core, realtime/transport layers never
+hold it — and keeps the receiver outside the app's trust boundary: it never sees
+the database or the app key. Reusing the `MX_*` names avoids a parallel
+configuration vocabulary.
+
+**Consequences:**
+
+- The standalone receiver is a deliberate **optional component** outside the
+  single-process default. It is an operator-chosen exception, like the MX edge,
+  and does not restore a hosted/account mode: `D064` stands, only self-hosted
+  `MODE` is accepted.
+- The core opens one outbound HTTPS/2 session per receiver URL and registers the
+  union of that receiver's domains; direct SMTP needs no inbound port on the
+  core, though the general inbound webhook listener on `:8082` still runs for
+  the webhook connectors unless the operator does not expose it.
+- Revocation is DNS-driven: the receiver re-resolves the TXT record at every
+  proof, so a removed or rotated key fails closed as soon as the receiver's
+  resolver observes it. An upstream DNS cache with a long TTL can delay that
+  observation beyond the 5-minute local binding lifetime; the binding itself is
+  never extended past `AuthLifetime` from the last proof.
+- The protocol is **not exactly-once** (same limits as `D031`): deduplication is
+  the core's 7-day `mxfp-v1` receipt window, and a replaced binding may keep
+  serving already-pinned DATA until it expires.
+- Domain authentication expires after five minutes and renews with fresh DNS
+  and a fresh, connection-bound Ed25519 proof. Last valid authentication wins
+  on each receiver; old unexpired pins may finish DATA but receive no new RCPT.
+- No mTLS is required. `DIALMX_CA_FILE` optionally adds private receiver CAs to
+  system roots with mandatory hostname verification. Multi-core HA, a durable
+  receiver queue, wildcard authority and overlap rotation remain deferred.
+  Private seeds are encrypted using the existing root key, superseding the
+  roadmap's original plaintext-at-rest assumption.
+- `MODE=hosted`, account billing and a service-wide registry are not introduced:
+  the receiver is configured per domain through the existing encrypted receiving
+  configuration, and the UI provider is named **Dial MX** (slug `dialmx`,
+  retained for compatibility).
+
+## D070 — One MX receiver transport, private single-core and public shared modes
+
+**Requirement:** Simplify MX code and maintenance by replacing the private
+edge-to-core HTTP/HMAC transport with Dial MX sessions. The operator explicitly
+accepts breaking compatibility; only a test instance is live.
+
+**Decision:** Build `mailmoose-mx` from `dialmx/cmd/receiver` for standalone and
+embedded deployments. `DIALMX_MODE` defaults to `single`, authenticating one
+core using `DIALMX_CORE_KEY` in an HTTP bearer header. No domain registrations
+or ownership proofs occur; the core's `mx` receiving configuration decides
+recipients. `shared` preserves DNS-backed Ed25519 domain authentication and TLS.
+
+Single-mode sessions use verified TLS when configured, or cleartext HTTP/2
+when certificates are absent. The built-in isolated child binds loopback and
+gets an automatically provisioned bearer key. Cleartext transmission of the
+bearer credential and email content on operator-controlled loopback/LAN is an
+explicitly accepted tradeoff. SMTP STARTTLS remains independent. Forwarded IP
+headers are not trusted and no proxy configuration is required.
+
+The newest established private session receives new work; old pinned work may
+finish while its session remains live. The core is the durable source of truth,
+and no SMTP success precedes durable acknowledgement. Retry receipts remain.
+
+**Complexity:** No dependency or runtime service is added. The existing Go HTTP/2
+support handles both encrypted and unencrypted sessions. A mode-specific session
+authorization/routing boundary replaces the signed HTTP client, core endpoints,
+replay cache and HMAC/framing helpers. One delivery implementation serves both
+modes. Old transport configuration has no compatibility aliases.
+
+This supersedes prior MX decisions on transport direction, HMAC request
+authentication and embedded credentials, while retaining isolation, email
+authentication policy and durable delivery semantics.
+
+## D071 — MX receiver configuration is persisted and reconciled at runtime
+
+> **Superseded in part by D135.** The persisted `mx_settings` singleton and the
+> runtime reconciliation remain current. The one-time import of `MX_ENABLE`,
+> `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and the `MX_*` environment described
+> below is removed: the persisted receiver settings are authoritative.
+
+**Requirement:** The installation-wide MX receiver must be configurable from the
+system-administrator UI/API and survive restarts, instead of being fixed by the
+process environment (`MX_ENABLE`, `MX_RECEIVER_URL`, `DIALMX_CORE_KEY`). The
+embedded child must be spawnable before the database is open, and a receiver
+failure must never take the core down.
+
+**Decision:** Add a singleton `mx_settings` row (migration 038): `mode`
+(`included` or `remote`), a cleartext receiver URL, an encrypted bearer
+credential and an encrypted auxiliary configuration, plus a CAS `revision`. The
+encrypted configuration covers the whole included-edge SMTP surface: hostname,
+message/staging/recipient/connection limits, RequireTLS, the SPF/DKIM/DMARC
+verification toggles, the DNS resolver and DNS/read/write/data timeouts, and an
+optional STARTTLS certificate/private-key PEM pair (the blob is encrypted with
+`APP_ENCRYPTION_KEY`, so the private key is protected at rest like the bearer
+credential). The public read returns the certificate but never the private key,
+reporting `smtp_tls_key_configured` instead; the runtime accessor decrypts the
+key. Environment variables are no longer authoritative, and `Load` never rejects
+them: a stale or partial value must not block a deployment whose configuration is
+already persisted. On first start, if no row exists, the legacy environment is
+imported once through the same validated save path — every `MX_*` included
+tunable, the `MX_VERIFY_*` toggles (default on), and the `MX_TLS_CERT`/`MX_TLS_KEY`
+files read once into the stored PEM pair (a partial or unreadable pair aborts
+the import, leaving MX unconfigured while the core remains available) — and a partial remote environment
+(`MX_ENABLE=remote` without URL or key) is rejected at that point. Once a row
+exists (including an explicitly cleared one) the environment is ignored, and
+clearing keeps the row so the import never re-fires. Unset legacy values stay
+zero so the child's own defaults apply, and a save with blank values normalises
+rather than persisting environment-style defaults.
+
+`cmd/server` spawns the included child in standby before the privilege drop,
+unconditionally when root, with no credential in its environment; the persisted
+key and, when configured, the STARTTLS certificate/key PEM are sent over the
+private control channel on activation (the child cannot read the core's `/data`,
+so file paths cannot be used; `control.Settings` carries
+`TLSCertificatePEM`/`TLSPrivateKeyPEM` and the runtime builds the certificate in
+memory). The child stays dormant when no receiver is configured. An `mxRuntime`
+controller in `cmd/server` reconciles the persisted revision to the live
+receiver. Every mode change first
+drains the child (deactivates it, letting the still-running private session finish
+in-flight work) and only then stops the private dialer, so reconfiguring an
+already-active child never fails with "already active". A failed apply does not
+advance the applied revision, so the 30-second reconcile tick retries it; a
+rootless core supports `remote` only and reports `included` as unavailable rather
+than failing. Remote readiness is taken from the dialer's live connection status
+(never inferred from the mere existence of a dialer), so a receiver that has not
+completed a handshake reports `connecting`, not `active`. Receiver failures are
+surfaced in `MXReceiverStatus` and never exit the core. `MXReceiverStatus`
+consults the runtime even when no settings are persisted, so a fresh install
+still reports whether the included shape is available. A second, shared dial
+manager continues to serve per-domain Dial MX domains.
+
+The bearer key is mode-bound: switching `remote`→`included` generates a fresh
+included key (the remote key is never reused), and switching `included`→`remote`
+requires the operator to supply the remote key rather than reusing the generated
+one.
+
+**Complexity:** No dependency or runtime service is added. One table, one
+controller goroutine, bounded child control framing and a status read. The bearer credential is stored through
+the existing application-key encryption; the runtime reads it through an
+internal-only service accessor and the UI/API never sees it. The controller sits
+behind a small interface so its ordering and retry behaviour are unit-tested
+without spawning a child.
+
+This supersedes D038/D039's environment-driven activation and default-on MX:
+the included process starts dormant, and saved UI configuration activates it.
+Installation API operations use the system-administrator session and require
+CSRF protection on writes; account API keys gain no installation privileges.
+Auto MX is a deferred, predefined shared service with manual DNS publication
+but no core/edge credentials or enrollment for its users. No platform mTLS,
+hosted-core domain claims, resource-fairness quotas or overlap rotation are
+introduced by this change.
+
+## D072 — Bounded shared MX shards and dial-time destination policy
+
+**Requirement:** A shared receiver must serve more domains than one session's
+domain cap without losing healthy registrations, while preserving private
+loopback/LAN receivers and preventing arbitrary shared URLs from bypassing the
+existing public-destination boundary.
+
+**Decision:** Shared domains are packed into bounded sessions with stable
+assignments, a local domain ceiling, advertised receiver limits and a bounded
+number of shards. New domains fill available capacity without moving healthy
+bindings; exhausted capacity is reported explicitly. Initial proofs and
+receiver-driven renewals are paced. Temporary local authentication saturation
+can retry within an existing grant, but cannot extend that grant's expiry.
+Private single-core receivers remain one session.
+
+The dedicated streaming transport checks DNS inside the actual dial and connects
+to the checked numeric IP. Included and explicitly configured Remote sessions
+allow local destinations; that permission is connection-scoped. Existing custom
+shared URL configurations follow public-outbound enforcement and its deliberate
+self-hosted opt-out. A future predefined Auto service must always use its
+public-only policy. Redirects remain disabled and TLS hostname verification
+remains mandatory on HTTPS sessions.
+
+**Compatibility:** New Ready limit fields require coordinated core/receiver
+upgrades because old strict JSON decoders reject unknown fields. Old Ready
+frames remain readable by the new core using bounded local defaults. This
+supersedes D067's one-session-per-URL assumption; it does not introduce automatic
+core HA or resource-fairness identity accounting.
+
+**Complexity:** No dependency or service is added. Session assignment bookkeeping,
+bounded authentication scheduling and receiver capability fields stay within
+the existing Go processes. Durable delivery and retry receipts are unchanged.
+
+## D073 — Trash: soft-delete, restore, configurable retention
+
+**Decision:** Deleting a message moves it to Trash instead of erasing it.
+A message carries a `deleted_at` timestamp (NULL when live) and is hidden from
+every ordinary read surface — message lists, search, thread listings and unread
+counts — while its row, raw MIME, attachments, FTS entry and storage accounting
+are retained. Trashed mail is a computed view over `deleted_at`, exactly like
+Spam is a view over `is_spam`; there is no separate Trash table.
+
+- `DELETE /v1/messages/{id}` and the UI delete actions move to Trash
+  (Assistant/Owner on the inbox). `POST /v1/messages/{id}/restore` clears
+  `deleted_at` (Assistant/Owner). `DELETE /v1/messages/{id}/purge` erases a
+  trashed message permanently and unlinks its raw file (Owner). A message must
+  be trashed before it can be purged.
+- `POST /v1/inboxes/{id}/trash/empty` (Owner) purges every trashed message in an
+  inbox. `DELETE /v1/outbox/{id}` now moves a pending/failed outbound message to
+  Trash rather than erasing it; trashed outbound messages leave the outbox
+  listing immediately.
+- Trashed messages continue to count toward `accounts.storage_used_bytes` until
+  purged, matching how Spam and every other retained message are accounted.
+- Each account has `trash_retention_days` (default 0). The maintenance worker's
+  `purgeExpiredTrash` sweep permanently purges trashed messages older than the
+  window and unlinks their raw files. A value of 0 disables automatic purging,
+  so trash is retained until emptied by hand; a positive value enables the
+  sweep. It is read/written through
+  `GET`/`PATCH /v1/account/settings` and the Account page (Owner/Admin).
+- Durable events `message.trashed`, `message.restored` and `message.purged` are
+  emitted transactionally and published to SSE/long-poll. They are deliberately
+  **not** relayed over Hermes (which still carries only `message.received` and
+  `message.spam_state_changed`); Webhook delivery treats a trashed message like
+  a deleted one (terminal `skipped`).
+- The dormant `messages.is_archived` column and the `archived` PATCH field are
+  removed. Archive was never a real folder (it only excluded messages from the
+  unread count); Trash is the first real mailbox state. Migration 039 rebuilds
+  the `messages` table to drop `is_archived` and add `deleted_at`, and adds
+  `accounts.trash_retention_days`.
+
+**Reason:** A delete that erases mail with no recovery is hostile to both human
+and agent users. Trash gives reversible deletion with bounded storage growth,
+and per-account retention lets an operator choose between aggressive reclamation
+and keep-until-manual-purge without a global policy.
+
+**Complexity:** No dependency or service is added. Trash is one nullable column
+plus a per-account integer, a handful of store methods, a maintenance sweep that
+reuses the existing file-unlink path, and new API/UI routes. The `messages`
+table rebuild in migration 039 carries every row over unchanged.
+
+## D074 — OpenClaw is a second relay connector kind over the same transport
+
+**Decision:** OpenClaw is an inbox-level outbound relay connector, exactly like
+Hermes: the OpenClaw host dials an authenticated WebSocket out to MailMoose, no
+inbound port or webhook is required, MailMoose remains the durable source of
+truth, unacknowledged email is replayed after a reconnect, and replies return
+over the same socket through the normal send path. OpenClaw is nevertheless a
+distinct connector kind in the product model (`clients.type = 'openclaw'`), not
+a Hermes alias.
+
+- The wire contract, HMAC upgrade token, `hello`/`descriptor` handshake,
+  `inbound`+`bufferId`/`inbound_ack`, `outbound`/`outbound_result`, ping and the
+  delivery log are unchanged and shared. There is no second relay transport and
+  no `/openclaw-relay` route.
+- Relay persistence stays `clients` + `client_push`. Migration 042 widens the
+  `clients.type` CHECK to accept `openclaw` (table rebuild, `fkOff`, because four
+  tables reference `clients`) and adds `hermes_enroll_tokens.kind` so a one-time
+  setup code remembers which connector it creates. Existing rows default to
+  `hermes`.
+- One-time setup codes reuse `POST /relay/enroll`. The code is an authority, not
+  an address: the claimant supplies the MailMoose URL. The connector UI shows
+  `openclaw channels add --channel mailmoose --code <setup-url>`, where the URL
+  origin is the base URL and the `#fragment` carries the code; a manual
+  `channels.mailmoose` JSON5 block is the air-gapped fallback. The code expires
+  after 15 minutes, is stored hashed, and is single-use.
+- Admin surface is connector-specific and mirrors Hermes:
+  `GET/POST/PUT/DELETE /v1/admin/openclaw` plus
+  `POST /v1/admin/openclaw/setup-code`. OpenClaw connectors render beside
+  Hermes and Webhook in the inbox connector list with the same Settings, Log and
+  delete actions, and the same no-allow-list risk warning.
+- Outbound authority reuses the relay role semantics: `owner` sends directly,
+  `assistant` creates an approval-required draft. Sender provenance is
+  deliberately untrusted on the connector side: the OpenClaw plugin dispatches
+  email as external, unauthenticated input and the MailMoose inbox allow list is
+  the primary sender gate (the same accepted risk as D058).
+
+**Reason:** The existing relay already provides every mechanic OpenClaw needs.
+Making OpenClaw a connector kind rather than a second transport keeps the
+user-visible model honest (a distinct connector chip, log and revocation path)
+without duplicating authentication, replay or acknowledgement code, and it keeps
+the small-runtime constraint: one process, one container, one store.
+
+**Complexity:** One migration rebuild, a kind discriminator on the existing
+relay rows, connector-specific admin routes and UI parity, and a small external
+OpenClaw channel plugin. No new runtime service or dependency is added to
+MailMoose.
+
+## D075 — Passkey backup flags, sysadmin break-glass, and atomic auth-method changes
+
+**Decision:** Passkeys are an additive sign-in method with three supporting
+invariants made explicit:
+
+- The backup-eligible and backup-state flags observed at registration are
+  persisted and reconstructed on the credential before assertion verification.
+  The `go-webauthn` library rejects an assertion whose authenticator data
+  disagrees with the stored backup-eligible flag, so a synced passkey
+  (iCloud Keychain, Google Password Manager) cannot log in if the flag is
+  dropped.
+- The system administrator can never disable password sign-in. The
+  "make this my only sign-in method" flow is hidden and refused for that
+  account, and `SyncSystemAdmin` always writes `password_auth_enabled=1` when it
+  reconciles the config-owned credential. The config password remains the
+  break-glass recovery path documented in SECURITY.md.
+- `SetPasswordAuth` and `UpdateWebAuthnCredentialUse` perform their read and
+  write in a single `BEGIN IMMEDIATE` transaction, so a concurrent passkey
+  delete cannot interleave with disabling password auth and leave an account
+  with no usable method.
+
+**Reason:** These are correctness and safety requirements, not preferences. The
+backup-flag omission broke every synced passkey; the sysadmin guard preserves
+the documented recovery invariant; the transaction removes a check-then-act
+race in the lockout guard.
+
+**Complexity:** No new dependency, service or schema change beyond reading
+columns that already existed. The sysadmin guard adds one conditional in the
+store, and the transaction change is local to two store methods.
+
+## D076 — Account-admin settings separation and per-inbox Trash retention
+
+**Decision:** The Account page is organised into three labelled sections so
+personal preferences, account-wide settings and account administration are
+visually distinct:
+
+- **Your settings** — a user's own display time zone override, passkeys, and
+  email/password. Available to every signed-in user.
+- **Account settings** — account name, account default display time zone, and
+  the account Trash auto-purge window. Account-Admin only, enforced on the
+  server (`uiSettingsAccount`, `uiSettingsAccountTimezone`, and the existing
+  operator routes require `users.is_admin`).
+- **Account administration** — the account mailer, mailbox operators and
+  invitations. Account-Admin only.
+
+The account default Trash retention may be overridden per inbox from the inbox
+Quota tab (`inboxes.trash_retention_days`, nullable). `NULL` inherits the
+account's `accounts.trash_retention_days`; `0` keeps that inbox's trashed mail
+until purged by hand; a positive value purges after that many days. The
+maintenance sweep computes the effective window as
+`COALESCE(inbox, account)`. The override is exposed on
+`PATCH /v1/inboxes/{id}` as `trash_retention_days` (integer to set, `null` to
+inherit, absent to leave unchanged). Per the Account page's one-route grouping
+decision, no new page or route is introduced.
+
+**Reason:** Account-level controls (rename, account-wide retention and time
+zone, operator management) were interleaved with personal settings on one
+unlabelled page, and the account name could be changed by any signed-in user.
+Grouping plus server-side Admin enforcement makes the blast radius of each
+control explicit. Retention was account-wide only; a single mailbox with
+different legal or operational retention needs had no way to express it. A
+nullable per-inbox override adds that without disturbing the account default.
+
+**Complexity:** One nullable column (`migration044`), a `COALESCE` join in the
+retention sweep, one store setter, an optional API field, and template/JS
+grouping. No new dependency, service or route.
+
+## D077 — Sign in to the web UI with a non-admin mailbox API key
+
+**Decision:** The login page gains a *Sign in with an API key* path
+(`POST /login/key`) beside password and passkey. A **non-admin API key that
+carries at least one mailbox binding** can be exchanged for a browser session:
+
+- The session resolves to the key's own per-inbox roles from
+  `client_inbox_bindings` and lands on the existing operator view. It grants
+  nothing the bearer API did not already grant — no account Admin dashboard, no
+  `/admin` plane, no installation-management API, no Account administration.
+- **Admin keys are rejected.** An admin key carries no mailbox bindings, and
+  this path deliberately maps mailbox access, not admin mode.
+- The session lives in a new `key_sessions` table (`migration045`), because a
+  key is not a `users` row and the `sessions` table's `user_id` is `NOT NULL`
+  and FK-bound to `users`. Only the hashed session token and a CSRF token are
+  stored; the key's live state (existence, `revoked_at`, bindings) is resolved
+  on every request, so **revoking or rotating the key invalidates the browser
+  session immediately**. Revoke/rotate/edit also delete the key's
+  `key_sessions` rows outright.
+- The session TTL is `min(SESSION_TTL_HOURS, 24h)`: never longer than an
+  ordinary session, never more than a day, because a machine credential is more
+  likely to be shared or pasted than a password.
+- A key session's Account page is a slim variant that states the key and its
+  mailbox access; it renders none of the human email/password/passkey/time-zone
+  controls. Key-authenticated sends and approvals keep recording the key's
+  actor identity, not "UI".
+
+**Reason:** A human who holds only a scoped key (for example to try a key's
+access visually, or an agent-first user whose sole credential is a key) had no
+way into the web UI short of an invitation, which is a separate credential and
+a separate person. Exchanging the key for a disposable session lets them use
+the UI without inventing new permissions and without placing the long-lived
+machine credential in a browser cookie. Restricting the path to non-admin,
+mailbox-scoped keys keeps the rule simple and the surface small: the session is
+exactly the operator view, and the admin plane stays unreachable because key
+principals never carry `Admin` or `SystemAdmin`.
+
+**Complexity:** One additive table (`migration045`), three store methods
+(`CreateKeySession`, the key-session fallback in `SessionPrincipal`, and
+`DeleteKeySessionsForClient`), one login handler and limiter, one login-page
+form, one slim Account template, and four `DeleteKeySessionsForClient` calls on
+the existing revoke/rotate paths. No new dependency, service or route beyond
+`POST /login/key`. Tests cover resolution/scope, revoke, rotation teardown,
+admin-key rejection, session death on revoke, and read-only write refusal.
+
+## D078 — Delivery-triggered per-inbox auto-actions for agent connectors
+
+**Decision:** An inbox may carry a delivery-triggered auto-action policy for its
+agent/relay connectors: mark a message read once a connector has delivered it,
+and optionally move it to Trash a configurable number of hours after delivery.
+The policy is per-inbox (it applies to every connector bound to that inbox) and
+is off by default. It applies only to agent and relay connectors; API keys and
+human accounts never trigger it, because a poll is not a delivery.
+
+- Three inbox columns carry the policy: `auto_mark_read_on_delivery`
+  (default 0), `auto_trash_after_delivery_hours` (nullable; NULL disables the
+  sweep), and `delivery_trigger` (`any` or `all`, default `all` — see D081, which
+  supersedes the original `default any`). They are
+  read/written through `PATCH /v1/inboxes/{id}`, the inbox Connectors tab (its
+  own form and save control, posting to `POST /ui/inboxes/{id}/auto-actions`),
+  and may also be seeded from the connector-create dialog.
+- The Connectors tab is a **separate form** from the rest of the inbox edit
+  dialog, because its fields are absent from every other tab's save. An inbox
+  save that does not carry the auto-action controls leaves the policy untouched
+  rather than reading the missing fields as "off" — treating absence as a clear
+  silently wiped the policy on any unrelated edit. The submitter therefore
+  applies the auto-actions only when the form actually carried them.
+- A delivery is recorded per connector: `message_deliveries(message_id,
+  client_id, delivered_at)` gets one idempotent row per successful delivery. The
+  relay ack paths (`AckHermesEventLogged`, `RecordHermesDeliveryAcknowledged`) and
+  the webhook success path (`RecordWebhookDelivery`) record it inside their own
+  transactions, so the cursor advance and the delivery row commit together.
+- The `any` trigger fires the actions the moment the first connector delivers.
+  The `all` trigger waits until **every connector that existed when the message
+  arrived** has delivered; a connector added later is not required, so old mail
+  is never pinned by a new connector. When satisfied, `messages.delivery_action_due_at`
+  is stamped once (delivery instant plus the configured hours); a later connector
+  ack cannot extend an already-set window.
+- A maintenance sweep (`trashDeliveredMail`) moves live messages whose
+  `delivery_action_due_at` has passed to Trash, emitting the ordinary
+  `message.trashed` event. The Trash model then applies its own retention
+  unchanged. The actions skip Spam, internal (workflow) and already-trashed mail.
+- Messages expose their per-connector delivery history (`deliveries`, each a
+  `client_id` and `delivered_at`) and `delivery_action_due_at` on the read
+  surfaces, so a caller can see which connector has handled a message and when
+  it becomes eligible for auto-trash.
+
+**Reason:** An agent-fronted inbox accumulates mail the agent has already
+handled, and there was no way to express "once my agent has seen this, mark it
+read and clear it out" without a human or a bespoke script. The Trash retention
+control only ran from the moment a message was trashed, never from delivery, so
+an unattended relay inbox could not self-maintain. Per-inbox ownership matches
+the existing Trash-retention model (D073/D076) and avoids a per-connector
+surface; the `any`/`all` choice covers both a single-agent inbox and a shared
+one without a second policy object.
+
+**Complexity:** One migration (three inbox columns, `message_deliveries`,
+`messages.delivery_action_due_at` and its partial index), four store methods, one
+maintenance step reusing the existing event path and file-unlink flow, optional
+`PATCH` fields, and a dedicated auto-actions form on the inbox Connectors tab
+(its own save control, posting to the existing `POST /ui/inboxes/{id}/auto-actions`
+endpoint). No new dependency or service.
+
+## D079 — Per-inbox storage quotas
+
+> **Superseded in part by D135.** `storage_used_bytes` is `NOT NULL DEFAULT 0`
+> in the public baseline; the "lazily initialized / NULL" counter path below
+> applies only to the pre-release lineage, whose NULL counters the one-time
+> conversion materialises. The quota model itself is unchanged.
+
+**Decision:** An inbox carries an optional storage cap layered on top of the
+existing account-level quota. It bounds **stored bytes** for one inbox so a
+single agent mailbox cannot consume an account's whole allowance.
+
+- `inboxes.storage_quota_bytes` is nullable: `NULL` means the inbox has no cap
+  of its own (only the account quota applies), `0` means explicitly unlimited,
+  and a positive value is the cap in bytes. `inboxes.storage_used_bytes` is the
+  maintained counter and is nullable so a pre-migration inbox is distinguishable
+  from an empty one.
+- Accounting mirrors the account rule exactly: non-workflow messages in any
+  direction or state (inbound, outbound, Spam, trashed) plus the inbox's
+  editable drafts and draft attachments. Workflow mail remains excluded (D041).
+- Enforcement is transactional, in the same `BEGIN IMMEDIATE` write that
+  persists the message and adjusts the account counter, so the two layers cannot
+  drift and there is no check-then-act window. Inbound, outbound and draft writes
+  that exceed either cap return the existing `store.ErrQuota`, which every
+  transport already maps (webhook 507, MX 452 transient, API 507). The account
+  cap is checked first, then the inbox cap.
+- Counters are **lazily initialized**: an inbox whose `storage_used_bytes` is
+  NULL has it computed once from a SUM over its messages, drafts and draft
+  attachments at the first write that adjusts it (or the first read that needs a
+  number), after which it is authoritative. `CreateInbox` seeds new inboxes at 0.
+  A migration that scanned every inbox was avoided so the upgrade stays cheap.
+- Every path that frees bytes refunds the inbox counter in the same transaction
+  (`PurgeMessage`, `EmptyTrash`, `DeleteMessage`, `PurgeExpiredTrash`, draft and
+  draft-attachment deletion, and the SUM-based account refunds in
+  `PurgeInbox`/`PurgeDomain`), flooring at zero.
+- The cap is exposed on the inbox read model as `storage_quota_bytes` (settable;
+  Admin only) and `storage_used_bytes` (read-only) and on
+  `PATCH /v1/inboxes/{id}` using the same absent/null/integer convention as
+  `trash_retention_days`. Account Admins edit it from the inbox Quota tab
+  (Add and Edit dialogs); the dashboard Size cell turns amber at ≥90% and red at
+  the cap, with a usage tooltip.
+- Lowering the cap below current usage is allowed: existing mail is untouched,
+  the inbox shows as over-quota, and new inbound/outbound mail is refused with
+  `ErrQuota` until usage falls (for example by purging mail).
+
+**Reason:** The account quota is the only capacity control, so one runaway
+inbox could starve every other mailbox in the account with no way to bound it.
+An inbox already presented a Size column and a Quota tab, but the tab said
+"storage is limited at the account level" and did nothing. A nullable per-inbox
+cap adds real fairness without disturbing the account default, mirroring the
+per-inbox Trash-retention override (D076). Reusing `ErrQuota` and the existing
+transport mappings keeps every caller's behaviour unchanged.
+
+**Complexity:** One migration (two nullable inbox columns), a widened
+`adjustStorageTx` helper, inline checks in the two commit paths, one setter and
+one usage read, optional API/UI fields and a size-cell class. No new dependency,
+service or route.
+
+## D080 — Configurable HTTP receiver listener and public origin
+
+**Decision:** The HTTP webhook listener defaults to enabled on port 8082,
+but `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT` make it optional
+and configurable. This revises the fixed, always-on listener in D019.
+Webhook routes remain on both listeners for compatibility. The dedicated
+listener continues to expose only inbound ingestion and health checks.
+
+`DEDICATED_RECEIVER_URL` optionally supplies the public origin for provider
+webhook registrations, receiving instructions, and Cloudflare Worker code.
+Omitted or blank falls back to `BASE_URL`, even when the listener is enabled.
+The public origin and listener enable flag are independent; a reverse proxy
+can route the receiver origin to either available listener. `BASE_URL` remains
+the canonical UI/API origin for passkeys, invitations, and agent connectors.
+
+**Reason:** Some deployments expose public receiving through a different
+hostname from the UI. Using the receiver hostname as `BASE_URL` makes browser
+passkey registration fail its RP-domain check. A distinct receiver origin
+supports that topology without changing passkey trust policy.
+
+**Complexity:** Three environment options, startup validation, a conditional
+existing listener, and one effective receiver-origin accessor. No new process,
+service, dependency, or authentication policy. The passkey UI translates the
+browser's RP-domain rejection into an actionable configuration error.
+
+## D081 — Delivery auto-actions default to the `all` trigger
+
+**Decision:** An inbox created without an explicit trigger carries
+`delivery_trigger = 'all'`, and a submitted auto-action form that omits the
+field resolves to `all` as well. This supersedes D078's `default any`. `any`
+remains available per inbox, and the auto-actions themselves are still off until
+enabled.
+
+**Reason:** "The agent has handled this" is a statement about the whole inbox,
+not about whichever connector happened to poll first. With `any`, a relay that
+delivers before a webhook — or before a second relay — marks a message read and
+starts its Trash clock while another connector on the same inbox has not seen it
+at all, and a human checking the inbox through the other connector finds the
+mail already gone. `all` costs nothing on a single-connector inbox, which is the
+common case, and it is the safe reading when one is added.
+
+**Scope:** Defaults only, for new and unset values. An inbox that already
+carries a concrete `any` keeps it: the column is `NOT NULL DEFAULT`, so an
+explicit `any` and an untouched default are indistinguishable, and a blanket
+rewrite would silently override a deliberate choice. Existing inboxes move when
+their owner saves the Connectors tab.
+
+Because SQLite cannot alter a column default, migration046's DDL now reads
+`DEFAULT 'all'` for fresh databases while a database that already applied it
+keeps `DEFAULT 'any'`; `CreateInbox` writes the default explicitly, so no code
+path reads the DDL default and the two diverge harmlessly. No table rebuild and
+no new migration.
+
+**Complexity:** One constant, one explicit column write in `CreateInbox` (which
+also fixes its returned `model.Inbox` reporting no trigger at all), two blank-form
+defaults, four preselected options, one JavaScript fallback, and doc/spec text.
+
+## D082 — Antler MX: a named shared receiver service with live endpoint discovery
+
+**Requirement:** Give a self-hoster a zero-config direct-SMTP option that needs no
+public inbound port on the core and no receiver of their own: select a named
+service, enter a contact email, publish the shown records. The service operator
+must be able to add receiver capacity for new setups without a core release, and
+the core must retain enough metadata (contact email, setup id, domains,
+messages) to account for usage.
+**Decision:** Extend the per-domain Dial MX receiving provider (`dialmx`) with a
+`service` choice:
+
+- `antler` (default) — Antler MX, the hosted shared relay. The core resolves the
+  receiver set from a versioned JSON manifest, snapshots it into the domain's
+  encrypted receiving configuration, generates the domain's exact Ed25519 key,
+  and shows the MX and `_mailmoose-mx.<domain>` TXT records to publish.
+- `custom` — the pre-existing manual `receiver_urls` behaviour, unchanged. A
+  legacy save with only `receiver_urls` is never silently treated as Antler.
+
+The manifest is compiled in (`internal/transport/mxdial/antler-endpoints.json`)
+and fetched live from the project repository at setup-save time, with a
+ten-minute cache, a last-known-good fallback and the embedded copy as the final
+fallback, so a hosting outage never blocks setup. It carries both the HTTPS
+session origins and the SMTP MX hostnames/priorities. The manifest decoder
+tolerates unknown fields so the hosted document can grow without breaking older
+cores; known fields are validated strictly (canonical HTTPS origins, public-only
+destinations, DNS hostnames, bounded priority). Existing setups keep their
+snapshot, so adding or re-pointing capacity only affects new setups; the service
+leaves old receivers running.
+
+Registration metadata travels per domain: `DomainAuth` gains optional
+`contact_email` and `setup_id`. Both are operational metadata, never credentials
+— domain authority remains the existing DNS-anchored Ed25519 proof, and a
+malformed value is dropped rather than failing the proof. The receiver logs both
+on the `dialmx domain auth` registration/renewal summary and on the per-recipient
+resolve and handoff records, so usage (contact, setup, domains, messages) can be
+read or exported from the receiver's structured logs. Antler MX does not
+introduce an account tie-in, an operator dashboard, a receiver database or a
+durable queue.
+
+The receiving API (`GET /v1/admin/domains/{id}/receiving`) returns the live
+setup picture for Dial MX: per-receiver authentication `status` learned over the
+outbound session, best-effort published-record `dns` checks (MX hostnames and the
+TXT key), and copy-ready `instructions`. The checks resolve DNS live on every
+request, bounded by a four-second timeout and never cached in the core, so a
+record change shows on the next poll or explicit "Check now".
+
+The standalone receiver gains `DIALMX_BROWSER_REDIRECT_URL` (https, no
+fragment): a browser `GET /` with an HTML `Accept` header is 302-redirected to
+the landing page; health, readiness and the session endpoint are unchanged, and
+a client that does not accept HTML still gets 404.
+
+**Reason:** The named service makes the common self-host case genuinely
+zero-config while reusing every settled Dial MX invariant: core-dials-receiver,
+no inbound core port, policy-free stateless receiver, exact-domain DNS proof and
+durable-truth-before-`250`. A repository manifest lets capacity changes reach new
+setups immediately without shipping the receiver fleet and core in lockstep,
+while per-setup snapshots keep existing published MX records stable. Per-domain
+contact metadata preserves the multi-tenant model (one installation may serve
+several accounts with different contacts) without weakening authority to a
+self-asserted value.
+
+**Accepted risk:** the live manifest is fetched over TLS with no signature; an
+actor able to write the manifest path in the project repository could point new
+setups at different receiver origins. Existing setups are unaffected because
+they keep their snapshot. Manifest signing on top of the embedded copy is a
+later addition requiring no rework.
+
+**Consequences:**
+
+- The Dial MX provider selector reads **Antler MX (Free SMTP Relay - no port
+  forwards required)**; the short label stays **Antler MX**.
+- `DomainAuth` metadata is an optional field on the strict mx-v2 contract:
+  a receiver or core built before it rejects the frame as malformed when it
+  receives the fields, so **upgrade the shared receiver first, then cores** —
+  the same coordinated-release pattern as D072. Custom cores send no metadata
+  and are unaffected.
+- Antler MX endpoints are public-only regardless of a self-hosted operator's
+  outbound opt-out: the hosted service must never resolve to a private
+  destination.
+- No new dependency, service or runtime component is added to the core; the
+  receiver remains one stateless process outside the trust boundary.
+
+**Complexity:** One embedded manifest and resolver, per-domain config
+fields/snapshot, two optional wire fields and their logging, live DNS checks
+plus a setup API/UI panel, and one receiver environment setting. Durable
+delivery, retry receipts and existing mx-v1/mx-v2 transport are unchanged.
+
+## D083 — Cleartext shared-mode sessions from a trusted TLS-terminating proxy
+
+**Requirement:** Run a `DIALMX_MODE=shared` standalone receiver behind a
+TLS-terminating reverse proxy (for example Nginx Proxy Manager's Streams
+feature) so the receiver holds no certificate or private key, while a
+single-core deployment that dials loopback keeps working unchanged. Real
+inbound mail must continue to arrive directly on the receiver's SMTP port so
+the sender IP used for SPF and per-source limits is the real peer, not the
+proxy.
+
+**Decision:** Let a shared-mode session be served over cleartext HTTP/2 (h2c,
+prior knowledge) when — and only when — the immediate socket peer is loopback
+or matches `DIALMX_TRUSTED_PROXIES`, a comma-separated list of IPs/CIDRs parsed
+with the same floor as the core's `TRUSTED_PROXIES` (bare IP is a /32 or /128;
+anything wider than /8 is refused). The startup check that requires
+`DIALMX_TLS_CERT`/`DIALMX_TLS_KEY` in shared mode is relaxed only when that
+allowlist is non-empty; with no allowlist the strict requirement stands, so a
+misconfiguration cannot silently expose the listener. The admission gate
+(`dialmx/receiver`) rejects a cleartext session from any other peer with `426`
+and reason `cleartext_not_trusted`, and the `session opened` record carries
+`cleartext` and `cleartext_trusted` so an unencrypted session is visible in the
+metadata log. `dialmx/cmd/receiver` enables h2c whenever no certificate pair is
+configured, in either mode. The SMTP edge is not proxied: public `:25` reaches
+the receiver directly, so the observed sender IP — and therefore SPF and the
+per-source caps — is unchanged. No PROXY protocol is added for the session leg.
+The per-source connection and authentication caps become tunable
+(`MX_PER_IP_CONN_LIMIT`, `MX_PER_IP_CONN_WINDOW_MAX`, `MX_PER_IP_AUTH_CONCURRENT`,
+`MX_PER_IP_AUTH_WINDOW_MAX`) so an operator fronting many cores through one
+proxy can raise them; behind such a proxy the socket peer is the proxy for every
+core, so those caps are shared per proxy. Per-domain and subdomain fair-share
+remains deferred.
+
+**Reason:** A TLS-terminating proxy is a common deployment and nginx cannot
+proxy upstream over HTTP/2 (`proxy_http_version 2` only from nginx 1.29.4), so
+the session endpoint must be fronted at L4 with the proxy terminating TLS. The
+peer allowlist keeps the relaxation fail-closed and narrow: only a configured
+proxy address may present a cleartext session, the DNS-anchored Ed25519 proof
+(shared mode) and the bearer key (single mode) remain the authority, and
+core→proxy TLS with hostname verification is unchanged. Keeping SMTP direct
+avoids PROXY-protocol support and preserves an accurate sender IP for SPF and
+rate limiting.
+
+**Accepted risk:** the proxy→receiver hop carries the challenge transcript,
+recipient addresses and message content in cleartext. This is the same trust
+the single-mode loopback path already accepts, extended to a named proxy
+address; it is bounded by the narrow-prefix rule and the mandatory DNS proof.
+An attacker able to spoof the proxy's source IP on that confined hop could read
+or inject session traffic. Loopback remains implicitly trusted, so a host-local
+core is unaffected.
+
+**Complexity:** One receiver environment allowlist, one admission branch, one
+h2c-enable condition and four env-tunable caps, plus tests and documentation.
+No new dependency, service, database or core change; the wire contract, SPF,
+the envelope-sender accepted risk and `emersion/go-smtp` are untouched.
+
+## D084 — Remote MX: an account-owned single-mode receiver
+
+**Requirement:** Give an account admin the same "configure a receiver once, then
+select it for any domain" UX that a system administrator has for the installation
+Direct MX receiver — but scoped to their own account — so a tenant can run their
+own standalone Dial MX receiver and point their domains at it without a system
+administrator and without exposing a public inbound port on the core.
+
+**Decision:** Add **Remote MX** (`remotemx`), a third direct-SMTP receiving
+provider alongside Direct MX (`mx`, installation) and Antler MX (`dialmx`
+service `antler`, shared DNS relay). It is Dial MX in **single mode only**: the
+core dials the account's receiver outbound over HTTPS/2 (or cleartext h2c for an
+explicitly-private receiver) and authenticates with a shared bearer key. There
+is no DNS proof and no per-domain key.
+
+- A per-account registry stores exactly one receiver per account
+  (`account_mx_receivers`, migration 048): a URL, an `APP_ENCRYPTION_KEY`-encrypted
+  bearer credential, an encrypted config blob (optional private CA and the
+  private-destination opt-in), and a CAS revision. It mirrors the installation
+  `mx_settings` row, scoped to the account and editable by an account Admin.
+- A domain selects Remote MX by provider; its stored receiving config is empty
+  (the receiver is account-scoped, not domain-scoped). Selecting it requires the
+  account to have a receiver configured, so a domain cannot silently accept
+  nothing.
+- The core runs one `mxdial.Manager` per account receiver that is in use by at
+  least one domain, using the existing single-mode dialer
+  (`mxdial.Config.ReceiverURL` + `CoreKey`, `AllowPrivateDestinations`). The
+  receiver authorizes any domain on its one authenticated connection and the core
+  keeps per-recipient account/domain authorization via the `remotemx` provider.
+- URL policy: a default Remote MX receiver must be an HTTPS public-routable
+  origin; the account admin may tick "allow private" to permit an `http` origin
+  on a loopback/RFC1918 destination.
+- One physical receiver belongs to exactly one account: a second account
+  registering the same receiver URL is rejected. A wrong bearer key never
+  authenticates — the receiver's live status shows connecting/failed and only
+  the correct-key core becomes its session — so no takeover code is needed.
+- Clearing the account receiver is refused while a domain still routes to it
+  (fail closed).
+
+The API is `GET/PUT/DELETE /v1/admin/account/mx` (account Admin, account-scoped
+bearer or the account-admin UI), and the UI panel is the account-level parallel
+of the system-administrator Direct MX editor.
+
+**Reason:** Remote MX reuses the already-shipped, already-tested Dial MX single
+mode — receiver, wire contract, and dialer — and adds only the core-side
+per-account registry and lifecycle. It makes the "bring your own receiver"
+capability available to tenants without a system administrator, and preserves
+every settled invariant: core-dials-receiver, no inbound core port, durable
+truth in the core, one owner per receiver, and no new dependency, service or
+database engine.
+
+**Consequences:**
+
+- The domain Receiving provider menu now offers three direct-SMTP paths:
+  **Direct MX** (installation, system administrator), **Antler MX** (shared,
+  DNS-authenticated, zero-config) and **Remote MX** (account, single-mode
+  bearer). DNS-authenticated shared receivers remain Antler MX / per-domain Dial
+  MX custom; Remote MX does not do DNS auth.
+- The receiver and the `mxdial` wire/dialer code are unchanged; the provider
+  slug `remotemx` carries no `ConfigField`s (the receiver is account-scoped) and
+  the account receiver editor is rendered directly by the UI/API.
+- Subdomains inherit Remote MX like any other receiving configuration; a
+  subdomain may select it independently of its parent.
+- The receiver's SMTP/STARTTLS/verification surface is the receiver container's
+  own environment (single mode), exactly as for the installation Remote
+  receiver; the core stores only the URL, bearer key and private-CA/private-host
+  options.
+
+## D085 — First-run HTTP setup wizard (supersedes D055 in part)
+
+**Context:** D055 removed the unauthenticated `/setup` claim flow and made
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` the only way to create the system
+administrator: a fresh instance with no credentials served a static "not
+configured" page with no HTTP path to claim it. That is safe but gives a
+self-hoster no out-of-box onboarding: Docker secrets must be generated and
+re-entered before the first login, and there is no in-browser way to claim a
+fresh container. The comparable product (Tiller Router) ships a one-shot
+first-run setup page instead.
+
+**Decision:** Add a one-shot first-run setup wizard, reversing only the
+"no HTTP path can claim the instance" clause of D055. `ADMIN_EMAIL` /
+`ADMIN_PASSWORD` remain supported and authoritative when supplied.
+
+- `GET /setup` renders a real form (account name, email, password, confirm)
+  while the database has no users; it redirects to `/login` once any user
+  exists. The static "not configured" page is removed.
+- `POST /setup` claims the instance by calling the existing atomic
+  `Store.CreateInitialAdmin` (a `BEGIN IMMEDIATE` empty-users check followed by
+  the account/user insert, returning `store.ErrConflict` to a second caller).
+  On success it mints a normal session and signs the new administrator in.
+- The route is registered unconditionally but self-disables: every request
+  re-checks `HasUsers` and redirects to `/login` once a user exists, so it can
+  never act as a standing claim or a backdoor.
+- Defences: the pre-auth CSRF token (`withPreAuthCSRF`, cookie `mmm_csrf`), a
+  same-origin check (`Sec-Fetch-Site` / `Origin` vs `Host`), and a per-source
+  rate limit, all in addition to the atomic store claim.
+
+**Reason:** The store already contained the race-free one-shot bootstrap
+primitive (`CreateInitialAdmin`), previously reachable only from tests. Wiring
+it to a form gives parity with the comparable product's out-of-box experience
+without inventing a new claim mechanism, and the guards above keep the original
+D055 concern (a standing unauthenticated claim on a fresh instance) contained:
+the endpoint exists for at most the first successful claim and is otherwise
+refused. Deployments that prefer deployment-time credentials are unaffected.
+
+**Consequences:**
+
+- A fresh self-hosted container can be claimed from the browser; alternatively
+  `ADMIN_EMAIL` / `ADMIN_PASSWORD` still pre-create the administrator at
+  startup, in which case `/setup` redirects straight to `/login`.
+- The wizard-created administrator is an ordinary system administrator: later
+  supplying `ADMIN_EMAIL` pointing at its email adopts and reconciles it
+  through the existing `SyncSystemAdmin` path.
+- `unconfiguredBody` is replaced by `setupBody`; the startup log now points at
+  the setup page as well as the environment variables.
+
+## D086 — Private outbound is allowed by default (amends D028)
+
+**Context:** D028 held outbound transports to public-routable destinations by
+default, with `ALLOW_PRIVATE_OUTBOUND=true` as an operator opt-out. The
+per-account Remote MX receiver (D084) added a second, tenant-controlled
+`allow_private` flag (`internal/app/account_mx.go`) that fed
+`AllowPrivateDestinations` directly into the dialer
+(`cmd/server/remotemxruntime.go`), independently of the global policy. An
+account Administrator could therefore point a receiver at loopback, RFC1918 or
+the cloud metadata address even when the operator had enabled the guard — the
+tenant-controlled bypass defeats the operator's SSRF control.
+
+**Decision:** Self-hosting is the primary deployment model, so the public-routable
+guard is **off by default**: `ALLOW_PRIVATE_OUTBOUND` defaults to `true`, and
+private gateways, local relays and LAN receivers work without configuration. The
+guard remains a single global operator switch. An operator requiring public-only traffic sets
+`ALLOW_PRIVATE_OUTBOUND=false`, which confines every outbound transport to
+public-routable destinations **and** governs the per-account Remote MX receiver:
+the `allow_private` flag is honoured only when the operator allows private
+outbound. When the operator forbids it, an account save with `allow_private` set
+is rejected/held to the public policy, and the runtime dialer passes
+`AllowPrivateDestinations: settings.AllowPrivate && !RequirePublicOutbound()`.
+No per-tenant flag can re-enable private destinations.
+
+**Reason:** The public-only default protected the operator's own network from the
+operator's own configuration while breaking legitimate self-hosted topologies;
+that is the wrong default for a self-hosted-only project (D064). Operators who
+need the guard can enable it with one variable, and the SSRF-relevant fix —
+that the operator's policy, not a tenant checkbox, decides private reachability —
+is enforced in both the save path and the dialer.
+
+**Complexity:** One default flip and one boolean conjunction; no new dependency,
+service, or storage.
+
+## D087 — Receiver cleartext and remote-MX URLs default to allow, with a warning
+
+**Context:** The pre-release review flagged two related exposures. (1) In single
+mode the Dial MX receiver admitted cleartext HTTP/2 sessions from any routable
+peer, so the bearer key and mail crossed the wire unencrypted (shared mode
+already gated cleartext to loopback/trusted proxies). (2) The installation
+Remote MX receiver URL (`validateMXReceiverURL`) accepted any `http`/`https`
+origin and the private dialer forced `AllowPrivateDestinations=true`, unlike the
+per-account Remote MX receiver, which is held to the operator's private-outbound
+policy. Both could be "fixed" by hard-blocking cleartext and private
+destinations, but self-hosting is the primary model and operators legitimately
+run a receiver on their own LAN.
+
+**Decision:** Default to allow, make the risk visible, and offer one-flag
+opt-in to strictness — never silently block a working self-hosted topology.
+
+- Single mode accepts cleartext from any peer by default. A receiver serving
+  cleartext on a non-loopback listen address logs a single startup warning
+  naming the exposure and the remedy. `DIALMX_REQUIRE_TLS=true` applies the
+  shared-mode peer gate (loopback or `DIALMX_TRUSTED_PROXIES`) to single mode;
+  loopback cleartext remains allowed so the included/embedded receiver is
+  unaffected. Shared mode is unchanged (strict unless a trusted proxy is set).
+- The installation Remote MX URL follows the same global policy as the account
+  receiver: `http`/private/LAN is accepted by default, and held to `https` plus
+  public-routable when `ALLOW_PRIVATE_OUTBOUND=false`. The runtime dialer uses
+  `AllowPrivateDestinations = !RequirePublicOutbound()` rather than an
+  unconditional `true`.
+
+**Reason:** Consistency with D086 and the self-host-first posture: the operator,
+not the code, decides whether their own network and a cleartext LAN receiver are
+acceptable. What the code must not do is make that choice silently — hence the
+startup warning — or let one surface (installation remote) diverge from another
+(account remote) for no user-visible reason.
+
+**Complexity:** One boolean config, one startup warning, one shared validation
+signature; no new dependency or service.
+
+## D088 — Release follow-up: delivery bounds, safe diagnostics and approval limits
+
+**Decision (2026-10-09):** Email-approved user sends count toward the same
+account allowance as UI/API/relay sends; installation invitation mail remains
+exempt. A rate-limited approval remains pending and is a retryable inbound
+failure. Idempotent replay of an existing enqueue does not consume allowance.
+
+Provider HTTP errors retain only numeric status and a fixed actionable
+diagnostic, never arbitrary body/reason-phrase text. SMTP and Direct MX socket
+I/O observes context cancellation after dialing, including DATA and its final
+reply. Webhook attempts have individual budgets and cancellation-independent
+outcome persistence, so a slow client cannot consume subsequent clients' budget.
+
+**Refined by D142:** Brevo's HTTP 400 attachment-extension rejection selects a
+more specific fixed diagnostic from its structured error; no provider text is
+retained.
+
+Resend rejects recipient overflow before unauthenticated lookup rather than
+acknowledging truncated delivery. Mailgun URL-encoded MIME streams to disk with
+bounded fields/occurrences. API message responses consistently sanitize HTML
+while preserving CID attachment references. Session-expiry compose state remains
+in a bounded flash through password, passkey and API-key sign-in, including
+uploaded attachments; authentication failures retain the resume path.
+
+**Compatibility:** D086/D087 self-host defaults remain intact. Included-MX
+operators must retain the explicit Compose port-25 mapping during upgrades.
+Migration 050 enforces case-insensitive receiver URL uniqueness; an installation
+with pre-existing duplicate URLs fails migration and must resolve ownership
+before upgrading, rather than silently losing one account's settings.
+
+**Complexity:** Local changes within existing Go/SQLite/HTTP boundaries; no new
+dependencies or runtime services.
+
+## D089 — Per-inbox Clients & Access tab
+
+**Decision (2026-10-09):** Inbox settings gain a **Clients & Access** tab
+(account Admin only, matching the rest of the inbox dialog) that pivots the
+account-level Clients and human users onto a single inbox. It shows the API keys
+holding an explicit role on that inbox with an inline Read/Assistant/Owner
+control, the mailbox users who can sign in to it, and its pending invitations.
+An Admin can create a new API key scoped to just this inbox (the one-time secret
+is shown once), grant an existing account key or user access, invite a new
+person, and revoke a pending invitation. Removing a key or user here removes
+only this inbox's binding (via read-modify-write of the key's or user's role
+map); it never revokes the key or the user's other mailbox roles. Account Admin
+keys have implicit Owner on every inbox and are shown read-only. Connectors keep
+their separate inbox-bound tab. A role change on an existing key is **staged**
+in the dialog and committed by the single footer **Save**, which posts every
+tab's staged edits in one request (the inbox-edit form; the delivery
+auto-actions are mirrored onto it); Add client, Add mailbox user, Invite, Remove
+and Revoke remain immediate. Inviting an address that is already an existing
+non-admin member grants that member access directly (rather than surfacing the
+invite path's email-conflict); the account administrator, an address already
+holding access on the inbox, and a duplicate pending invitation are each reported
+with a specific message.
+
+Human users remain **Owner-only** in this tab: `user_mailbox_roles` already
+accepts `read`/`assistant`/`owner`, but the UI still grants only Owner, pending a
+separate decision to expose the human role ladder. The tab is a UI extension of
+the existing `client_inbox_bindings` / `user_mailbox_roles` model; no schema
+migration is involved. In the UI, the non-admin human role is now labelled
+**mailbox user** (was "mailbox operator"), leaving the self-hoster sense of
+"operator" unambiguous; internal identifiers, routes and the `operator` invite
+kind are unchanged.
+
+**Compatibility:** Additive; existing Clients card, `/account` mailbox-user
+management and API-key endpoints are unchanged.
+
+**Complexity:** New handlers reuse `CreateAPIKey`/`UpdateAPIKey`/`SetUserRoles`/
+`CreateInvite`; no new dependencies or runtime services.
+
+## D090 — Activity-log source names the receiving receiver
+
+**Decision (2026-10-10):** The domain activity log (and the dashboard
+"Recent messages" table) label every row's origin in a single **Source** column,
+renamed from **Client**. For outbound mail the source is unchanged — the API
+key / Hermes credential that sent it. For inbound mail it now names the
+concrete receiver: `Antler: <smtp_hostname>` for a hosted Antler MX shared
+receiver (resolved from the domain's saved receiver snapshot by matching the
+session URL, never hard-coded), `Dial MX: <host>` for a custom Dial MX receiver,
+`Direct MX` for the installation receiver, `Remote MX` for an account receiver,
+and the transport's display name for a webhook provider.
+
+**Schema:** Migration 051 adds a `source` column to `inbound_delivery_log`,
+`blocked_messages` and `inbound_control_messages`; it is snapshotted at ingest
+because the live receiver session it derives from does not survive a restart.
+`outbound_delivery_log.client_label` continues to hold the outbound source.
+
+**API:** `Message`, `DeliveryAttempt` and `DomainLogEntry` rename their `client`
+JSON field to `source` (a breaking change to those response fields, approved as
+part of this work).
+
+**Implementation note:** the identity is tagged where it is already known — the
+`mxdial` session passes its receiver URL to `Backend.Ingest`, and the app layer
+composes the label. No `mxwire` protocol change and no receiver rollout is
+required.
+
+**Reason:** an operator could previously see only "mx" for all three MX families
+and had no way to tell which Antler receiver delivered a message. The receiver
+is known at receive time, so labelling it there is both cheaper and more
+accurate than reconstructing it later.
+
+**Compatibility:** Additive for stored data (existing rows default to an empty
+source); the `< 051` read paths are unchanged. Webhook inbound leaves source
+empty at the adapter and the core fills the provider display name.
+
+## D091 — Domain-scoped failure cooldown on the Dial MX receiver
+
+**Requirement:** A single failed domain proof must not deny domain registration
+for any other domain from the same core. A freshly onboarded core registers its
+domains in one burst while DNS may not have propagated; with a source-IP-scoped
+cooldown, one transient `dns_unavailable` for one domain put the whole source IP
+in a five-second block, so the core's other (valid) domains received
+`AuthResult{accepted:false, reason:"source_limit"}` — surfaced as a red
+`rejected` / `authentication_failed` row for domains whose authority was never
+in question.
+
+**Decision:** Scope the receiver's failure cooldown to `(source IP, domain)`
+instead of the source IP. `ipState` replaces the single `cooldown time.Time` with
+`domainCooldown map[string]time.Time`; `failIP` becomes `failDomain(c, domain)`
+and is called with the specific domain on each failure path; `acquireAuth` takes
+the domain and refuses only when *that* domain is within its cooldown (reason
+`domain_cooldown`), leaving the per-source concurrent and per-minute auth caps as
+the per-IP DNS bound (reason `source_limit`). A successful proof clears the
+domain's cooldown immediately. The 5 s duration, the per-IP connection/auth caps
+and the global DNS worker pool are unchanged, and a domain-keyed cooldown is not
+used (it would let one source deny a victim domain's registration for everyone).
+The core maps `domain_cooldown` to the amber transient `deferred` state rather
+than `rejected`, so a valid domain shows as "waiting to retry", not failed.
+
+**Reason:** The cooldown exists to damp a source abusing the auth path, not to
+punish unrelated domains. Per-domain scoping removes the false-red symptom while
+keeping identical protection against a source flooding a single name, and the
+per-source window/concurrent caps still bound total DNS work.
+
+**Complexity:** One receiver struct field, two method renames and an added
+return token, one core reason mapping, plus tests and docs. No new dependency,
+service, wire frame or protocol change; the mx-v2 frame set and the DNS-anchored
+proof are untouched.
+
+## D092 — Configurable outbound provider HTTP timeout
+
+**Requirement:** Sending a large batch of attachment mail, the shared client's
+hard-coded 30-second `http.Client.Timeout` aborted each send with `context
+deadline exceeded (Client.Timeout exceeded while awaiting headers)`. The bound
+covers the entire request — connect, upload of the body (Brevo base64-inflates
+attachments ~+33% into a JSON payload; Mailgun builds a multipart body), and the
+wait for response headers — so a slow uplink could not deliver a message that the
+provider would otherwise have accepted.
+
+**Decision (2026-10-10):** Make the shared outbound provider HTTP client's
+overall timeout configurable with `OUTBOUND_HTTP_TIMEOUT_SECONDS` (default `300`,
+five minutes; must be positive), applied at startup through
+`netutil.SetOutboundHTTPTimeout`. `SetRequirePublic`-style rebuild semantics drop
+the cached client when the value changes. The guarded transport additionally sets
+`ResponseHeaderTimeout` to the same budget, so a server that accepts the body then
+goes silent still fails at that point. Every HTTP adapter (Brevo, Resend,
+Mailgun) keeps using the shared client, so the value applies uniformly.
+
+**Reason:** Five minutes comfortably covers a large attachment batch on a slow
+uplink while staying finite. A longer client timeout does not weaken the
+per-message outbox budget, which bounds the whole delivery independently.
+Making the value an operator setting lets a deployment on a constrained uplink
+raise it further without a code change.
+
+**Duplicate-send risk — resolved (amended 2026-10-10):** A timeout that fires
+while awaiting response headers can follow a send the provider already accepted.
+Brevo and Mailgun expose no idempotency key, so the existing backoff retry could
+double-send in that window. The adapters now detect a client timeout
+(`netutil.IsClientTimeout`) and wrap it in `transport.AmbiguousError`; `fail` and
+`failWorkflow` treat an ambiguous error as terminal (no retry, no `next_attempt_at`)
+rather than retrying. Resend is unaffected: it carries an `Idempotency-Key` and
+keeps its retry behaviour. The conservative cost is that a timeout that occurred
+before the request was transmitted (a pure connect timeout) is also not retried;
+the operator can resend manually. This is the correct trade against a silent
+duplicate.
+
+**Complexity:** One config field and validation, one atomic in `netutil` plus a
+transport-header bound, one `AmbiguousError` type and two adapter call sites, and
+one startup wiring line. No new dependency or runtime service.
+
+## D093 — Concurrent outbox senders
+
+**Requirement:** The outbox worker delivered one message at a time, so a large
+attachment batch was sent strictly serially and a single slow send stalled every
+message behind it. With the client timeout raised (D092), a slow-but-succeeding
+send holds the single sender for longer, worsening head-of-line blocking.
+
+**Decision (2026-10-10):** Run the outbox and workflow delivery passes as a
+bounded pool of sender goroutines, sized by `OUTBOUND_CONCURRENCY` (default `5`;
+validated `1..32`). Each sender runs the existing claim→deliver loop; the store's
+claim (`ClaimNextPending`/`ClaimNextWorkflow`, which excludes already-claimed
+rows) keeps senders from claiming the same work, so no schema or claim change is
+needed. Each sender goroutine is independently panic-guarded so one fault cannot
+take down the pass. The per-attempt budget is derived from the provider HTTP
+timeout (`OutboundDeliveryAttemptTimeout` = client timeout + 30s) so the client's
+own timeout fires before the delivery context's deadline; a timeout is therefore
+reported as an ambiguous send (D092) rather than a context cancellation.
+`NewOutboxWorker` clamps the value to `maxSendConcurrency`.
+
+**Reason:** Sends happen outside any DB transaction — the claim is a short
+write-tx committed before the provider call, and only the pre-send and outcome
+writes touch the serialized writer — so additional concurrent senders do not
+contend on the writer during the network call. The binding constraint is memory:
+each in-flight send buffers its reconstructed attachments (and the encoded
+request body) in RAM, so a small default bounds peak memory while giving real
+parallelism, and the `1..32` ceiling plus per-family validation keeps a mis-set
+`OUTBOUND_CONCURRENCY` from OOMing a single-process deployment. Deeper
+concurrency needs streaming attachment encoding, which is out of scope here.
+
+**Memory refinement (2026-10-10):** Delivery previously read the entire stored
+message into memory (`os.ReadFile(rawPath)`) for every provider, but only the
+raw-MIME transports (SMTP, Direct MX) consume it: the HTTP adapters (Brevo,
+Resend, Mailgun) build their request from structured fields and ignored the
+buffer. Delivery now reads the raw message only when the provider prefers raw
+MIME and reconstructs just the attachment bytes otherwise, removing one unused
+full-size allocation per in-flight HTTP send. Streaming the attachment encoding
+itself (so the decoded attachments and the encoded body are not each buffered)
+remains a separate, larger change.
+
+**Complexity:** A `WaitGroup`-based bounded pool in `worker.go`, one config
+field with validation, a per-attempt timeout helper, and a provider-conditional
+read in `Deliver`/`DeliverWorkflow`. No new dependency, service, schema change or
+claim-protocol change.
+
+## D094 — Live web-UI updates: session SSE stream, state snapshot, and read-state events
+
+**Requirement:** The web UI only reflected changes on a manual refresh, so unread
+badges, the dashboard pending-send counts, the inbox lists and the Dial MX
+traffic lights went stale while a tab stayed open — even though the durable
+event log, the SSE stream and the in-process hub already existed for agents.
+
+**Decision (2026-10-10):** The browser UI subscribes to a session-authenticated
+SSE stream and reconciles against a small server-computed snapshot, reusing the
+existing durable events and hub rather than adding a new mechanism.
+
+- **Session stream.** `GET /ui/events/stream` shares `eventsStream` with
+  `/v1/events/stream` and is authenticated by `withSession`, so it is scoped by
+  the session principal exactly as the pages are and is cancelled by
+  `Hub.RegisterScope` on logout/rotation/rescope. `streamCursor` now honors the
+  standard `Last-Event-ID` header a reconnecting `EventSource` sends (so a
+  reconnect resumes without replaying history); a stream with no cursor and no
+  header seeds from the account's current head. A transient hub event is marked
+  explicitly by a new `Event.Transient` flag (never inferred from a zero cursor)
+  and is delivered with an `event:`/`data:` frame and **no** `id:` line, so it
+  cannot reset the client's resume position and a durable event can never be
+  mistaken for one.
+- **Read-state events.** `message.read`/`unread` changes now commit a durable
+  `message.state_changed` event (old/new) in `UpdateMessageState`, so a mark-read
+  in one tab or by an agent updates counts in another. It is a normal message
+  event and is neither relayed over Hermes nor sent to webhooks. The
+  auto-mark-read-on-delivery sweep does **not** emit it (that path is a delivery
+  side effect, not a user action needing a live count refresh; the periodic
+  snapshot covers it).
+- **Snapshot endpoint.** `GET /ui/state?page=dashboard|inbox[&inbox=]` returns
+  only what can change live — per-inbox unread/pending counts, the per-domain
+  inbound traffic light with the receiving cell's provider label, and the inbox
+  folder/label badges — computed from the existing aggregate queries and the
+  **in-memory** receiver statuses. It enforces the same Read role as the pages
+  (and 404s an unknown inbox even for an account Admin, whose `CanRead` is true
+  for any id). It is `Cache-Control: no-store`.
+  The published-MX lookup behind a dashboard light is the only costly step, so
+  the computed light is cached briefly (10s), keyed on the domain id, key id and
+  receiver hostnames, so a burst of snapshot calls does not each run a fresh
+  lookup while a key rotation or receiving change still misses the cache. The
+  setup dialog's own checks stay live and uncached (the D-check invariant).
+  *(Superseded by D095: the receiver now reports routing in its own status, so the
+  aggregate light is a pure in-memory read and this cache was removed.)*
+- **Receiver-health push.** `mxdial.Manager` gains a `SetStatusObserver` hook
+  fired only on an actual status-row or single-mode connection change; the app
+  wires it to publish a transient `mx.health_changed` hub event (never written to
+  the events table) scoped to the domain's owning account(s), so a traffic-light
+  change is pushed immediately instead of waiting for a poll.
+- **Client.** One `EventSource` per visible tab; events are coalesced with a
+  trailing debounce into a single-flight `fetch('/ui/state')`; the tab closes the
+  stream after 60s hidden and reopens (with an immediate snapshot) on focus. The
+  static, content-hashed `app.js` discovers its page from `data-page`/`data-inbox`
+  body attributes and updates badges/cells/lights in place (no re-render, no
+  dependency). Live **row insertion/removal** in the message list is out of scope
+  for this decision and remains a follow-up.
+
+**Reason:** The durable event log is already the single realtime truth, so the
+UI should consume it rather than reinvent polling. Deriving counts from the
+server on each burst (instead of incrementing client-side) stays correct under
+replayed events, bulk operations and concurrent agent activity, and keeps the
+static JS free of model knowledge. Doing the traffic-light MX check only when a
+light is actually requested (on status change) keeps the hot path DNS-free.
+
+**Resource budget:** One stream and one coalesced request per visible tab;
+nothing on pages without the markers; no per-event goroutines (the hub fan-out
+is already non-blocking); the light check reads in-memory statuses, runs its
+bounded MX lookup only when a light is requested, and reuses the short-TTL
+cache across a burst. In Phase 2 a list fragment is fetched only when the safety
+gate passes, and an unchanged list is not written to the DOM at all.
+
+**Complexity:** A shared SSE handler with `Last-Event-ID` support, one store
+method returning an event, one snapshot handler, a store domain-name lookup, an
+observer hook on `mxdial.Manager`, two body-attribute markers, and one client
+IIFE. Phase 2 adds one session-scoped fragment route, two named sub-templates
+shared by the page and the fragment, and the client-side swap gate. No new
+dependency, service or schema change; one new durable event type and one
+transient event type.
+
+**Phase 2 (2026-10-10):** live row insertion/removal for the mailbox lists and
+the draft-approval card.
+
+- `GET /ui/inboxes/{id}/live?part=list|requests&folder=..&label=..[&before=]`
+  returns one server-rendered fragment: the message-list card or the
+  send-requests card. It is session-scoped, bounded to the first page (a live
+  swap only ever touches the top of a list), rejects an unrecognised folder or a
+  requests request on a non-inbox folder, and renders through the **same** named
+  sub-templates (`live-list-card`, `live-requests-card`) the full page uses — a
+  test asserts the fragment is byte-identical to the page's section, so they
+  cannot drift.
+- The client swaps a fragment **only under a strict safety gate**: the tab is
+  visible, the window is at the top of the page, no message is checked, no
+  dialog is open and no field has focus. The gate is re-checked after the async
+  fetch. If any condition fails the list is left untouched and simply catches up
+  on the next natural load — the screen never jumps under a reader, and a swap
+  never disturbs a selection, an open form or a scrolled position.
+- An unchanged list is not replaced: a structural signature (row ids and
+  read/status classes, the pager link, the empty-state) is compared and an
+  identical tree is left in place. Sidebar/dashboard **counts still update on
+  every event** regardless of the gate, so a number on the left moves even while
+  the reader is scrolled down or composing — the intended "transparent" update.
+
+**Reason (Phase 2):** The event plumbing from Phase 1 already carries every
+relevant change; the remaining work is purely how the list is reconciled. Doing
+it conservatively — counts always, list only when the user could not notice —
+matches the stated priority that live updates are a background refresh, not a
+screen the user is watching. Reusing the page's own sub-templates (rather than a
+second renderer or a client-side template) keeps the live list and the rendered
+list from drifting.
+
+## D095 — Dial MX receiver owns MX-routing verification (gate 2), replacing the core's separate MX cross-check
+
+**Requirement:** The setup traffic lights checked published DNS MX/TXT (core side)
+*and* per-receiver authentication (receiver side) as two independent checks, then
+the dashboard light combined them. This split verdict meant a single receiver
+could be shown "ready" while the core's MX check said it was not routed, and the
+operator had two sources of truth to reconcile. The receiver is the only party
+that can authoritatively say "I am a delivery target for this domain".
+
+**Decision (2026-10-10):** A shared-mode Dial MX receiver (Antler MX and custom
+Dial MX) verifies routing itself and reports it on its own status light, so each
+receiver is one traffic light and the core no longer independently decides
+routing. The authorization proof becomes two ordered gates:
+
+- **Gate 1 — authority.** The existing `_mailmoose-mx` TXT Ed25519 proof. A
+  failure is `rejected` with the historical key reasons.
+- **Gate 2 — routing.** The receiver resolves the domain's MX records (a new
+  `Config.LookupMX`, fresh per proof, bounded by the existing DNS worker pool)
+  and requires its own `SMTP.Hostname` among them (lower-cased, trailing dot
+  trimmed — the same rule the core's check uses). Failure is `rejected` with a
+  new bounded reason `not_mx`. Gate 2 runs at every proof, initial and renewal:
+  a genuine `not_mx` at renewal revokes the binding fail-closed, and the core
+  settles on `rejected`/`not_mx` (the renewal path deliberately does not send the
+  generic `DomainRevoked` notice, which would overwrite the verdict with
+  `unavailable`). A transient MX **resolver error** is deferrable
+  (`dns_unavailable`): it never revokes a live binding, so a DNS blip cannot drop
+  a correctly-routed receiver.
+- **Scope.** Shared mode only. Single-mode Direct MX / Remote MX (bearer, no
+  per-domain `DomainAuth`) is unchanged.
+
+Consequences on the core side:
+
+- `dialMXHealth` (the dashboard aggregate light) is now purely status-driven:
+  green when any receiver row is `ready`+unexpired. The receiver's `ready` already
+  implies both gates, so the core's MX cross-check and the `lightCache` (which
+  existed only to make that per-domain MX lookup cheap on the hot snapshot path)
+  are removed. `domainInboundLight` is now an in-memory read.
+- The core-computed `dns[]` MX/TXT checks are **kept**, but only as the receiving
+  dialog's local verification feed: the remediation block shows the failing record
+  with a copy button and flips it green as DNS propagates. They are no longer a
+  second routing verdict. The standalone DNS validation rows and the "Fix DNS
+  records" wizard step are removed; the fix is inline on the status screen.
+- The receiving dialog's per-receiver table collapses from
+  `Connector | Connection status | MX status` to `Connector | Status` (one light).
+- No protocol version bump and no capability negotiation: `AuthResult.Reason` is
+  already a free string, and the Antler fleet is upgraded in place, so an old
+  receiver's `ready` cannot be mistaken for a routed one by a new core only if the
+  fleet is not mixed — the fleet is upgraded together.
+
+**Reason:** Two independent routing verdicts that can disagree are worse than one
+authoritative one; the receiver is the only party positioned to make the routing
+call. Folding it into the auth proof gives a single status per receiver and a
+single aggregate light, and turns "is the record published yet?" into a local
+propagation check for the operator rather than a competing decision.
+
+**Resource budget:** One extra DNS lookup per proof (initial + each renewal) per
+domain, sharing the receiver's existing bounded DNS worker pool; no core-side
+lookup on the snapshot hot path (a net reduction there). No new dependency,
+service, or schema change; one new reason token.
+
+**Complexity:** A `LookupMX` config field and small helper on the receiver, a
+gate-2 block in `verifyProof`, a `notify`-suppressed revoke path, a `not_mx` case
+in the core's `authReason`, a status-driven `dialMXHealth`, deletion of the light
+cache, an inline remediation block and removal of the wizard repair step, plus
+docs.
+
+## D096 — Postmark inbound connector
+
+**Requirement:** Support Postmark as a receiving provider through the existing
+inbound pipeline, without a new outbound adapter.
+
+**Decision (2026-10-10):** Postmark authenticates using HTTP Basic credentials
+generated by MailMoose per domain. It extracts the JSON `RawEmail` value
+byte-for-byte and stages it as raw MIME, retaining binary attachments.
+Postmark does not sign inbound webhooks, so the envelope sender is not attested.
+
+**Reason:** Postmark provides raw MIME. Reusing the shared ingest pipeline avoids
+building MIME from structured fields.
+
+**Consequences:** Postmark joins the accepted-risk notes for unattested
+envelope senders in `SECURITY.md`. Generated Basic credentials are shown once
+during provider setup.
+
+## D097 — Standalone mailboxes and the common mailbox service boundary
+
+**Requirement:** Support first-class standalone mailboxes with an address
+independent of any managed domain, reached through an optional remote
+IMAP/SMTP binding, alongside the existing domain mailboxes, without forking the
+mailbox/thread/event/API model. Remove the external sending-alias feature as a
+clean break.
+
+**Decision (2026-10-10):**
+
+- **Inbox kinds.** `inboxes.kind` is `domain` or `standalone`, set once at
+  creation and immutable. A domain inbox keeps the existing domain-centric
+  routing, aliases and sending model. A standalone inbox owns a self-contained
+  address (`inboxes.address`), carries no managed domain (`domain_id` is now
+  nullable), and is reached through a per-inbox remote connector.
+- **One common service boundary.** `internal/app.MailboxRouter` resolves an
+  inbox to a backend (`BackendLocal` for domain, `BackendRemote` for
+  standalone) and a declared `model.Capabilities` surface, so workflow/API code
+  branches on capability, never on a transport type. `StandaloneMailboxService`
+  is the create/list/get + folder/remote-metadata application surface.
+- **Shared public model.** `model.Folder` (custom hierarchical folders with a
+  role), `model.RemoteLocator` (UIDVALIDITY/UID, the routing address for a
+  remote message), `model.ListEnvelope[T]` (items + opaque `next_cursor` +
+  `completeness`), and `model.MailboxError` (a stable error vocabulary) are the
+  frozen contract for the subsequent local, remote and workflow waves.
+- **Remote messages hold metadata only.** `inbox_remote_messages` caches
+  header/thread metadata; bodies and attachments stay live on the remote
+  server and are never archived. Threads stay scoped to account + inbox.
+- **Encrypted credentials.** `inbox_remote_credentials` holds the encrypted
+  IMAP (and optional SMTP) secrets under `APP_ENCRYPTION_KEY`. TLS is the
+  default and a connection never downgrades to a weaker mode; there is no
+  automatic cleartext fallback. Plaintext is an explicit operator choice
+  rather than a ban: it is offered for self-hosted servers (with a UI warning
+  on the connection dialog and the connection-settings page), never
+  auto-selected, gated behind a per-connection opt-in (`AllowPlain`), and a
+  deployment policy may refuse it outright.
+- **External aliases removed.** The `external_aliases` feature (store, model,
+  service, HTTP, UI, spec) is deleted. Migration 053 drops the table and the
+  three attribution columns and discards external-alias-specific unsent drafts,
+  attachments, queued sends and jobs, refunding the account and inbox storage
+  counters; it keeps sent history and its delivery-log rows and `from_address`
+  attribution, removes orphaned threads, and preserves managed aliases and
+  ordinary mail. Raw files are retired after the transaction commits via the
+  durable `pending_file_cleanup` queue, never inside it. There is no
+  compatibility shim.
+
+**Reason:** A standalone mailbox is a mailbox like any other; only its transport
+differs. A single capability-driven boundary keeps the canonical
+mailbox/event model intact and confines provider-specific code to a remote
+adapter that a later wave adds. External sending aliases sent from addresses the
+account does not control, which complicated identity, approval and credential
+handling for a capability the standalone remote connector now covers directly.
+
+**Resource budget:** One additive migration and three small tables plus a
+durable file-cleanup queue; one process, one container, no new runtime service
+and no new dependency in this wave. The IMAP adapter (approved
+`github.com/emersion/go-imap/v2` and `github.com/emersion/go-message`) is
+deferred to the adapter wave.
+
+**Complexity:** Model types (including an explicit plaintext security mode that
+a deployment policy may refuse), one migration rebuild of `inboxes`, the router
+plus a `MailboxBackend` interface and its local/remote scaffolds, standalone
+store CRUD, a removal migration with post-commit file retirement, and the
+deletion of the external-alias surface across store/app/httpapp/apispec. See
+`docs/MAILBOX_BEHAVIOR.md` for the frozen per-type/per-method ownership
+that the next waves implement against.
+
+**Status update (implementation complete):** The adapter wave has landed and the
+remote service is no longer a scaffold. `internal/transport/imap` implements the
+IMAP4rev2 client (folders, headers, live raw/body-part fetch, flags, move,
+UID-targeted expunge, append, IDLE/poll), `RemoteMailboxService` implements the
+live read/mutation surface, a dedicated `RemoteWorker` watches each standalone
+inbox for durable arrivals, and the two authoring modes plus the notify default
+and the separate publication/notification/Sent-copy state machines are
+implemented. The standalone REST/UI (create/list/get, folder management, remote
+config, role mapping) is implemented. Migrations `054`–`058` add the shared
+folder tree, the remote index, the authoring/handoff record, the remote event
+surface and the sent-copy/role-lock columns. Account-wide listings merge the
+local store and remote inboxes into one globally ordered stream.
+
+Remote indexing is **progressive**: each pass refreshes the newest window and
+advances a persisted per-folder backfill cursor by one bounded batch, so an
+ordinary large folder reaches `complete` over successive passes — the 2000-message
+batch is a per-pass bound, not a permanent cap. The honest hard ceiling is the
+**500k-UID snapshot limit** (`remoteUIDSetCap`): a folder whose complete UID set
+exceeds it is indexed newest-window-only, prune is skipped, and it stays
+`partial`, never falsely `complete`. The scope is the server's personal namespace
+as discovered by `NAMESPACE` (`Other`/`Shared` always excluded); when `NAMESPACE`
+is unsupported the scope is deliberately conservative (the explicit root,
+default `INBOX`, and its children). See `docs/MAILBOX_BEHAVIOR.md`
+§1/§3/§5.
+
+**Status update (dead-code removal, 2026-10-13):** The `MailboxRouter` /
+`StandaloneMailboxService` / `MailboxBackend` seam described above was
+unreachable — no workflow, HTTP or UI code constructed it (only its own unit
+test did) — so it was removed with that test. The surviving declarations
+(`MailboxBackendKind` with `BackendLocal`/`BackendRemote`, `mapStoreError` and
+`ErrRemoteNotBound`; `ErrLocalOnly` was unreferenced and went with the rest)
+moved to `internal/app/mailbox_boundary.go`. The live boundary is unchanged:
+`internal/httpapp/mailbox_access.go` for dispatch and `RemoteMailboxService` for
+remote operations, with Admin-only standalone creation still enforced at both
+live entry points. `docs/MAILBOX_BEHAVIOR.md` §3 was updated to match;
+the rest of this entry stands.
+
+## D098 — BYO Google connected inboxes
+
+**Requirement:** Connect a Google mailbox through the standalone wizard, using
+an operator-owned OAuth app and the same metadata-first browsing and common
+mailbox operations as IMAP.
+
+**Decision (2026-10-11):** Use Google Web application authorization-code OAuth
+with state, PKCE S256, offline access and an exact `BASE_URL` callback. Provide a
+same-callback URL paste fallback when the browser cannot load the return page.
+Each inbox stores its client secret and tokens encrypted under account/inbox AAD.
+Gmail message and thread IDs are opaque and stable; multiple label memberships
+share one metadata record. Gmail protocol code stays in `internal/transport/gmail`.
+History cursors and progressive metadata backfill replace IMAP's UID traversal.
+Notification detection has an independent cursor. Request `gmail.modify` and
+report permanent deletion unsupported. Send via Gmail and create native drafts;
+Gmail owns its Sent copy. Microsoft is visible as a future wizard choice.
+
+**Reason:** IMAP UID locators and single-folder membership cannot faithfully
+represent Gmail labels. A small provider-specific extension behind the existing
+mailbox boundary preserves source-of-truth, permission and body-storage rules.
+
+**Complexity/resource budget:** One additive migration for encrypted Google
+bindings, one-time OAuth attempts, opaque ID/label membership mappings and
+independent detection cursors. Standard-library REST/OAuth, SQLite and the
+existing process-owned workers; no new dependency or runtime service. Background
+metadata work is coalesced and bounded. See `docs/EMAIL_PROVIDERS.md#google-gmail`.
+
+## D099 — Standalone IMAP quick sync, configurable cadence and manual refresh
+
+**Requirement:** IMAP/standalone inboxes refreshed slowly because the worker
+re-ran a full index reconcile for every inbox roughly every minute (full UID
+snapshot + newest-500 + 2000-message backfill per selectable folder). New mail
+also only appeared in the list after that reconcile, since detection wrote only
+arrival events, not the read index. Operators wanted a manual refresh control and
+control over poll cadence.
+
+**Decision (2026-10-11):**
+
+- **Quick new-mail index.** A detection pass quick-indexes the new INBOX UIDs'
+  headers into `inbox_remote_messages`, so new mail is visible immediately
+  (standard client "fetch only new").
+- **Quiescent fast-path.** Once a folder is fully backfilled, a single `STATUS`
+  read confirms the max UID and message count are unchanged and only the newest
+  window is refreshed; the full SEARCH, prune and backfill are skipped.
+- **Per-inbox cadence.** Two nullable columns (`remote_poll_seconds`,
+  `remote_full_sync_minutes`, migration 060) override the quick-poll and
+  full-reconcile intervals; NULL inherits the process default and values are
+  clamped to model minimums (15s / 1min). The worker no longer re-reconciles on
+  a fixed one-minute trigger.
+- **Manual refresh.** A square reload button on the standalone inbox toolbar,
+  shown to every user, posts `POST /ui/inboxes/{id}/sync`: quick detection/index
+  + on-screen header refresh, then redirects to the same view. It deliberately
+  does **not** schedule the deep reconcile (the concurrent rebuild is what
+  surfaced a metadata-loss bug); the deep pass runs on its own cadence. Requires
+  only Read (no remote mutation). It submits the page's **incoming** pagination
+  boundary (`pageData.CurrentPageBefore`), never the outgoing "load older"
+  cursor (`pageData.Before`), so reload preserves the exact page instead of
+  advancing to an older one.
+- **Conservative reconcile prune.** Cached remote metadata is now deleted only
+  against a complete snapshot: a `UIDVALIDITY` change no longer deletes a
+  folder's rows up front (they are pruned once a complete new-generation snapshot
+  proves them obsolete), and a reduced/empty folder discovery no longer prunes a
+  folder that still holds cached messages. This keeps metadata durable across a
+  transient reconcile.
+- **Cheaper polling.** The poll fallback uses `STATUS` instead of `EXAMINE`, and
+  the adapter tracks CONDSTORE/QRESYNC capabilities (requesting `HIGHESTMODSEQ`).
+
+**Reason:** New mail is the priority; the deep pass exists for read/flag state,
+non-INBOX folders, the folder tree and backfill, and belongs on a slow,
+configurable cadence, not every tick. Tying the quick path to the read index and
+adding a user-triggered refresh match how mainstream IMAP clients behave.
+
+**Amendment (floor, provider reporting and the provider save path):**
+
+- The quick-poll floor moved from 15s to one minute (`RemotePollSecondsMin = 60`),
+equal to the process default. The interval is operated in whole minutes, so a
+quicker poll is not expressible and an override can only slow a mailbox down; a
+sub-minute value stored before the change is clamped up on read, and polls at the
+floor. No migration is needed: the column keeps the raw value and every read path
+normalizes.
+- `GET /v1/inboxes/{id}/remote` now reports `poll_seconds` and
+`full_sync_minutes` for the Google and Microsoft branches too, not only for a
+hand-configured IMAP binding. A Microsoft delegated shared mailbox is poll-only
+(Graph has no change subscriptions for one), so an unreported cadence left that
+inbox with no visible delivery knob at all.
+- The Identity-tab save path no longer routes a provider-connected inbox through
+the live IMAP verification gate. A provider inbox's connector fields are hidden
+and disabled, so its blank form was read as a connector change; the gate then had
+no IMAP credentials to test and every Identity-tab save answered `IMAP connection
+failed: … credentials unavailable` while persisting nothing — not even the display
+name. `ConfigureStandaloneRemote` already refuses a provider inbox outright, so
+this aligns the save path with the connector path.
+
+**Complexity/resource budget:** One additive migration; model/store fields and a
+setter; a worker cadence helper and quick-index step; an adapter `Status` method
+and capability flags; one HTTP route plus a toolbar button and two settings
+fields. No new dependency or runtime service. See
+`docs/MAILBOX_BEHAVIOR.md` §5.
+
+## D100 — Microsoft connected mailboxes with public-client OAuth and delta polling
+
+**Decision (2026-10-11, human approved):** Add Microsoft Graph as the third
+standalone provider, for personal and explicitly selected delegated shared
+mailboxes. Scope is the entire selected mailbox, using existing per-inbox roles
+and remote-draft/approval/direct-send modes. Upstream messages remain authoritative;
+the local store holds the existing metadata/thread index, encrypted tokens,
+immutable provider IDs and per-folder change cursors.
+
+Quick Connect uses a deployment-configured public-client Entra app ID, supplied
+at rollout; advanced self-hosters can configure their own client ID and tenant.
+Authorization-code + PKCE uses the registered `http://localhost` redirect, pasted
+by the human into MailMoose. No secret, callback relay or token broker. Existing
+connections retain their app ID/tenant. Reconnect preserves identity/mailbox.
+
+**Amendment to Phase 2 planning:** Start with delta polling for both personal and
+shared mailboxes; personal push subscriptions are deferred. When added, use the
+existing receiver public-origin selection and shared callback registration on
+dedicated/core listeners. This supports private self-hosted instances immediately
+and reuses existing demand/proactive detection rather than requiring public HTTPS
+for every connection. Shared delegated mailboxes remain delta-polled.
+
+**Amendment (2026-10-19, bug fix):** A Microsoft message id is not a stable cache
+key. Graph serves one message under two id forms — the folder delta and a
+move/draft response disagree — and the delta's form stops resolving once the
+message moves, so keying the metadata row on the provider id grew a second row
+per message: the row the list showed could no longer be deleted (the move
+succeeded against the provider, the other row updated, and the listed row stayed
+in the Inbox), and every retry failed against the retired id. The row is now
+resolved by the message's RFC Message-ID when an unseen provider id arrives for
+a message already cached (one unambiguous match only), a move whose cached id the
+provider has retired re-resolves and retries against the live id and drops the
+dead row, and a completed reconcile folds duplicates an inbox had already
+accumulated. Immutable-ID requests remain as they were; the Message-ID is the
+identity the cache trusts.
+
+**Complexity/resource budget:** One additive migration, a standard-library Graph
+transport, provider-specific app orchestration and wizard/settings integration.
+Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency,
+service or runtime. Separate Online Archive mailboxes are outside this release.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook` for setup and real-account rollout checks.
+
+**Amendment (2026-10-11, human approved):** The wizard no longer asks for a
+mailbox type and shared address before sign-in. Two begin buttons choose
+personal or personal + shared (Microsoft fixes granted scope at the authorization
+request, so the choice must precede sign-in); a shared connection then stops
+after token exchange and offers the accessible shared mailboxes discovered by
+bounded directory enumeration plus per-candidate Inbox probes, with manual entry
+as fallback. The exchanged token is encrypted in the attempt row for the
+selection phase and is single-use. Shared connections therefore add
+`User.ReadBasic.All`. Inbox labels default from the operator's optional label,
+else the provider display name or connected address, and are editable later.
+
+**Amendment (2026-10-11, human approved):** The Google and Microsoft wizard steps
+no longer prompt for an inbox label. The label always defaults from the provider
+display name or the connected address and stays editable from the inbox'
+Identity tab. The Microsoft step presents two Microsoft-styled **Connect
+Microsoft** buttons — *Personal Inbox only* and *Personal Inbox and Shared
+Inbox* — in place of the previous pair, and both provider steps are grouped into
+bordered boxes headed by the provider logo.
+
+## D101 — Microsoft own-mailbox push with durable delta catch-up
+
+**Decision (2026-10-11, human approved):** Extend D100 with automatic Graph Inbox
+subscriptions for signed-in users' own Outlook.com/Microsoft 365 mailboxes.
+Polling alone imposes the worker's detection delay; a public HTTPS webhook can
+wake the worker promptly on an arrival while retaining delta cursors as truth.
+Shared delegated connections keep polling, because Graph requires application
+permissions for shared-mailbox subscriptions. No authentication-model expansion.
+
+Use basic notifications (no resource-data certificates), immutable IDs, and the
+existing encrypted delegated grant. The callback uses `Config.ReceiverURL()` and
+shared inbound route registration on both listeners. Match subscription ID and
+the hash of a random encrypted `clientState`, persist an inbox sync generation in
+SQLite before acknowledging, and wake process-owned work. Never log callback
+secrets or grants. Delta catch-up reuses normal deduplicated arrival/event
+delivery; baseline indexing emits no historical arrivals. Polling remains a
+fallback for unavailable webhooks and missed notifications.
+
+Renew six-day subscriptions with a day remaining; process lifecycle notifications
+for reauthorization, removal and missed changes. Persist create intent and recover
+ambiguous outcomes by listing matching subscriptions. Retain an encrypted cleanup
+grant after inbox removal/disable only until deletion succeeds or the subscription
+expires. Connection settings expose setup/active/retry status; realtime capability
+reflects active, unexpired subscriptions.
+
+**Complexity/resource budget:** One additive migration and coalesced durable work
+row per eligible inbox, narrow Graph subscription methods, one shared callback,
+and one serialized process-owned worker loop with bounded per-inbox timeouts.
+Existing Go process, SQLite and polling; no new dependency or runtime service.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook` for operator routing and provider latency constraints.
+
+## D102 — Remote metadata counts toward the storage quota
+
+**Requirement:** A standalone (remote) inbox caches header/thread/folder/label
+metadata but archives no bodies, and that metadata was not charged to storage:
+`inbox_remote_messages`, remote-owned `inbox_folders` and `inbox_remote_labels`
+grew unbounded with no cap. The quota is meant to bound what we store per inbox
+and per account, so a large remote mailbox could squat local SQLite footprint for
+free.
+
+**Decision (2026-10-11, human approved):**
+
+- **What counts.** The bytes we actually persist for remote metadata: the text
+  fields of `inbox_remote_messages` (folder path, Message-ID, In-Reply-To,
+  References, thread key, from name/address, To/CC JSON, subject, snippet, flags
+  JSON, plus a small fixed row overhead), remote-owned `inbox_folders` rows
+  (path/name/parent/role/remote metadata), and `inbox_remote_labels` rows. The
+  row's `size_bytes` **column value** is the remote server's claim about a body we
+  did not store and is deliberately **excluded**.
+- **Where it is charged.** Both the account counter (`accounts.storage_used_bytes`)
+  and the per-inbox counter (`inboxes.storage_used_bytes`), exactly like a stored
+  message. The authoritative definition is the SQL byte sum in
+  `internal/store/storage.go`; the Go mirror `storedRemoteMessageBytes` is pinned
+  to it by test.
+- **Best-effort, never blocks the reconcile.** Remote metadata is a derivative
+  cache, so a cap is not enforced with `ErrQuota`. A reconcile batch checks
+  headroom per message, admits updates to already-cached UIDs unconditionally
+  (they replace bytes), admits new UIDs only while room remains, and once the cap
+  is reached **stops indexing**: the batch returns partial, does not prune, and
+  does not advance the folder's backfill cursor, so the next pass resumes when
+  room frees up. A single-message `UpsertRemoteMessage`/`UpsertGoogleMessage`/
+  `UpsertMicrosoftMessage` returns the new sentinel `store.ErrRemoteMetadataQuota`
+  (mapped to the `quota` mailbox error) when its new row would exceed the cap.
+- **No eviction.** Existing cached rows are never removed to make room; the
+  index stays partial until usage falls via purge, reset or message deletion.
+- **Self-correcting counters.** Every remote-metadata mutation transaction reads
+  the sum before and after and applies the difference to the counters
+  (`syncRemoteMetadataStorageTx`), so the counters track the stored sum and any
+  drift is corrected on the next mutation. `recomputeInboxStorage(Tx)` (lazy-init
+  and the `InboxStorageUsed` fallback) and the `PurgeInbox`/`PurgeDomain` refunds
+  include the same remote sums.
+- **No backfill.** Existing installs accrue the charge from the next remote write;
+  counters are not recomputed at start-up (mirroring D079's lazy-init stance).
+
+**Reason:** The quota's purpose is to bound what we store. Cached remote metadata
+is stored bytes, so it should count; but it is a rebuildable cache, so exceeding
+the cap must degrade to "partial index" rather than a hard delivery/quota error
+that would break the read surface. Excluding the remote-reported `size_bytes`
+keeps the charge about our footprint, not the remote mailbox's body volume.
+
+**Complexity/resource budget:** No migration; a storage helper set (byte SQL,
+Go mirror, headroom/room check, delta apply, per-mutation sync), instrumentation
+of the existing remote write paths, sentinel mapping, one new unit-test file.
+No new dependency or runtime service. See `docs/MAILBOX_BEHAVIOR.md` §5.
+
+## D103 — Shared durable inbox action queue
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** Human mailbox actions must return promptly despite slow remote
+providers. API callers need the same capability, following send's async-default
+and `?wait=true` convention. Domain and standalone actions share one core.
+
+**Decision:** Persist message mutation jobs in SQLite (migration 064), executed
+by a dedicated process-owned, wake-driven action worker. Read/unread, labels,
+spam, trash, restore, move and purge use the common submission seam. Serialize
+per message; retry safe absolute-state changes with bounded backoff, never
+blindly repeat uncertain remote moves or purge. Keep provider locators confirmed;
+optimistic UI changes are an overlay, removed on failure. The header status flag
+opens the account-wide, mailbox-scoped queue and shows a red exclamation for
+failures, with Retry/Dismiss controls. Completed jobs expire after seven days.
+
+**Compatibility:** Message mutation endpoints now return a queued action by
+default. `?wait=true` preserves settled success responses; timeouts retain the
+durable job. Existing send/reply queues remain independent.
+
+**Complexity:** One table, store queue methods, app submission/waiter and worker,
+HTTP adapters, header queue view, and deterministic tests. No dependencies or
+additional runtime service. See `docs/API.md`.
+
+**Scheduling amendment (2026-10-12, approved by Ben):** Keep one action worker,
+but select one eligible action per inbox per turn in round-robin inbox-ID order.
+Within each inbox, select the oldest eligible action. The worker remembers its
+last claimed inbox across drains; the cursor resets on process restart while
+queued actions remain durable. Empty inboxes, delayed retries and messages
+blocked by an earlier unresolved action are skipped; other messages in the same
+inbox remain eligible. This prevents a bulk-action backlog in one inbox from
+monopolizing execution. It does not isolate other inboxes from the duration of a
+single slow action: execution remains globally serial. No schema migration,
+dependency, additional service or worker-concurrency configuration is introduced.
+
+**Failed-action recheck amendment (2026-10-12, approved by Ben):** A transient
+provider failure must not require a human to clear it. A ten-minute ticker inside
+the action worker reconsiders `failed`, non-dismissed actions and, when it is safe,
+returns them to `pending` so the same single worker retries them. The rechecker
+only schedules; it never executes an action itself, so per-inbox and per-message
+ordering are unchanged and no second executor exists. Safety is decided before
+requeueing: an absolute-state patch (read/unread, labels) is always safe to retry
+once no newer unsettled action for the same message supersedes it; any other kind
+is a provider location change and is decided from the observed location — already
+in the intended destination settles as `done`, still in the source is retried, and
+an unknown location is deferred rather than guessed. `ambiguous` rows are never
+reconsidered; they keep requiring human verification. Rechecks are unbounded (a
+retryable patch keeps being reconsidered) and per-attempt execution stays bounded
+by the existing 30-second context. No schema migration, dependency or additional
+service; two store methods and worker logic only. See `docs/API.md`.
+
+## D104 — Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** A standalone Microsoft inbox was syncing many times a minute.
+Two causes: (1) the human UI's events stream drove account-wide detection on a
+fixed 5-second tick, and every on-demand read/wait/reload could each launch a full
+Microsoft pass, so client presence set the sync rate; and (2) Microsoft detection
+ran the full mailbox reconcile (folder-tree enumeration plus a delta call per
+folder) on every pass, and the worker still polled every 60s even with an active
+push subscription — contradicting D101's "polling is a fallback" intent.
+
+**Decision:**
+
+- **Microsoft quick pass.** Detection uses a cheap pass that applies only the
+  Inbox folder's stored delta cursor and reads the folder tree from cache (no
+  Graph folder enumeration). The full reconcile (every folder, folder tree,
+  prune/backfill) remains on the inbox's full-sync cadence. This mirrors D099's
+  IMAP quick-versus-deep split.
+- **Push-aware watcher cadence.** The Microsoft/Google watcher resolves its poll
+  interval every pass and honours the per-inbox quick override. While
+  `MicrosoftPushActive`, the redundant quick poll is dropped for the full-sync
+  safety net (so a missed or expired notification is still caught); a
+  notification wakes the quick pass immediately. If push is unavailable, quick
+  polling applies. Subscription state is re-read each pass, so expiry/activation
+  takes effect on the next pass.
+- **Demand coalescing.** The public `DetectInbox` (driven by the SSE stream, the
+  events/messages/threads reads, the long-poll waits and the reload button) runs
+  at most one pass per inbox per quick interval; concurrent callers share the
+  in-flight pass via the existing per-provider guards. A manual sync
+  (`WithManualRemoteSync`) always runs. The SSE tick is a coarse 15s nudge, not a
+  sync rate; the gate governs actual passes and is provider-agnostic (Gmail and
+  IMAP included). The worker's own watcher and startup catch-up are not gated.
+
+**Reason:** New mail is the priority and push/IDLE should deliver it; the deep
+pass exists for read/flag state, non-INBOX folders, the folder tree and backfill
+and belongs on a slow, configurable cadence. Client presence should not create a
+second, faster schedule — it should share the existing one.
+
+**Complexity/resource budget:** No migration or dependency. A shared Microsoft
+per-folder delta helper and a quick pass; a push-aware interval helper and a
+re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox`
+plus one test hook; a coarse SSE tick constant. See
+`docs/MAILBOX_BEHAVIOR.md` §5 and `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
+
+## D105 — Preserve and expose remote arrival source provenance
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** Operators and event consumers need to distinguish incoming
+remote mail from local inbound transports, and Microsoft webhook-triggered
+arrivals from fallback delta polling, just as inbound deliveries expose their
+provider.
+
+**Decision:** Persist a source label with each remote arrival, because arrival
+delivery runs asynchronously and may resume after a process restart. Use
+`imap`, `gmail`, and `microsoft` for the provider/source labels of polling-based
+arrivals, and `microsoft push` for arrivals caught up from durable Graph
+notification work. Include both `provider` and `source` in remote
+`message.received` event payloads, and emit one `remote received` INFO line per
+newly emitted remote arrival. Log each authenticated Microsoft callback at INFO
+with inbox, event type and subscription ID; unmatched notifications and
+validation challenges are Debug-only. Never log `clientState` or validation
+tokens. Remote arrivals are not added to the UI activity log in this change.
+
+> **Amended** by D130: the per-callback INFO line described in the paragraph above
+> was removed. An authenticated callback is a fetch hint, not an arrival; the
+> `remote sync` line with `trigger=push` and the `remote received` line with
+> `source=microsoft push` already prove delivery, so the callback line was
+> redundant. The provenance decisions recorded here are unchanged.
+
+**Complexity:** Migration 065 adds source provenance to remote arrivals and
+pending Microsoft push work. The pending-work marker carries push provenance
+across the asynchronous queue and restarts. No new dependency or service.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
+
+## D106 — One import shows a message count and offers a bounded history window
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** A One Gmail import builds metadata progressively and spends
+roughly one provider request per message against One's **account-wide** quota
+(the free plan advertises ~1M requests/month at ~15–20 requests/min per
+account, shared by every inbox imported with the same key). Importing a large
+mailbox can therefore consume a big share of the quota with no warning at the
+point of decision. Operators need to see how large each mailbox is and be able
+to cap how much history is indexed.
+
+**Decision:** On the One import screen, surface a best-effort `messagesTotal`
+for each usable Gmail connection and a short note explaining the quota
+arithmetic. Add a per-connection **Index history** selector
+(`Everything` — default — / `Last year` / `Last 90 days` / `Last 30 days`).
+A non-default window is stored per inbox (migration 070 adds
+`inbox_gmail_sync.backfill_after`) and applied by prefixing the progressive
+backfill's Gmail `messages.list` query with `after:YYYY/MM/DD`. `Everything`
+stores an empty horizon and keeps the existing unbounded behaviour. The count
+is deliberately non-critical: a failed profile call shows `unknown`, never a
+misleading zero, and never blocks import. An unknown or missing window key
+defaults to unbounded, so a bad form value can never silently narrow a mailbox.
+Incremental history catch-up and new-mail detection are unaffected.
+
+**Complexity:** Migration 070 adds one nullable text column and one store
+getter/setter. `List` already accepts a Gmail query string, so no transport
+change is needed. No new dependency or service. See `docs/EMAIL_PROVIDERS.md#one-gmail`.
+
+## D107 — Dial MX published-record checks are one watcher-owned verdict, pushed over SSE
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** The saved Antler MX status dialog polled its setup GET every
+10 seconds with a **Check now** button and a countdown, and every poll ran the
+bounded published-record (`checkMX`/`checkTXT`) resolver lookups — even though
+the status page rendered only the receivers' self-reported `status[]`. Separately,
+a domain with a ready Antler receiver could still publish MX records pointing
+elsewhere (a leftover Google Workspace record, an auto-added backup MX, a `*`
+wildcard inherited by a subdomain) with nothing surfacing that mail might not route
+via Antler; and a domain whose TXT *and* MX were both wrong showed only the TXT
+prompt, because the receiver stops at its first failing gate and reports a single
+reason.
+
+**Decision:** (1) The status dialog is driven by the existing transient
+`mx.health_changed` SSE event and reconciles the instant a receiver's readiness
+changes; the **Check now** button and countdown are removed. (2) The
+published-record checks (the `_mailmoose-mx` TXT check and the MX routing check) are
+**one shared value owned by a background watcher**, not a per-render lookup:
+`app.ExtraMXWatcher` checks every Dial MX domain that has a receiver configured
+(ready or not) on a fixed 60-second interval, diffs the verdict against the last one
+published, and — only on change — pushes a transient `mx.dns_changed` event
+carrying the full verdict to the owning account. The checks themselves live in
+`internal/app` (moved from `httpapp`) so one implementation serves the watcher and
+the wizard. (3) The receiving response returns `dns[]` (the TXT/MX checks) and the
+top-level `unexpected_mx[]` from the watcher's cache for every read; nothing
+resolves DNS on a render. (4) The aggregate dashboard light keeps green/amber/red:
+green when at least one receiver is ready and no rogue MX records are published;
+amber when at least one receiver is ready but the domain publishes MX hostnames that
+are not Antler receivers; red otherwise. (5) The status view's fix prompts are
+driven by the **per-check DNS verdict**, not the receiver's single reason, so a
+domain with both TXT and MX wrong shows **both** prompts; each receiver row shows
+its specific Antler reason (`not in MX`, `key unavailable`, `authentication
+failed`, `receiver unreachable`, …) inline next to its light. The form embeds the
+DNS verdict, the copy-ready records and the extra-MX list so the dialog opens
+complete and updates live.
+
+**Reason:** The receiver is the single authority on its own readiness (D095); the
+core should not re-derive routing per render. Moving the checks to one background
+watcher removes resolver work from every render, lets SSE carry the live signal, and
+gives a single source of truth the dashboard light and the status dialog share. The
+extra-MX warning is deliberately amber, not red: a ready receiver still accepts
+mail, but a foreign MX record means routing is ambiguous, which the receiver's own
+verdict cannot answer (it only knows its *own* hostname is present, not that others
+are absent). Driving the fix prompts from the per-check DNS verdict is what surfaces
+both a broken TXT and a broken MX at once, which the receiver's gate-ordered single
+reason cannot.
+
+**Complexity:** No new dependency, service, table or migration. The check logic
+moves to `internal/app` (one resolver-bounded implementation); a new
+`internal/app` watcher (`ExtraMXWatcher`, reusing the store, the Dial MX manager
+status and the Antler receiver snapshot) owns the verdict and publishes
+`mx.dns_changed`; `dialMXHealth` takes the verdict; `domainInboundLight` and the
+dashboard render read it via `Service.DNSState`/`ExtraMXState` (no DNS); the
+receiving response exposes `dns[]` and `unexpected_mx`; the dialog's JS renders the
+per-check prompts and updates live on the event. See `docs/REMOTE_MX.md`.
+
+## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** An active One metadata sync showed the row state **Waiting** with
+the notice "Waiting for provider request slot" for essentially its whole duration.
+That was misleading: One paces requests at 15/minute (one every ~4s), so the sync
+is legitimately waiting on its own pacer, not stalled behind other work. The row
+also showed a bare "18 indexed" with no denominator, while the provider's own
+`messagesTotal` — a real, useful denominator — was already being fetched during
+sync but discarded. Operators read "Waiting" as a fault.
+
+**Decision:** (1) Gmail/One persist the provider profile's `messagesTotal` as the
+metadata total and the UI renders **Downloading metadata N / ~M**, marking the
+denominator as an estimate (the profile counts every label while the backfill
+indexes a folder subset). (2) The fraction is normalised so it can never read
+nonsense: the denominator is raised to meet the indexed count (110/100 becomes
+110/110), the percentage is clamped to 0-100, and a completed pass snaps the
+denominator to the indexed count so the final paint reads M/M rather than a sub-100
+plateau. A total of 0 still means unknown. (3) Provider pacing is presented as
+progress, never as a separate state: the running+pacing case no longer emits
+`state="waiting"` + "Waiting for provider request slot". Genuine retry/paused/error
+wording is unchanged. (4) The now-unused wait-status plumbing
+(`one.WithWaitStatus`, `RemoteMailboxService.metadataWaiting`, `withMetadataWait`)
+is removed rather than left as dead signal.
+
+**Reason:** A normalised estimate is more honest and more useful than a bare count
+and a scary "Waiting" label, and it needs no extra provider requests beyond the
+profile call already made. Removing the wait-status plumbing avoids a second,
+unused source of truth for the same UI.
+
+**Complexity:** No new dependency, service, table or migration. `google_mailbox.go`
+saves an existing value via the existing `SaveMetadataSyncTotal`; `metadata_sync.go`
+normalises and stops emitting the waiting state; `app.js` gains a
+`Downloading metadata` line and an estimate marker and loses one dead code path.
+See `docs/API.md`.
+
+## D109 — One native API message schema across inbox kinds and routes
+
+> **Amended by D110:** Provider naming, public UID removal, required snippet
+> fallback, and required direction classification replace the corresponding
+> original field rules below. The one-schema and metadata-only-list decisions stand.
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Domain messages were marshaled directly from `model.Message`,
+while inbox-scoped standalone routes returned `remoteMessageResponse` and
+account-wide routes used a lossy UI-model projection. The same remote message
+therefore had different fields depending on the route, and OpenAPI described
+only one of the shapes. Clients need one contract for domain mailboxes and all
+four standalone modes (IMAP, Google, Microsoft, and Gmail via One).
+
+**Decision:** All native API message responses use one explicit HTTP-layer
+projection and one OpenAPI `Message` schema. Storage/UI models remain internal.
+Inbox kind and connector provider are informational `inbox_kind` and
+`inbox_provider` metadata only; they do not select a schema or omission policy.
+Keep existing public fields, including optional UID/index/snippet/flag metadata,
+and preserve RFC identity, threading headers, and received/sent timestamps.
+
+Use a stable required core and common availability-based optionality, not an
+identical key count for every message. `to` and `cc` are arrays even when empty.
+Known false booleans remain present; unknown values remain absent. Never invent
+direction, delivery status, a spam verdict, a UID, or creation time. Indexing
+time is separate from creation time and may change during a live header refresh.
+
+Equivalent list routes produce the same metadata for the same snapshot.
+Lists/search/thread-message reads omit bodies for every inbox kind. Details
+carry plain text and sanitized HTML; remote MIME is fetched transiently and
+fetch/parse failures retain the existing unavailable (`503`) behavior. Do not
+add remote MIME fetches to list reads. Send and mutation message results also
+use the same schema. The explicit openagent.email compatibility adapters are
+unchanged.
+
+**Compatibility:** Local list/thread bodies are now detail-only. Empty unknown
+remote direction/spam fields and synthesized creation timestamps disappear.
+Existing remote metadata remains available through account-wide routes instead
+of being dropped. This is a deliberate correction to the native V1 contract.
+
+**Complexity/resource budget:** One explicit response DTO, optional read-only
+metadata carried through the existing internal read model, common response
+helpers, and deterministic HTTP/OpenAPI contract tests for all five inbox modes.
+Inbox identity lookups are bounded to once per inbox per response. No migration,
+dependency, service, or additional MIME storage/fetching on list reads.
+
+## D110 — Useful common message metadata, internal-only IMAP locators, and safe direction inference
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** D109 aligned the schema and routes, but public IMAP UIDs were
+unnecessary implementation details; previews were absent for local/IMAP mail;
+provider naming was ambiguous; and remote direction was unavailable for useful
+presentation and safe reply defaults. This is a development-time API correction,
+not a production compatibility migration.
+
+**Decision:** Remove `uid`, `uid_validity`, and handoff `remote_uid` from public
+schemas/responses and event/webhook/relay metadata. Keep transport locators
+internally and use canonical message IDs externally. Legacy stored event
+payloads are projected without these identifiers on replay.
+
+Rename the native Message's old delivery `provider` to `message_transport`.
+Use `provider` for the mailbox implementation (`mailmoose`, `imap`, `google`,
+`microsoft`, `one`) and remove `inbox_provider`. A connected mailbox always
+returns `message_transport` equal to its `provider`; local messages name their
+delivery transport, or `unknown` if unavailable. Both fields are required.
+Connector transport metadata is not an authentication/provenance assertion.
+Other provider-configuration schemas and compatibility adapters are unchanged.
+
+Make `snippet` required, always a plain-text string capped at 200 Unicode
+characters; `"-"` means no usable preview, never `null`. New local messages cache
+previews from their existing bodies at ingestion/enqueue. New ordinary IMAP
+arrivals queue one best-effort bounded background MIME-prefix read after
+control/workflow classification. The existing process-owned remote worker
+attempts at most ten per turn, with bounded byte/time budgets, using PEEK and
+never archiving the body. Header refresh preserves a generated snippet. No
+historic back-generation job or preview fetch in list/detail handlers.
+Provider-connected mail uses its supplied preview.
+
+Make `direction` required with `inbound`, `outbound`, `unknown`. Recorded
+direction wins (including our confirmed remote sends recognized through stable
+provider IDs or confirmed APPENDUID locators, not forged MIME headers). Otherwise
+drafts are unknown; native Sent labels or mapped Sent-role evidence imply
+outbound; Inbox evidence implies inbound only without stronger Sent evidence;
+Archive/arbitrary folders remain unknown. Do not infer from From addresses or
+literal folder names. One policy serves API reads, UI presentation, and reply
+sources. It does not grant authority to send or change local queue eligibility.
+
+An unknown-direction reply without explicit recipients is rejected, not guessed.
+The reply API accepts explicit `to`; UI reply/reply-all leaves recipients blank
+and explains the requirement. Known inbound replies default to the sender;
+known outbound replies default to original To recipients. Folder-path
+normalization is explicitly deferred.
+
+**Complexity/resource budget:** Additive migration 072 adds a local cached
+snippet and a pending-preview bit/index on existing remote metadata rows. Preview
+bytes participate in existing remote-metadata quota accounting. One bounded
+processor in the existing worker, one shared direction classifier, explicit API
+projection changes, and deterministic migration/MIME/protocol/HTTP tests. No new
+module dependency, service, runtime, or historical body storage.
+
+## D130 — Microsoft push callbacks are silent fetch hints
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** One Microsoft webhook delivery produced four INFO lines for a
+single message: two `microsoft push received` lines (Graph sends a `created` and
+an `updated` notification for the same item, and each accepted notification was
+logged individually), one `remote sync` line, and one `remote received` line. The
+first two carry no information an operator cannot get from the other two, and
+they obscure the arrival.
+
+**Decision:** Remove the per-callback INFO line from the Microsoft notification
+handler. An authenticated callback is a fetch hint: it persists durable work and
+wakes the push worker, and is not itself an arrival. A push-triggered delivery is
+reported by the worker's `remote sync` line (`trigger=push`) followed by the
+arrival's `remote received` line (`source="microsoft push"`), which is the same
+two-line shape a Cloudflare or Mailgun inbound delivery presents. Unmatched
+callbacks and validation challenges remain Debug-only, and `clientState` and
+validation tokens remain unlogged. This amends D105's logging decision only; its
+provenance decisions (`source` on arrivals, `provider`/`source` in
+`message.received` payloads, the pending-work marker across restarts) are
+unchanged.
+
+**Complexity/resource budget:** Deletion of one log call and one dead attribute
+computation in `internal/httpapp/microsoft_push.go`; no migration, dependency,
+service, or schema change. See `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
+
+## D111 — Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Two failure modes in the Dial MX published-record checks made
+the status surfaces say things that were not true. (1) Both `CheckMX` and
+`CheckTXT` collapsed every resolver error into `pending` ("not published yet"), so
+a timeout, SERVFAIL or refused lookup told the operator to publish a record they
+may already have published correctly — and, for MX, discarded the extra-MX hosts a
+previous pass had observed, letting a known amber warning turn green during a
+resolver outage. (2) `CheckTXT` carried its own hand-written MM1 parser that was
+not equivalent to the receiver's `mxwire.ParseDomainTXT`: it accepted a record
+with an extra field, and skipped a malformed MM1 record beside a valid one, where
+the receiver fails both closed. The status view could therefore show a green
+"matching" TXT record next to a receiver refusing the same record with "key
+unavailable", leaving the operator no fix to make.
+
+**Decision:** (1) Add an `unavailable` check state beside `ok`/`pending`/`mismatch`.
+A definitive NODATA/NXDOMAIN answer (`net.DNSError.IsNotFound`, the same test the
+receiver's `mxNotFound` applies) remains `pending`; any other error is
+`unavailable`, which claims no `found`/`matched` and renders in the wizard as
+**Unverified** with a retry notice instead of a publish prompt. On an
+`unavailable` MX check the watcher carries forward the previous `unexpected` hosts,
+so only a completed check may clear a known extra-MX warning; and
+`verdictClean` treats `unavailable` as nothing to announce, so a first-ever failed
+check does not publish an event. (2) Delete the local parser: `CheckTXT` parses
+with `mxwire.ParseDomainTXT` and compares the returned key, so the local check and
+the receiver cannot disagree about whether a published record is valid.
+
+**Reason:** "Definitely absent" and "could not be determined" call for opposite
+operator actions — publish a record versus wait and retry — so collapsing them
+costs an operator a wrong action during any resolver blip. And a second
+implementation of a security-critical validation rule is free to drift from the
+one that actually gates mail; sharing the receiver's parser removes the drift by
+construction rather than by keeping two edits in step.
+
+**Complexity:** One new state value threaded through the check views, the wizard's
+per-check rendering and the API docs; a `carriedUnexpected` read of the watcher's
+existing last-verdict map; and a net deletion of `txtMatches`/`parseMM1`. One
+imported helper (`mxwire.ParseDomainTXT`) already used by the receiver. No new
+dependency, service, table or migration. See `docs/REMOTE_MX.md`, `docs/API.md`.
+
+## D112 — Antler setup keeps its receiver snapshot, and its settings are editable in place
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Two problems with editing a saved Antler MX setup. (1) Every save
+re-resolved the live receiver manifest, so the wizard — which saves the
+configuration more than once while an operator works through its steps — could
+select a different receiver set at Finish from the one whose DNS records the
+operator had just been told to publish, contradicting the documented promise that
+an existing setup keeps the receivers its MX records already point at. (2) The
+saved status view could edit the contact email but not the authentication
+enforcement policy, and offered no non-destructive route to either once the setup
+wizard had been left.
+
+**Decision:** (1) `fillAntlerReceivingConfig` reuses a valid stored receiver
+snapshot and only resolves the live manifest when there is none (a new setup, a
+legacy config, or a corrupt snapshot). A re-save therefore keeps the domain's
+receiver set; changing it is an explicit new setup, not a side effect of saving.
+(2) `UpdateAntlerSettings` (replacing the contact-email-only update) applies the
+contact email and the enforcement policy together, preserving the receiver
+snapshot, setup identity and domain credential; enforcement values come from
+`mxdial.ValidEnforcement`, so the settings path and the config schema share one
+list. The status view renders a **Settings** section below its status records with
+both fields and a single "Save settings" action, and a subdomain that inherits its
+configuration shows them read-only, naming the ancestor to edit.
+
+**Reason:** A receiver set is what a domain's published MX records already point
+at; changing it silently while an operator is copying DNS records is the worst
+possible moment for it to move. Making the settings editable in place removes the
+need to re-enter the setup wizard to change an enforcement policy, and the
+read-only inherited view prevents a child domain from forking onto its own config
+(a change it cannot see) when the operator meant to edit the parent.
+
+**Complexity:** One store read already performed on save (the existing config) is
+reused instead of a manifest fetch; the settings update and its handler replace the
+contact-email-only equivalents with no new table or migration; one `Settings`
+section in the dialog's markup and a small field-placement helper. No new
+dependency or service. See `docs/REMOTE_MX.md`, `docs/API.md`.
+
+## D069 — DKIM signing on the Direct MX outbound path
+
+**Decision:** MailMoose signs outbound messages with DKIM on the Direct MX
+sending path, and only there. `internal/dkimsign` wraps
+`github.com/emersion/go-msgauth/dkim` (already approved under `D031`) and applies
+`relaxed/relaxed` canonicalisation, SHA-256, and an explicit header list that
+always includes `From`. The signature carries no expiry (`x=`) tag.
+
+Signing happens at **queue time**, in `SendMessage`, after the raw MIME is built
+and before the message-size and storage-quota checks, so the signature is part of
+the frozen `RawPath` artifact. The provider adapter therefore transmits an
+already-signed message, and a retry after a lost success response re-sends the
+identical bytes rather than stacking a second signature.
+
+The configuration is a single on/off choice on the Direct MX sending tab:
+
+- `dkim_enabled` — `off` (default) or `on`;
+- `dkim_private_key` — secret, always generated, never offered as an input;
+- `dkim_selector` / `dkim_domain` / `dkim_public_key` — derived and stored, but
+  not operator-editable.
+
+**MailMoose generates the RSA-2048 keypair.** There is no bring-your-own-key path:
+the selector is a fixed label and the signing domain is the domain mail is sent
+from, so enabling signing is the whole configuration. Turning signing off deletes
+the stored key material.
+
+The public key is never accepted from a caller and is never stored as an
+independent value: it is derived from the stored private key, so a displayed
+public key can never disagree with what MailMoose signs with, and the private key
+never appears in a config response. A key posted to the hidden field is discarded
+rather than used: the only trusted source is the stored key.
+
+The record to publish is shown **inline in the sending editor**, in the same
+record-table style as the Antler MX setup screen, and appears as soon as signing
+is switched on. The private key is available on demand behind a "Show private
+key" disclosure whose reveal is a CSRF-protected POST carrying a one-time,
+single-use flash; it is never rendered on the page.
+
+**Reason:** Direct MX has no upstream provider to sign on the domain's behalf, so
+without this every Direct MX operator had to arrange signing out of band —
+`D057` recorded signing as a deliberate future extension and `docs/EMAIL_PROVIDERS.md`
+told operators to "arrange DKIM signing separately". DMARC alignment for a domain
+that publishes `p=quarantine` or `p=reject` is effectively unachievable without an
+aligned signature, so the gap made Direct MX unusable for many domains.
+
+This deliberately departs from `D057`'s stated rationale, which assigned key
+arrangement to the operator: **MailMoose generates the keypair and owns the record
+name.** A self-hosted operator should not need `openssl` and a hand-assembled DNS
+record to send aligned mail, and a bring-your-own-key path plus operator-chosen
+selector and signing domain turned one decision into five. `D057`'s other
+operational requirements (port 25 egress, forward/reverse DNS for the HELO
+identity, SPF, DMARC alignment, IP reputation) are unchanged and remain the
+operator's responsibility.
+
+**Consequences:**
+
+- Only `mx` is signed. Every other provider either signs with its own key or
+  submits through its own authenticated infrastructure, so signing there would
+  double-sign or contradict the provider's own authentication.
+- DKIM DNS validation and a published-record indicator are **not** part of this
+  change and remain future work. (Implemented later as `D113`.)
+- ed25519 keys are not accepted. The signing library supports them, but a uniform
+  RSA key type is simpler and is understood by every verifier in the field.
+- Per-recipient durable delivery state, the other half of `D057`'s deferred item,
+  remains unimplemented.
+- Signing happens at queue time, so a message already queued when signing is
+  enabled is delivered unsigned. This is deliberate: rewriting a stored message
+  that a worker may already be delivering would break the byte-identical retry
+  property that delivery depends on.
+
+**Complexity:** One new leaf package (`internal/dkimsign`), one schema field on an
+existing provider, one hook in `SendMessage`, and one provider-specific step in
+`SaveDomainSendingConfig`. No new dependency, no new table, no migration, and no
+new service: the key rides in the existing encrypted per-domain sending config
+blob under `APP_ENCRYPTION_KEY`. See `docs/EMAIL_PROVIDERS.md`, `CHANGELOG.md`.
+
+## D113 — DKIM published-record indicator on the Direct MX sending side
+
+**Decision:** A Direct MX domain that signs outbound mail (`dkim_enabled=on`,
+`D069`) gets a published-record indicator for its DKIM TXT record
+(`<selector>._domainkey.<domain>`): a traffic light in the dashboard Domains
+table's **Sending** column, and the same `dns-light` dot next to the record in
+the sending dialog's DNS-record panel. The panel header reads **DNS record**
+with the light and its worded state (green → "DNS valid", red → "DNS invalid",
+grey → "DNS not present") immediately to the right of the title, so the verdict
+is read rather than decoded from a colour. When signing is off there is no light
+anywhere, no check, and no resolver lookup.
+
+The check is owned by the same shared watcher that already owns the receiving
+published-record verdict (`DNSWatcher`, previously `ExtraMXWatcher`; `D107`). The
+watcher now tracks the **union** of two domain sets — Dial MX receiving domains
+(TXT + MX checks) and Direct MX sending domains (the DKIM check) — so a domain in
+both is checked once, and its verdict (`DNSVerdict.DKIM`) rides the same cached,
+demand-refreshed, `mx.dns_changed`-publishing path. No render runs a resolver
+lookup.
+
+The states map onto the existing `dns-light` vocabulary with one addition:
+
+- **green** (`ok`) — a record is published and its `p=` value equals the key
+  MailMoose signs with;
+- **red** (`danger`) — a record is published but the key differs (a stale record
+  from a rotated key, or another operator's record on the same name);
+- **grey** (`grey`, new token) — not yet published, or the lookup could not be
+  completed. Both read as "not confirmed" rather than a settled bad verdict.
+
+The check runs **only** for a Direct MX sending domain whose configuration has
+signing on. The signing key itself lives on the domain row (generated when the
+domain is created, backfilled at startup) and is independent of the enabled flag;
+the enabled flag on the domain's Direct MX sending configuration is what decides
+whether a check runs. A domain with signing off therefore costs no lookup and
+renders no light.
+
+`internal/dkimsign` gains `ParseTXTRecordValue`, which extracts `p=` from
+published TXT strings tolerating tag reordering and inserted whitespace. It is
+the read side of the same value `TXTRecordValue` writes, so a record the local
+check calls green is one a verifier accepts.
+
+**Reason:** `D069` shipped DKIM signing but explicitly deferred "DKIM DNS
+validation and a published-record indicator". Without it an operator who enabled
+signing had no way to see whether the record they were told to publish had
+propagated, whether it matched the key MailMoose actually signs with, or whether
+a key rotation had left a stale record behind — the exact failure modes the
+signing feature's value depends on. The receiving side already answers the
+equivalent question ("will mail arrive?") with a watcher-owned traffic light, so
+the sending side is the obvious and symmetric gap to close.
+
+**Consequences:**
+
+- The DNS watcher is renamed from `ExtraMXWatcher` to `DNSWatcher` (field
+  `Service.DNS`), reflecting that it now owns both receiving and sending
+  published-record verdicts. Comments and identifiers are neutral, not
+  Dial-MX-specific.
+- A new `grey` `dns-light` token is introduced. The base `.dns-light` background
+  is already grey, so `grey` is an explicit alias for a state that is neither a
+  settled pass nor a settled failure.
+- The sending dialog polls the record light while open
+  (`GET /ui/domains/{id}/sending/dkim/status`), mirroring the Antler status poll,
+  so an operator watching DNS propagate sees the dot turn green without
+  reopening. The endpoint reads the watcher's cached verdict and asks for a
+  stale-triggered re-check, so a poll never blocks on a lookup.
+- Only Direct MX is affected; every other outbound provider signs with its own
+  key, so it has no MailMoose-published record to check.
+
+**Complexity:** One new `CheckDKIM` in `internal/app`, one parser in
+`internal/dkimsign`, one store query (`ListDirectMXSendingDomains`), a union in
+the watcher's domain pass, one dashboard column light, one dialog dot plus a
+small poll endpoint. No new dependency, table, or migration.
+
+## D114 — Review remediation: partial fan-out acknowledgement, account-settings scope, and config honesty
+
+**Context:** An external review of this codebase confirmed four issues and
+flagged three hygiene items. The confirmed issues were a fan-out acknowledgement
+bug that could lose mail, an authorization boundary that let a mailbox-scoped
+credential change account-wide state, a relay setting that claimed authentication
+it did not perform, and a default Compose file that published optional ports.
+
+**Decision:**
+
+- **Partial fan-out is never acknowledged as success.** `ingestStaged` (the
+  shared webhook fan-out core) previously returned success once *any* recipient
+  was persisted, so a provider event addressing several inboxes and failing one
+  (quota, storage or database fault) still answered `200`; the provider then
+  never retried and the failed inbox lost its copy. It now records a retryable
+  per-target failure and, when at least one inbox was stored, returns a wrapped
+  `app.ErrPartialIngest`. The HTTP ingest layer maps it to a retryable `500` with
+  `Retry-After` instead of `200`. Retry is safe because each recipient's copy
+  deduplicates on `(account_id, provider, envelope_recipient,
+  provider_delivery_id)`: the already-stored inboxes dedupe and only the missing
+  one is delivered. A *terminal* per-target outcome (unknown/unauthorized
+  recipient, malformed content) is not treated as retryable, so it cannot cause
+  an infinite provider retry loop, and a single-recipient message whose only
+  delivery failed is returned as that error unchanged. This mirrors the
+  MX/Dial-MX path, which already returns one result per recipient (`D067`).
+- **Account-wide settings require an account Admin.** `Principal.OwnsAccount()`
+  was true for any credential holding Owner on every mailbox it could *reach*,
+  so an API key scoped to one inbox could change the account-wide
+  `trash_retention_days` (and account timezone) that the maintenance sweep
+  applies to every inbox, including those the key cannot see. A new
+  `Principal.CanAdministerAccount()` (true only for an account Admin) gates the
+  API and UI account-settings routes; `OwnsAccount()` is retained but documented
+  as non-authorizing. Mailbox owners keep the per-inbox retention override,
+  their legitimate mailbox-scoped control.
+- **The relay caller setting is documented honestly.**
+  `RELAY_REQUIRE_CALLER_AUTH` / `RelayRequireBearer` only checks that an
+  `Authorization: Bearer ` header is *present*; the value is not validated. It is
+  a minimal deterrent, not a second authentication factor; the one-time
+  enrolment token remains the sole authority. Code comments and `.env.example`
+  now say so. The env var name is unchanged (a rename is a breaking config
+  change for a setting whose meaning is now documented).
+- **Default Compose publishes only the app port.** The optional dedicated
+  webhook listener (`8082`) and direct SMTP (`25`) mappings are commented out in
+  `docker-compose.yml`, matching `docker-compose.advanced.yml`; the README and
+  the Compose comment note that `8081` should be exposed publicly only behind an
+  HTTPS reverse proxy.
+
+**Accepted / unchanged:**
+
+- `ALLOW_PRIVATE_OUTBOUND` keeps its `true` default. It is a deliberate
+  self-hosting affordance (private SMTP relays, LAN integrations, private MX
+  receivers); a hosted or untrusted multi-account operator sets it to `false`,
+  which then also governs the per-account Remote MX receiver. The default is not
+  changed without a named product decision.
+- `cmd/oneprobe` is developer-only and not built into either runtime image.
+
+**Hygiene:** the committed `.hermes-tmp/mmtest/` scratch harness (real mailbox
+addresses, inbox identifiers and message ids) is untracked and added to
+`.gitignore`/`.dockerignore`. Its presence in Git history remains; no API
+credential was found in the tracked files, and history rewriting is a separate
+decision.
+
+**Complexity:** One sentinel error plus a retryable-classification helper in
+`internal/app`, one branch in the ingest HTTP handler, one predicate on
+`Principal` and its two call sites, comment/doc/Compose edits. No new
+dependency, table or migration.
+
+## D129 — Terminal outbound failures are surfaced as a local delivery-failure notice
+
+**Requirement:** A direct-MX send that fails terminally (for example a Microsoft
+`550 5.7.1 ... blocked using Spamhaus`) was recorded only as a failed row in the
+outbox queue, an `outbound_delivery_log` entry, and (draft sends only) a
+`draft.send_failed` event. Nothing landed in the mailbox and no event was emitted
+for a plain send, so the failure was invisible unless someone opened the outbox
+and read a log. In email tradition a delivery failure comes back to the sender's
+mailbox as a bounce, which is visible without a dashboard.
+
+**Decision (2026-10-13, human approved):**
+
+- **Terminal failures only.** On a terminal outbound failure — a permanent
+  provider error, an ambiguous send, or an exhausted retry budget
+  (`MarkFailed`/`MarkWorkflowFailed` with `maxAttempts` reached) — MailMoose
+  writes a delivery-failure notice. A retryable failure that is rescheduled is
+  untouched: no notice, no event, message stays queued.
+- **The notice is a real inbound message, generated locally.** It is written
+  straight into the store as `direction='inbound'`, from
+  `MAILER-DAEMON@<sending domain>` (non-routable `mailer-daemon.invalid` when the
+  message has no managed domain), to the failed message's sender, subject
+  `Undeliverable: <original subject>`. The body is a human summary plus a
+  diagnostic block (recipient, provider path, error, original message id,
+  attempts). It appears in the inbox, in search and in retention like any other
+  mail, so a human and an agent reading the mailbox both see it. It is **never**
+  enqueued for delivery and never sent over any transport, so no daemon-to-daemon
+  loop is possible.
+- **The failed original leaves the outbox.** It is trashed in the same
+  transaction, so it no longer sits in the outbox queue (which lists only
+  pending/failed rows). It stays recoverable in Trash, and `RequeueFailed`
+  restores it (`deleted_at=NULL`) as well as resetting it to pending, so a manual
+  retry still works.
+- **Quota cannot reject a terminal failure notice (2026-10-20 hardening).** Its
+  bytes increment both account and inbox storage counters even if either quota
+  is exhausted. This narrow exception preserves the failed outcome, clears the
+  pre-send marker and makes the notice visible in the same transaction. Ordinary
+  message writes still enforce quota; queued failures can temporarily push usage
+  above the cap.
+- **Exactly one notice per failure episode.** `writeDeliveryFailureTx` is a no-op
+  when the original is already trashed, so a re-marked terminal failure cannot
+  spam the mailbox. The notice arrival emits `message.received` and the clearing
+  emits `message.trashed`, both durable and both visible to SSE, webhooks, Relay
+  and the event history.
+- **Scope is user sends, not internal notification mail.** The workflow path
+  carries only approval-request and handoff-notification mail, which already has
+  its own surfacing (`notification_status='failed'`, `draft.notification_failed`)
+  and no originating user message; it is deliberately unchanged. The notice path
+  is `internal/store/outbound.go` `MarkFailed`.
+
+**Reason:** The outbox is a work queue, not a notification surface; a terminal
+failure parked there is easy to miss and produces no agent-visible signal. A
+locally generated MAILER-DAEMON message is the email-native way to make a
+delivery failure obvious, and keeps provenance honest (the notice is from the
+mailer daemon, the failed original remains a separate outbound message).
+
+**Known limitation (unchanged):** terminal classification is unchanged. An
+IP-blocklist `550` (e.g. Spamhaus) is treated as permanent and now produces a
+notice even though the block may later clear; changing that classification is a
+separate decision.
+
+**Complexity/resource budget:** One new file (`internal/store/delivery_failure.go`)
+with a shared notice writer and body renderer; two call sites in `MarkFailed`
+and a `deleted_at=NULL` addition to `RequeueFailed`. No new dependency, table or
+migration.
+
+## D115 — Domain-wide sending: a per-key grant anchored on the catch-all inbox
+
+**Requirement:** A client key sometimes needs to send from an address that does
+not exist as an inbox or alias on the domain — a role address such as
+`billing@example.com`, or an address an agent invents per conversation. Today
+`resolveSendingTargetQuery` (`internal/store/sending.go`) permits only the inbox
+primary or one of the inbox's managed aliases, so every such address needs a
+hand-made alias first.
+
+**Decision (2026-10-13, human approved):**
+
+- **The grant is per key, not per domain.** It is a flag on the key's existing
+  binding row: `client_inbox_bindings.send_any_in_domain` (migration 074). There
+  is no new table and no key→domain row; the domain is reached through the inbox,
+  as it already is for every other key authority. A key holding the grant may put
+  **any local part** on the grant's domain in `From`, including one that is
+  already a real inbox or alias.
+- **The grant is anchored on the domain's catch-all inbox, and is live only
+  while that inbox is the domain's enabled catch-all.** The catch-all is not
+  merely a place to hang the flag: it is what makes an arbitrary address
+  **replyable**. A domain with no catch-all cannot use the feature; a cleared,
+  moved or disabled catch-all makes the flag dormant without deleting it, and
+  pointing the catch-all back restores it. The condition is evaluated at send
+  time, never stored.
+- **Domain-wide sending and owner are one state.** Setting the grant forces the
+  binding's role to owner, and lowering the role below owner drops the grant —
+  so removing Owner removes Domain send. Clearing the grant on its own leaves the
+  role at owner, because the system never lowers a role on its own; only an
+  operator demotes a key, by hand.
+- **Account Admin keys get the capability for free** (implicit Owner everywhere);
+  the flag is meaningful only for non-admin keys. A session, system mail and the
+  principal-free approval path hold no key, so they keep the exact primary/alias
+  rule.
+- **The grant is checked at send, against the sending principal's key.** There is
+  no frozen-key column and no separate resolution-time freeze: the address is
+  frozen into the draft/message as before (D032), but the permission is
+  re-evaluated when the message is enqueued. Revoking the grant, or clearing or
+  disabling the catch-all, therefore stops a queued or already-approved wildcard
+  send. The outbox retry reuses the stored address and does not re-resolve, so a
+  message that is already durably queued still delivers.
+- **The wholesale binding rewrite preserves the grant.** `UpdateAPIKey` deletes
+  and re-inserts every binding row, so a role-only save carries each existing
+  grant through unless the caller supplied the grant set; a staged change to one
+  inbox never drops another inbox's grant.
+- **Provider, DKIM, SPF and DMARC are unmodified.** We sign the domain, so the
+  local part is free and the wildcard `From` authenticates on the domain's own
+  SPF/DKIM/DMARC records. Providers that constrain the sending identity (Google,
+  Microsoft) may rewrite or reject an address the account does not own; that is
+  accepted rather than gated per provider. The residual risk is reputation, not
+  authentication, and the reply path is guaranteed by the catch-all condition.
+- **UI.** The Clients & Access panel of a domain's catch-all inbox gains a
+  **Domain send** control, rendered as a segmented button matching the role
+  ladder beside it, placed at the **left of the row** (with an equal-width spacer
+  on rows that lack it, so names and ladders stay aligned). It is shown only on
+  an enabled catch-all. Turning it on pins the ladder to Owner and disables the
+  lower rungs, since the grant and owner are one state; turning it off frees the
+  ladder at owner. It stages and commits with the same footer Save as the role
+  ladder. The Clients tab's key dialog carries the same control in its Inbox ×
+  Role matrix, on the **domain's catch-all inbox row** — not on the domain header
+  row, whose "Set all" segment already means "apply to every inbox below" — with
+  the same pinning behaviour and the same single save. A catch-all inbox carries
+  a small catch-all marker (tooltip "Catch-all inbox") to the **right of its
+  address** wherever inboxes are listed, so the extra control's presence on that
+  one row is legible. `create-key` gains an optional `domain_send` list for API
+  parity, and the capability is discoverable by an agent: `GET /v1/bootstrap`
+  reports `send_any_in_domain` (with `send_any_domain` naming the domain) per
+  inbox, live grants only, the `/v1` capabilities list gains `send-any-in-domain`,
+  and the `/agent` guide documents the widened `sender` rule.
+
+**Reason:** The motivating case is an agent that must correspond as a role
+address without an operator pre-creating each one. Anchoring on the catch-all —
+rather than on a bare domain flag — makes the capability impossible to enable on
+a domain that cannot receive replies, which is the deliverability guarantee that
+makes a wildcard `From` honest. Keeping the grant per key (a flag on the existing
+binding row) avoids both a new table and the "every owner inherits it" widening
+that a domain-level flag would cause.
+
+**Complexity:** One migration (`client_inbox_bindings.send_any_in_domain`), one
+new store module (`internal/store/domain_send.go`), a `keyID` parameter through
+`resolveSendingTargetQuery`/`ResolveSendingTarget`/`resolveSenderQuery` and its
+callers, a `SenderKeyID` field on `SendInput`, a `DomainSend` map on
+`model.APIKey`, and the Clients & Access control. No new dependency, transport or
+runtime service.
+
+**Deliberately not done:** a domain with no catch-all cannot use this (by
+design); Google/Microsoft unowned-address behaviour is not gated; and a wildcard
+address cannot be approved from the web UI or sent by system mail, because those
+paths hold no key.
+
+## D116 — Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness
+
+**Flash follow-up (2026-10-13):** the initial cookie-presence check below did not
+prove authentication: `mmm_session=x` bypassed it. Draft preservation now resolves
+a real unrevoked session that expired no more than 15 minutes ago, before parsing
+the body, and requires the record's CSRF token. Expired records remain available
+for that recovery window only; normal session authorization still rejects them.
+Revocation deletes the record and therefore prevents recovery. Recovery is not an
+authorization mechanism for other application actions.
+
+All flash entries now bind to the user (account plus user ID), API client, or a
+signed pre-auth browser cookie for anonymous auth notices. `peek`, `take`, and
+attachment reuse enforce the binding; an unauthorized `take` does not consume
+the owner's entry. Login carries an opaque draft token without reading its
+contents, and the new authenticated request must match the original owner.
+Non-consuming draft reads remain necessary for render then resubmit; successful
+submission consumes them. Owner quotas are eight entries and 2 MiB; global
+ceilings remain 64 entries and 8 MiB. Admission rejects capacity overflow rather
+than evicting another owner's entry. The recovery multipart temporary files are
+removed after parsing. No new dependencies, services, or schema changes.
+
+**Admission follow-up (2026-10-13):** all Argon2 hashing and verification paths
+now use bounded admission, with a five-second default even when a caller passes
+a nonpositive timeout. The ordinary boolean password verifier fails closed when
+busy; hashing and context-aware verification return `ErrArgonBusy`. The
+four-slot KDF memory ceiling is unchanged. A deterministic saturation test runs
+in the smoke tier and CI. The login limiter's 65,536-key fail-closed ceiling is
+covered directly, alongside the existing account-throttle HTTP tests.
+
+Inbound shared-pool admission now returns retryable `429` immediately instead
+of queueing unauthenticated requests (read timeouts do not bound a wait that
+does not read). A source may hold at most one slot in a two-slot pool. Per-IP
+and shared slots are released on rejection, cancellation, and completion.
+Body-carried signatures still require a bounded body read before verification;
+distributed saturation is mitigated, not eliminated.
+
+**Context:** A follow-up external review (findings 3–9; 1–2 handled elsewhere)
+confirmed two issues against a live instance and flagged five hardening items.
+The two live-confirmed issues were an open redirect through the post-login `next`
+path and an unauthenticated compose body being parsed and cached in the shared
+flash store. The hardening items were the `Secure` cookie gate behind a
+TLS-terminating proxy, the CSRF token travelling in form-action URLs, a
+per-IP-only login throttle, a blocking Argon2 admission gate, the inbound
+semaphore being taken before the provider signature is verified, and passkey
+sign-in being offered on an origin where the browser refuses WebAuthn.
+
+**Decision:**
+
+- **`safeNextPath` rejects control characters and non-path forms (finding 3).**
+  Browsers strip ASCII tab and newline from a URL, so `/<TAB>/evil.com` resolved
+  to the off-site `//evil.com` despite the existing `//` and backslash guards.
+  The helper now also fails closed on any rune `< 0x20` or `0x7f`, and parses the
+  value with `url.Parse` requiring an empty scheme, host and opaque part and a
+  root-relative, non-`//` path.
+- **`Secure` follows the canonical `BASE_URL` (finding 4).** `cookieSecure` now
+  returns true whenever `BaseURL` is `https://`, instead of also requiring a
+  direct TLS connection or a trusted proxy's `X-Forwarded-Proto`. The README
+  quickstart sets `BASE_URL=https://…` with no `TRUSTED_PROXIES`, so the common
+  TLS-terminating-proxy deployment previously received non-`Secure` session and
+  CSRF cookies. This amends the per-request gate described in `D053`; the proxy
+  trust rules for client identity and the `FORCE_HTTPS` redirect are unchanged.
+  The trade-off is that a `BASE_URL=https` instance browsed directly over plain
+  HTTP now gets `Secure` cookies the browser will not send back; such an instance
+  is already misconfigured and `FORCE_HTTPS` exists for it.
+- **CSRF reads the multipart field, not the URL (finding 5).** `withCSRF` now
+  falls back to a bounded `ParseMultipartForm(4<<20)` (with `RemoveAll`) so the
+  hidden `_csrf` field in a compose/reply/forward form is honoured; previously
+  only `ParseForm` ran, which does not read `multipart/form-data`, so the token
+  had to be appended to the action URL by `actionWithCSRF`. That put a live
+  per-session token into proxy and access logs. `actionWithCSRF` now returns the
+  bare path and the token travels in the hidden field or the `X-CSRF-Token`
+  header.
+- **The flash store is not writable anonymously (finding 6).** `preserveComposeOnExpiry`
+  now returns early when the request carried no `mmm_session` cookie at all, so
+  an unauthenticated POST cannot make the server parse its multipart body or pin
+  flash memory. The store's byte ceiling also drops from 64 MiB to 8 MiB
+  (`flashStoreMaxBytes`), limiting both how much one caller can pin and how much
+  a legitimate user's invite-link/API-secret flashes can be evicted. Compose
+  flashes remain `peek`-readable (not `take`) so the render and a resubmit both
+  work; that behaviour is unchanged.
+- **Login throttling is per-account as well as per-IP (finding 7).** A second
+  `limiter` keyed on the normalized account email bounds attempts at one account
+  regardless of source address, and is reset on a successful login. IP limiter
+  keys are normalized with `rateLimitKey`, which masks IPv6 to `/64` so a client
+  rotating within its prefix cannot burn distinct `limiter` entries and drive the
+  map to its fail-closed cap.
+- **Unauthenticated password login sheds load instead of blocking (finding 8).**
+  `auth.CheckPasswordContext` and `store.AuthenticateUserWithin` acquire the
+  Argon2 admission slot with a timeout (`argonAdmissionTimeout`, 5 s) and return
+  `auth.ErrArgonBusy` when the four slots stay saturated; `loginPost` maps it to
+  a retryable `503`. Registration, password-change and reset paths keep the
+  blocking acquire, preserving the process-wide memory bound described in `D014`.
+- **Inbound slots are capped per source (finding 9).** `ingestProvider` takes a
+  per-IP concurrent slot (`inboundPerIP`, a quarter of the inbound pool, at least
+  2) before the shared `inboundSem`, returning `429` when one address holds its
+  cap. The signature-before-body ordering is unchanged — Mailgun's signature is
+  in the form body, so the body must still be read before it can be verified —
+  but one source can no longer hold every slot and starve real deliveries.
+- **Passkeys require a browser secure context.** `Config.SecureContext()` reports
+  whether the canonical origin is an https origin or a loopback host
+  (`localhost`, `127.0.0.1`, `::1`), the two cases browsers treat as secure. The
+  WebAuthn service is built only when that holds, so a plain-HTTP deployment
+  reached by IP or hostname no longer renders the passkey sign-in button; its
+  account page shows a short explanation in place of the passkey controls
+  instead of offering a ceremony the browser would refuse to run.
+
+**Reason:** Each live-confirmed issue was directly exploitable (an off-site
+redirect after login; unauthenticated memory pinning and eviction of one-time
+secrets). The hardening items all concern an unauthenticated caller's ability to
+consume a shared, process-wide resource: cookie integrity, log-exposed secrets,
+the rate-limit map, the Argon2 slots and the inbound semaphore.
+
+**Complexity:** Local changes only — `internal/httpapp` (redirect, cookie,
+CSRF, flash, limiter, inbound) and `internal/auth` plus `internal/store` (the
+timeout-aware password check). One new constant pair (`flashStoreMaxBytes`,
+`argonAdmissionTimeout`), one helper (`rateLimitKey`), one `limiter.Reset`
+method, and one test file (`tests/unit/httpapp/security_fixes_test.go`). No new
+dependency, schema, transport or runtime service.
+
+**Deliberately not done (at the time):** compose flashes stay `peek`-readable
+rather than session-bound; the legacy PBKDF2 path was left outside the Argon2
+timeout (it is not gated by the Argon2 slots — that path is now removed, see the
+status note at the end of this section); and the Mailgun/Cloudflare unattested
+envelope sender accepted risk (`D058`) is untouched.
+
+## D117 — Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF
+
+**Context:** A follow-up external review surfaced low-severity and edge-case
+findings. None are exploitable without database-write access, control of a
+sibling subdomain, or a captured provider signature, and several were already
+covered by `D058`/`D059`/`D116`. This entry records the fixes applied and the
+items deliberately retained.
+
+**Decision:**
+
+- **Argon2id parameter bounds (password hashes).** `verifyArgon2id` trusted the
+  memory, time and parallelism encoded in the stored hash, so a database-write
+  attacker could make one verification request an unbounded allocation or
+  workload through the four-slot admission gate. The stored parameters are now
+  bounded (`argonMaxMemoryKiB` 256 MiB, `argonMaxIterations` 32,
+  `argonMaxParallelism` 64) and rejected before any KDF work, mirroring the
+  existing legacy PBKDF2 iteration bound. `NeedsRehash` no longer truncates `p`
+  with `uint8`; it compares the full width and flags an out-of-range `p`.
+- **`safepath` comment corrected.** `Join` is a lexical containment guard; the
+  post-join re-check does not resolve symlinks. The code is unchanged and
+  correct for its threat (server-generated stored paths); the comment that
+  implied a symlinked-root defence now states what the guard actually does.
+- **App CSP gains `base-uri`, `form-action` and `object-src`.** The
+  application-shell CSP (`securityHeaders`) now sets
+  `base-uri 'none'; form-action 'self'; object-src 'none'`, matching the
+  per-message CSPs that already set the first two. `form-action` is `'self'`
+  because the shell posts to itself.
+- **Remote images: protocol-relative `src` stripped.** `StripRemoteImages`
+  matched only `http(s)://`, so a protocol-relative `//host/...` `<img src>`
+  survived the default pass. The regex now also matches protocol-relative URLs
+  (and `HasRemoteImages` reports them). The CSP blocked them either way; this
+  keeps the "no remote images" render honest.
+- **Message HTML and attachments are `no-store`.** Decrypted message HTML, the
+  standalone remote message HTML and streamed attachments were
+  `private, max-age=300`, so a copy could outlive sign-out in the browser cache.
+  They now send `Cache-Control: no-store`, matching every other authenticated
+  page in the app. The cost is a re-fetch on Back/Forward.
+- **Pre-auth CSRF token is signed.** `mmm_csrf` is the only double-submit CSRF
+  token in the app (session CSRF is server-side). It was unsigned, so an
+  attacker controlling a sibling subdomain could plant a same-site cookie and
+  pair it with a forged form field; `SameSite=Lax` does not block a same-site
+  request. The token is now `raw.hmac` signed with a process-local key, and the
+  value must both equal the form field and carry a valid signature. Scope is
+  `/login`, `/register`, `/setup` and `/invite/{token}`.
+
+**Accepted / retained:**
+
+- **Mailgun replay window kept at ±24h.** The signature covers only
+  `timestamp+token`, so a captured triple is usable with a forged body until its
+  token is recorded by the durable delivery dedupe. The window is retained
+  because Mailgun can delay a webhook well beyond 15 minutes and it is not
+  established whether a retry is re-signed with a fresh timestamp; shrinking it
+  could drop legitimate mail. Resend's Svix window (5 minutes) is shorter.
+  The rationale sits next to each constant.
+- **Legacy AAD-less ciphertext and the fixed PBKDF2 salt are retained**
+  (`internal/cryptox`). A `v2.`-prefixed blob is AAD-bound; a legacy blob is
+  decrypted with a nil AAD so pre-migration rows keep working, and the
+  passphrase fallback uses a fixed application salt. A database-write attacker
+  can therefore swap legacy blobs between unmigrated rows or re-derive a
+  passphrase key, which is the same access the encryption is meant to survive;
+  all new writes use the AAD-bound format. Recorded in `SECURITY.md`.
+- **Relay WebSocket keeps `CheckOrigin: true`.** Relay auth is a bearer secret
+  (plus an optional caller bearer), never a cookie, so a cross-origin socket
+  cannot ride an ambient session; the upgrader's same-origin default would
+  reject legitimate cross-origin gateways. Rationale recorded at the call site.
+
+**Reason:** Each fix removes a small, cheap-to-close gap without changing the
+product's behaviour. The retained items are deliberate trade-offs already
+documented or newly recorded here, and shrinking the Mailgun window needs a
+provider-behaviour fact that is not yet established.
+
+**Complexity:** Local changes only — `internal/auth` (parameter bounds),
+`internal/httpapp` (CSP, signed pre-auth CSRF, `no-store`), `internal/htmlsanitize`
+(regex), `internal/transport/{mailgun,resend}` (comment) and `internal/hermesrelay`
+(comment). No new dependency, schema, transport or runtime service.
+
+**Status update (2026-10-13): the AAD-less read path and the pre-PBKDF2 key
+candidate are gone.** The two retained items above were closed rather than kept.
+`internal/cryptox` no longer exposes a writer for the unbound format (`Encrypt`,
+`Decrypt`, `DecryptFirst`, `DecryptFirstAAD` and the candidate-key list are
+deleted), an empty AAD is refused on both encrypt and decrypt, and a value
+without the `v2.` prefix is refused on read. Webhook clients and relay
+connections were the rows still being written unbound; they now bind to their
+row identity — `WebhookSecretAAD(accountID, inboxID)` (the client row id does not
+exist when the handler seals the secret, and a webhook client never moves inbox)
+and `RelaySecretAAD(gatewayID)` (unique and immutable for the connection's life).
+The temporary legacy-secret upgrade tool has since been retired after the
+operator confirmed both existing instances are upgraded. The PBKDF2 *password*
+path is gone too:
+only an Argon2id hash verifies, so an account that has not logged in since the
+Argon2id switch needs a password reset (accepted by the operator). The fixed KDF
+salt is unchanged. No legacy-secret format support remains.
+`SECURITY.md` records the same. See `D118`.
+
+## D118 — Stored secrets always carry an AAD binding; the PBKDF2 password path is removed
+
+**Requirement:** Retire the pre-release compatibility shims once every instance
+has been updated: the AAD-less ciphertext format in `internal/cryptox` and the
+legacy `pbkdf2-sha256` password verifier in `internal/auth`. The operator
+accepted the consequences (a one-time upgrade, and a password reset for
+an account that has not logged in since the Argon2id switch).
+
+**Decision (2026-10-13):**
+
+- **The unbound format is no longer readable or writable.** `cryptox.Encrypt`,
+  `Decrypt`, `DecryptFirst`, `DecryptFirstAAD` and `DeriveKeys` are deleted.
+  `EncryptWithAAD` refuses an empty AAD instead of silently producing the old
+  format, and `DecryptWithAAD` refuses any value without the `v2.` prefix
+  instead of falling back to a nil AAD. `DeriveKey` returns the single key the
+  instance uses; the candidate-key list that carried the pre-PBKDF2 derivation
+  is gone with it.
+- **The rows still written unbound are bound now.** Webhook clients and relay
+  connections were the two remaining `EncryptSecret` writers. A webhook
+  signing secret binds to `WebhookSecretAAD(accountID, inboxID)` — the client
+  row id does not exist when the handler seals the secret, and a webhook client
+  never moves inbox, so the immutable account/inbox pair is its identity. A
+  relay secret and delivery key bind to `RelaySecretAAD(gatewayID)`, which is
+  unique and immutable for the connection's life and, unlike the row id, exists
+  at seal time. `EncryptSecret`/`DecryptSecret` are removed from `Service`.
+- **The temporary upgrade support is retired.** On 2026-10-13 the operator
+  confirmed only two instances exist and both are upgraded. The standalone
+  legacy-secret conversion command, implementation, Docker image build/copy
+  steps, and operator migration instructions are removed. Normal versioned
+  schema migrations remain; only the current bound ciphertext format is
+  supported.
+- **The PBKDF2 password path is removed.** `CheckPassword` and
+  `CheckPasswordContext` verify only an Argon2id encoding; a `pbkdf2-sha256`
+  row returns false (the caller reports "not found"), so that account needs a
+  password reset. `checkLegacyPBKDF2`, `pbkdf2SHA256` and the legacy parameter
+  bounds are deleted, and the lazy upgrade in `internal/store` is now only the
+  Argon2id cost upgrade.
+
+**Reason:** The shims were the project's only pre-release compatibility debt.
+The AAD binding is what stops a database-write attacker relabelling a secret
+onto a row they control, so leaving a readable unbound path open defeats the
+binding for exactly the rows that were never migrated. The password path had no
+migration at all — only a lazy upgrade on a successful login — so it could not
+converge on its own. Both are now closed with a bounded, observable one-time
+cost.
+
+**Accepted risk:** A pre-AAD blob that cannot be unwrapped (an
+`APP_ENCRYPTION_KEY` that is not the one it was sealed with) stays unreadable:
+the affected webhook stops delivering or the relay needs re-enrolment, and the
+walk logs a warning per row. The passphrase KDF keeps its fixed application salt
+because there is nowhere in the envelope to store a per-installation salt; that
+residual is recorded in `SECURITY.md`.
+
+**Complexity:** `internal/cryptox` (the format and the two deprecated
+primitives), `internal/app` (the `AAD` helpers, the walk and the removed
+`Service` wrappers), `internal/store` (one new file, `client_secrets.go`, plus
+`internal/store/auth.go` comment), `internal/httpapp` and `internal/hermesrelay`
+(the eight call sites that now bind), `internal/auth` (the removed verifier and
+one import) and `cmd/server` (the startup call). No new dependency, table or
+migration: the rewrite is in place rather than a schema change.
+
+## D119 — Standalone workflow delivery no longer fails on a NULL inbox domain, and a failed action reports its real cause
+
+**Context:** A run of RemoteDraft handoffs against standalone inboxes exposed two
+independent defects that together read in the UI as "update labels action cannot
+be completed" plus a permanently "publication queued" badge.
+
+1. **Every standalone workflow delivery failed before the provider call.** The
+   delivery-log attribution query in `insertWorkflowAttemptTx`
+   (`internal/store/workflow.go`) read `inboxes.domain_id` into a plain `string`.
+   A standalone inbox has no managed domain, so its `domain_id` is `NULL`, and
+   the scan failed with `converting NULL to string is unsupported`. Because
+   `RecordWorkflowDeliveryStarted` runs immediately before the provider send in
+   `DeliverWorkflow`, the approval request or handoff notification was claimed
+   and then failed on every pass: the handoff published correctly (publication
+   and notification are independent), but `notification_status` stayed `queued`
+   forever while the worker logged the scan error. The sibling read in
+   `resolveAttemptDomainTx` (`internal/store/outbound_log.go`) and
+   `DomainSendingConfigForWorkflow` already handled the NULL correctly; this was
+   the one remaining raw scan on the path.
+
+2. **A failed action discarded the provider's reason.** A raw transport error is
+   normalised by `normalizeRemoteError` into a `MailboxError` of kind `internal`
+   with an empty public message. `ActionWorker.execute` only replaced its generic
+   "Action could not be completed" reason when the public message was non-empty,
+   so the underlying cause was dropped. An operator saw the same opaque string
+   whether the provider refused a folder, a connector was misconfigured, or a
+   move targeted an unselectable destination.
+
+**Decision:**
+
+- Read `domain_id` as `sql.NullString` in `insertWorkflowAttemptTx` and pass
+  `domainID.String` through `nullString`, so a standalone workflow attempt is
+  recorded with a NULL domain exactly like a standalone message attempt. A
+  missing inbox row still records an unattributed attempt.
+- When a `MailboxError` carries no public message, `ActionWorker.execute` falls
+  back to the error's own text (`MailboxError.Error()`, which already prefers
+  `Message` and otherwise returns the wrapped cause) instead of the generic
+  string. The public string is still preferred whenever one is set, so no
+  transport-specific detail leaks for errors that deliberately carry a curated
+  message.
+
+**Consequences:** A standalone inbox's approval and handoff notifications now
+reach the provider-resolution step (and are held only for a genuinely missing
+provider, as designed), and a failed action's queue entry names the real cause.
+The behaviour in `docs/API.md` — publication and notification advancing
+independently, and a handoff on an inbox with no remote/outbound provider staying
+queued — is unchanged.
+
+**Complexity:** `internal/store/workflow.go` (one nullable scan), `internal/app/
+message_actions.go` (a reason fallback), two regression tests
+(`tests/unit/store/workflow_standalone_test.go`, and a failed-move case in
+`tests/unit/app/message_actions_test.go`) and a `moveFail` seam on the test's
+fake remote server. No new dependency, table or migration.
+
+**Not fixed here:** the separate "a folder-backed label cannot be moved back out
+through the API" gap (no `POST /v1/messages/{id}/move` route; a folder-label
+`remove` still returns 409) is unchanged and remains tracked in
+`docs/proposals/label-findings-fix-plan.md`.
+
+## D120 — A move destination may be a folder id or a folder path
+
+**Context:** Applying a folder-backed label to a message in a Microsoft (Outlook) standalone inbox
+queued a `move` action that failed with the opaque "Action could not be completed". The unified
+Labels API (`labelAction`, `internal/httpapp/unified_labels.go`) sends the folder **id**
+(`folder:<id>`) as the move destination for a Microsoft inbox, but `moveMicrosoft` resolved that
+destination with `Store.GetFolder(ctx, accountID, inboxID, dest)`, which matches on **path**. A local
+folder id is never a path, so the lookup returned `ErrNotFound` before any provider call. Because a
+store error is not a `*model.MailboxError`, the worker fell through to its generic reason, which is
+why every provider's failures looked identical.
+
+For a Microsoft inbox the folder row's `path` column stores the **Graph folder id** (`AQMkADAw...`),
+which is exactly what `Microsoft.Move` needs as `destinationId`. So `Destination` already carried two
+meanings — a local folder id from the Labels API, a path from the bulk-move form — with only the
+path form implemented.
+
+**Decision:** A move destination is resolved as **either** a folder id **or** a folder path, by a new
+`Store.GetFolderDestination`, which tries the id first (ids are unique and never a valid path) and
+then the path. `moveMicrosoft` uses it, so a label-driven move reaches the provider. An unknown
+destination is still `ErrNotFound`.
+
+`ActionWorker.execute` also gained actionable reasons for the common non-provider errors
+(`ErrNotFound` → "the destination folder could not be found", `ErrConflict` → "the destination is not
+a valid move target", `ErrForbidden` → "not permitted"), so a failure is legible without a container
+log.
+
+**Scope correction:** the failure was **not** present on every provider, contrary to the initial
+report. The Gmail-**via-IMAP** inbox's destination was a valid path; its observed failure was a
+connector timeout (the inbox's sync reached a 45 s ceiling and reported `context canceled`),
+classified `ambiguous` — a slow/flaky connector, not a destination bug. The Google and One inboxes
+project every provider folder as an additive `tag`, so `labelAction` never produces a folder move for
+them. Only the Microsoft path was broken.
+
+**Consequences:** A folder-backed label applied to an Outlook inbox moves the message. `moveGoogle`
+is unchanged (it is not reachable through the labels grammar, and its `add`/`remove` arguments are
+Gmail label ids, which a path-based destination would not satisfy). No API surface change.
+
+**Complexity:** `internal/store/folders.go` (two lookup helpers), `internal/app/microsoft_mailbox.go`
+(the destination resolution), `internal/app/message_actions.go` (the error reasons) and one
+store-level regression test. No new dependency, table or migration.
+
+## D131 — One label membership projection, one filter resolution, and catalogue capabilities
+
+**Date:** 2026-10-13. **Approved by:** Ben.
+
+**Requirement:** The unified Labels system shipped a provider-aware catalogue,
+but the read contract still exposed only additive names. A folder-backed label
+was invisible to API clients (they had to interpret `folder_path` themselves),
+and equivalent routes disagreed: the inbox-scoped listing applied only the
+**first** `label` value while the account-wide route required every one, so the
+same query returned different messages and different `completeness`. An empty
+catalogue also told a generic client nothing, create and list descriptors could
+disagree, and OpenAPI described the label mutation as a plain `200` result.
+
+**Decision:** `Message.label_ids` is the single unified membership projection for
+every inbox kind and every route: additively-addressed `tag:<Name>` plus the one
+folder-addressed `folder:<id>`, always present and `[]` when empty. The legacy
+`labels` array stays as the additive-name view only. Folder ids resolve through a
+per-inbox folder index built once per response, so no client has to reconstruct
+folder semantics.
+
+`label` and `label_id` are resolved by one shared helper on all four listing and
+search surfaces. Repeated values AND together; a bare name and `tag:<Name>` are
+equivalent; `folder:<id>` selects the single folder-backed label and requires an
+`inbox=` scope account-wide; more than one `folder:` id is rejected; an id that is
+not a label-eligible folder of the scoped inbox is `404`. Inbox-scoped and
+account-wide queries with the same resolved filter return the same page and the
+same completeness, which is now derived from one rule rather than hard-coded per
+branch.
+
+The catalogue reports `capabilities` (`can_create`, `create_kind`,
+`create_membership`, `can_rename`, `can_delete`) so an empty catalogue still
+describes the inbox. One descriptor projection serves both create and list so
+they cannot drift. Provider-owned label names (Gmail user labels, Outlook
+categories) are validated by a provider rule that allows hierarchical names; the
+MailMoose-native rule still rejects path separators. The action queue records
+which rule applied. OpenAPI declares the alternate `202` queued-action response
+on async-default mutations and documents the label filter parameters.
+
+**Reason:** A label is one concept in the UI, so it must be one concept in the
+API. Making membership a single projection and filter resolution a single helper
+removes the per-branch divergence that produced the route disagreement, and the
+capability block lets a generic client work against a new inbox without provider
+knowledge.
+
+**Complexity/resource budget:** No migration and no new dependency or runtime.
+One response field, one per-inbox folder index, one filter resolver, one
+capability helper, one descriptor helper, a provider-name validator, and OpenAPI
+alternate responses. Deterministic HTTP/store/spec tests cover five backends,
+route parity, empty catalogues, hierarchical provider names, and descriptor
+consistency. Folder-path normalization and Microsoft category rename/delete stay
+out of scope.
+
+## Future extension register
+- custom-domain automation improvements
+- optional managed outbound
+- object storage
+- PostgreSQL
+- optional MCP bridge
+- broader agent platform adapters
+- richer team/organisation administration
+
+Additions should preserve the canonical mailbox/event model.
+
+## D121 — Remote-draft mode just places the draft: no notification, no approver, no handoff UI
+
+> **Superseded in part by D135.** The unused `notification_status` /
+> `notification_message_id` columns on `assistant_handling_requests` are
+> dropped by the public baseline; the rest of this decision stands.
+
+**Date:** 2026-10-13. **Approved by:** Ben.
+
+**Context:** A standalone inbox in `remote_draft` mode is meant to do one thing: an
+assistant's request to send places the draft in the connected mailbox's Drafts
+folder. The implementation had grown a visible handoff lifecycle around it — a
+"Draft handoffs" pane with publication and notification columns, per-draft handoff
+badges, a "Handoff state" settings panel, cancel/retry controls, handoff
+notification emails, and an approver field — which read to the operator as "an
+assistant wanted a draft" rather than the draft itself. A `remote_draft` inbox
+never uses an approver, and the notification email was pure noise.
+
+**Decision:**
+
+- **No notification email, ever.** The handoff notification path is removed
+  (`WorkflowKindHandoff`, `CommitHandoffNotification`, the notification store
+  methods and events, `HandoffByNotificationMessageID`). A data-only migration
+  (`076`) settles any handoff notification job still queued from an older build
+  terminally, so the outbox worker can never deliver one. Publication and the
+  Sent-copy remain the only state machines.
+- **No handoff UI.** The pane, badges, "Handoff state" panel, cancel/retry routes
+  and handlers are deleted. The Drafts page shows drafts; the Approvals tab shows
+  the mode and its description. `GET /v1/inboxes/{id}/handoffs` and the draft
+  response's `handoff` object remain (publication only) so an agent can still
+  observe the placement outcome.
+- **No trapped draft.** A terminal outcome — a permanent append failure, an
+  unverifiable append after the bounded attempt budget, or more than one remote
+  match — now **unfreezes** the local draft (`MarkHandoffFailed` /
+  `MarkHandoffAmbiguous`, and the ambiguous user-resolve path is removed with the
+  UI). Previously only a permanent failure unfroze it, and an ambiguous handoff
+  relied on the now-deleted resolve control.
+- **No approver on a draft inbox.** Switching a standalone inbox to
+  `remote_draft` clears any stored approver (the inbox edit form, `PUT
+  /authoring`, and `PATCH /v1/inboxes/{id}`), and the settings UI no longer offers
+  the notification-address field. The legacy `notify_address` /
+  `notify_overridden` values remain in the API and store but have no effect.
+
+**Scope:** draft mode (`remote_draft`) only. The MailMoose approval flow
+(`mailmoose_approval`) — approver, approval emails, the "Draft send requests"
+card, `draft_send_requests`, and its notification state machine — is unchanged.
+
+**Consequences:** A `remote_draft` request to send places the draft and nothing
+else; the operator sees an ordinary draft that disappears from MailMoose once the
+append is confirmed and appears in their own client's Drafts folder. The
+`assistant_handling_requests` table keeps its `notification_status` /
+`notification_message_id` columns (unused, scanned for backward compatibility);
+no column is dropped.
+
+**Complexity:** `internal/model/assistant_handling.go` (event kinds and the
+notification fields), `internal/store/assistant_handling.go` (removed
+notification/cancel methods; ambiguity now unfreezes), `internal/app/
+draft_handoff.go` and `remote_worker.go` (the echo exclusion kept, the
+notification lookup removed), `internal/app/remote_worker.go`, the handoff
+removal in `internal/httpapp/{inbox_ui,ui,server,api,standalone_api,standalone_ui}.go`
+and `assets/app.js`, the CLI table columns, a migration (`076`), apispec and docs,
+and the affected tests. No new dependency.
+
+## D122 — Immediate, folder-scoped pull after a confirmed remote write
+
+**Date:** 2026-10-14. **Approved by:** Ben.
+
+**Context:** A standalone inbox in `remote_draft` mode appends a frozen draft to
+its connected mailbox's Drafts folder, and a standalone send appends a copy to its
+Sent folder. The MailMoose read model for those folders is the cached remote index
+(`inbox_remote_messages`), which was only refreshed by the whole-inbox deep
+reconcile (`ReconcileRemote`) on the worker's full-sync cadence or an explicit
+`POST /v1/inboxes/{id}/remote/refresh`. A read reconciles on demand only when a
+folder's UIDVALIDITY is unknown or it has never been indexed, so an
+already-indexed Drafts/Sent folder is served from cache. The result was that the
+just-appended draft (or sent copy) did not appear to reads/agents until the next
+deep pass — a visible lag after an assistant's draft-mode "send".
+
+**Decision:** After a **confirmed** remote write — a RemoteDraft handoff settled
+as published (whether confirmed by APPENDUID or verified by lookup), or a sent
+copy settled as copied — immediately pull just the target folder role
+(`drafts`/`sent`) into the cached index:
+
+- A new role-scoped pull (`RemoteMailboxService.PullRoleFolder`) resolves the
+  role folder per connector — an IMAP folder reconcile for the mapped role path,
+  a Gmail system-label (`DRAFT`/`SENT`) message page, or an Outlook folder delta —
+  and never stores a body.
+- It is scheduled asynchronously on the existing bounded refresh pool
+  (`ScheduleRoleFolderRefresh`: coalesced per inbox+role, sharing `refreshSlots`
+  and `refreshContext` so `Stop` drains it). It never blocks or fails the write
+  that requested it; a failure is logged and the normal cadence still covers the
+  folder.
+- The trigger is a narrow `Service.RemoteFolderRefresher` seam installed by
+  `InstallRemoteBridges`, so a deployment with no remote integration (or a test
+  with a fake) simply does nothing.
+
+**Scope:** the confirmed-published and confirmed-copied paths only. An ambiguous
+or failed append never pulls (nothing was confirmed on the server). The browser
+Drafts page keeps listing local drafts and is unchanged; the deep reconcile and
+its cadence are unchanged.
+
+**Consequences:** A placed draft and a sent copy are visible to reads immediately
+after their append is confirmed, with no change to what is stored (metadata only)
+or to the append's exactly-once/lookup semantics. No new dependency, no schema
+change, no migration.
+
+**Complexity:** `internal/app/service.go` (the `RemoteFolderRefresher` seam),
+`internal/app/remote_folder_refresh.go` (the pull and its scheduler),
+`internal/app/remote_mailbox.go` (bridge install), `internal/app/draft_handoff.go`
+and `internal/app/remote_mailbox_more.go` (the two hooks), and the new tests.
+
+## D123 — `NOINDEX` asks crawlers to skip the human UI
+
+**Date:** 2026-10-14. **Approved by:** Ben.
+
+**Context:** The application served no robots directives of any kind, so the
+human UI pages (`/`, `/login`, `/setup`, `/register`, `/invite/{token}`, the
+mailbox views) were as indexable as a public marketing site. A self-hoster who
+does not want a login page, an instance hostname, or an invite link surfaced in
+search results — or fed to AI crawlers — had no switch to say so.
+
+**Decision (2026-10-14):**
+
+- **New `NOINDEX` environment variable, default `false`.** Off keeps the
+  hosted deployment's public signup pages discoverable; a self-hoster opts in.
+  It is read once in `internal/config` alongside `FORCE_HTTPS` and surfaced as
+  `Config.NoIndex`.
+- **Three coordinated signals, all conditional on the flag:** the
+  `X-Robots-Tag: noindex, nofollow` header, a matching
+  `<meta name="robots" content="noindex,nofollow">` element in the page shell,
+  and `GET /robots.txt` returning a blanket `Disallow: /` (404 when the flag is
+  off, so the file never contradicts the deployment's policy).
+- **Header applied in the existing `securityHeaders` middleware, not
+  per-handler**, so new UI pages are covered by default. The meta element is
+  injected through a `noindex` template function so every render path — the
+  page shell and the inline secret-fallback page — stays in agreement with the
+  header.
+- **The REST API, `/.well-known/mailmoose` and `/openapi.json` are deliberately
+  excluded.** Those exist to be found by the agents the product is built for,
+  and a noindex deployment still depends on that bootstrap path.
+
+**Scope:** advisory hygiene, not access control. `robots.txt` and the
+`noindex` directives are honoured by reputable crawlers and ignored by a
+determined scraper; the real protection for a private instance remains that
+every route that matters requires authentication. This is documented as such so
+it is not mistaken for a security control.
+
+**Consequences:** A self-hosted instance can opt out of search and AI indexing
+with one variable, at no cost to the agent-facing discovery surface. No new
+dependency, no schema change, no migration.
+
+**Complexity:** `internal/config/config.go` (the field and `envBool` read),
+`internal/httpapp/server.go` (`applyNoIndex`, `robotstxt`, the route), and
+`internal/httpapp/ui.go` (the `noindex` template func and the meta element in
+the two shells).
+
+## D124 — Receiving DNS checks are a hard gate: four states, and only `ok` is green
+
+**Date:** 2026-10-15. **Approved by:** Ben.
+
+**Requirement:** On a brand-new domain in Antler MX mode the MX check read
+`mismatch` while the TXT check reported `pending`, which the operator read as
+"the work is underway" — but nothing was pending. Two problems sat behind that.
+(1) The state vocabulary lied: `pending` is a temporally-loaded word that implies
+work in progress, and calling a never-created record `pending` told the operator
+to wait for something that was never going to happen. (2) Worse, on a brand-new
+domain the TXT check often did not even reach `pending`. `CheckMX`/`CheckTXT`
+queried the resolver with the **relative** name, so the resolver's search list
+(`/etc/resolv.conf` `search`) expanded `_mailmoose-mx.<domain>` to
+`_mailmoose-mx.<domain>.<suffix>`; a search-suffix failure then masked the clean
+NODATA as `IsTemporary`, `dnsNotFound` returned false, and the absent record read
+as `unavailable` ("retrying") forever. The receiver's own proofs already avoid
+exactly this by querying absolute names, with a test pinning it
+(`dialmx/receiver.absoluteName`); the core's checks did not, so the local verdict
+and the receiver disagreed about an absent record.
+
+**Decision:**
+
+- **Rename the two states to say what they mean.** `pending` → `not_found`
+  (definitively no record published) and `unavailable` → `dns_error` (the lookup
+  could not be completed). `ok` (`StateOK`) and `mismatch` (`StateMismatch`) keep
+  their names. The wire values are `"not_found"` and `"dns_error"`; this is a small
+  API-contract change (`docs/API.md`). Only the DNS-check constants are renamed —
+  the unrelated `unavailable` values (`mxdial.StatusUnavailable`,
+  `MXStateUnavailable`, `mailbox.ErrKindUnavailable`) are untouched.
+- **A receiving record check is a hard gate.** Only `ok` is green; `mismatch`,
+  `not_found` and `dns_error` are all red, because the operator must not proceed
+  on a record that is wrong, absent, or unconfirmed. There is no amber on an
+  individual receiving record. `not_found` and `dns_error` stay distinct in the
+  *reason* and in the fix prompt (publish it vs check DNS and retry; the latter
+  never claims the record is missing), and on a `dns_error` MX check the previously
+  observed `unexpected` hosts are still carried forward, so a known extra-MX
+  warning survives an outage. The amber that remains is the receiver-level
+  extra-MX warning — a *correct* DNS config with ambiguous routing — and the
+  not-yet-run "Waiting" cell for a check the watcher has not resolved.
+- **Query absolute names, matching the receiver.** `CheckMX`, `CheckTXT` and
+  `CheckDKIM` qualify the name with a trailing dot (`absoluteName`), so a clean
+  NODATA yields `IsNotFound` and reads as `not_found` rather than drifting to
+  `dns_error`. This is the actual fix for the "brand new domain's check never
+  settles" symptom.
+- **DKIM is deliberately different.** DKIM is a sending-side, advisory check: an
+  absent or unconfirmed record does not block mail, it only forgoes the
+  enforcement DKIM gives outbound mail. So for the DKIM light only `ok` is green
+  and only `mismatch` (a published record that does not match the signing key) is
+  red; `not_found` and `dns_error` are grey ("not confirmed"), distinct in wording
+  ("DNS not present" vs a check that failed).
+
+**Reason:** "Not found" and "wrong" are different operator facts with different
+actions, and neither is "wait". Making the four states orthogonal — one settled
+good, three settled bad, plus a genuinely-unknown error — lets the receiving
+checks express the only question that matters ("is this record correct?"), and
+lets the operator see that an unconfirmed record is a stop, not a reassurance. The
+absolute-name fix removes the drift between the core's local verdict and the
+receiver's own proof, so the two can no longer disagree about a record that simply
+is not there.
+
+**Complexity:** No dependency, service, schema or migration change. The rename
+touches `internal/app/dns_check.go`, `internal/app/dns_watcher.go`,
+`internal/httpapp/ui.go` (the two light functions), `internal/httpapp/domain_dns.go`,
+and the wizard/JS in `internal/httpapp/assets/app.js`; the absolute-name fix is one
+small helper plus its call sites. Tests are updated in place, with new
+absolute-name assertions in `internal/app/dns_check_test.go`. See `docs/REMOTE_MX.md`
+and `docs/API.md`.
+
+## D125 — Transient hub notifications are wake hints; SQLite remains event truth
+
+**Decision:** A full in-memory Hub subscriber buffer drops the new notification;
+it does not block the publisher and does not trigger a separate immediate
+re-poll. Hub notifications are wake hints only. Consumers recover from a dropped
+hint through their existing durable-read cadence: SSE polls periodically, Hermes
+Relay has its ping/replay loop, and long-poll returns on its bounded timeout so
+the caller can query again. The persisted event log and consumer cursors remain
+the source of truth; loss of a transient notification may delay delivery but
+must not lose the durable event.
+
+**Known timestamp caveat:** SQLite time values currently use UTC
+`time.RFC3339Nano` text, whose optional fractional part is trimmed. Text ordering
+can therefore misorder two timestamps within the same second when their
+fractional widths differ. The observed effect is bounded to sub-second ordering
+skew, so this review does not change the on-disk representation. If precise
+sub-second ordering becomes a requirement, replace it consistently with a
+fixed-width UTC fraction or an integer epoch representation before relying on
+lexicographic TEXT comparisons for scheduling or lease expiry.
+
+**Reason:** Durable state must not depend on bounded, process-local notification
+buffers. Adding immediate re-polling would change load and wakeup semantics across
+consumers without improving correctness; their established polling/replay loops
+already heal a dropped hint. Timestamp-format migration is likewise deferred
+until the small ordering skew is shown to affect a product behavior.
+
+## D126 — A provider-accepted send is never resent automatically
+
+**Context:** The outbox worker records an attempt as in flight in
+`outbound_delivery_log` (`status='sending'`) and claims a message with a
+leased claim token before the provider call. Neither of those gated the queue
+on their own. If the process crashed, the lease lapsed, or the outcome write
+failed *after* the provider had accepted the request, the message was still an
+ordinary `pending` row: startup recovery cleared the claim, the queue re-claimed
+it, and the mail was delivered a second time. `ReleaseMessageClaim` and the
+domain-config requeue could also clear a *live* claim mid-send, and the
+`MarkSent`/`MarkFailed` commit-error fallback returned *any* existing row for the
+id as a success, masking the ambiguity entirely.
+
+**Decision:** A durable pre-send marker, `send_attempt_state`, is added to both
+outbound queues (`messages` and `outbound_workflow`) by migration `077`. Empty
+means "no provider send in flight (or the last one reached a definitive
+outcome)"; a non-empty value is the claim token of the attempt that started the
+send. The store writes it immediately before the provider call and enforces it
+everywhere the queue could otherwise resend:
+
+- `ClaimNextPending` / `ClaimNextWorkflow` only select rows with an empty marker.
+- `RecoverAbandonedClaims` / `RecoverAbandonedWorkflowClaims` (including the
+  startup recovery the worker runs) never clear the claim of a marked row.
+- `RequeuePendingForDomain` / `RequeuePendingWorkflowForDomain` skip rows that
+  have a live claim or a marker, so a config save lets the in-flight send finish
+  under the config it started with; the new config applies to the next attempt.
+- `ReleaseMessageClaim` / `ReleaseWorkflowClaim` and the `Hold*` paths are
+  no-ops for a marked row, so there is no window in which the row becomes
+  claimable while its provider outcome is unknown.
+- `MarkSent`/`MarkWorkflowSent` and `MarkFailed`/`MarkWorkflowFailed` are the
+  only automatic resolvers, and only for the attempt that owns the marker.
+- On a failed outcome write the worker leaves the marker in place instead of
+  releasing the claim; a panic during the provider call is likewise treated as
+  unresolved.
+
+Unresolved rows are therefore **quarantined**, not retried. `ListQuarantinedSends`
+/ `ListQuarantinedWorkflowSends` surface them for operator review; an operator
+either resends explicitly (`ResolveQuarantinedSend(...resend=true)`, which warns
+that the provider may already have accepted the mail) or discards it terminally.
+`RequeueFailedWithWarning` carries the same duplicate warning for the ordinary
+"retry a failed message" action when a marker is present.
+
+**Corrections to the outcome writes:** an empty claim token now means "this
+caller does not participate in the claim protocol" (tests, non-worker callers)
+and does not arm or enforce a marker, so those callers keep their previous
+behaviour. The `MarkSent`/`MarkFailed` commit-error fallback no longer returns an
+arbitrary existing row: it re-reads and returns success only when the committed
+row actually reflects this attempt (status/provider-message-id for sent,
+attempts/status/last-error for failed); `MarkSent` additionally refuses to flip a
+`failed` or trashed message back to `sent`.
+
+**Accepted risk:** migration `077` backfills every existing row as "no send in
+flight", because a pre-upgrade row cannot have a send started by the new code.
+A send that was in flight across the upgrade is therefore not detected; it
+degrades to the pre-existing behaviour for exactly those rows and no worse.
+
+**Reason:** Email is not idempotent at the provider for the transports MailMoose
+speaks, so "maybe already delivered" must fail closed. Making the in-flight
+marker part of the queued row — written before the provider call and cleared only
+by a definitive outcome or an explicit operator action — is the smallest change
+that closes the crash, lease-expiry, requeue and failed-outcome-write paths at
+once, and it gives operators a review surface instead of a silent resend.
+
+**Complexity:** One additive migration (`077`), the marker column on the two
+queue tables, and local changes in `internal/store/{outbound,workflow,outbound_log}.go`,
+`internal/app/service.go` (arm before send; hold unresolved rows) and a
+test-only fault hook. No new dependency, service or transport.
+
+## D127 — `attention` is an authorization verdict, not any provider error
+
+**Context:** A One-backed inbox's connection health is one `status` on
+`inbox_one_bindings` (`active` / `attention` / `disconnected`), and both the
+dashboard red flag and the in-mailbox reconnect banner derive from it
+(`internal/httpapp/inbox_connection.go`). The per-request health callback treated
+*any* `*model.MailboxError` as a fresh verdict: `auth`, `forbidden` **and**
+`unsupported` wrote `attention`, and every other kind wrote `active`.
+`unsupported` is what `ValidateActions` returns when One no longer exposes a
+mandatory Gmail action — an integration problem, not a rejected credential. Once
+`attention` was written, `GoogleMailboxClient` returned early for that revision,
+so the 15-minute re-validation never ran and only a manual key re-save cleared
+it. A transient action-mapping hiccup therefore read as a permanent disconnect,
+stranding a working key on a reconnect prompt. Separately, the reader painted the
+reconnect banner before the live message body was fetched, so an authorization
+failure discovered only by that fetch surfaced as a bare "Could not load the
+message body" with no route to repair it.
+
+**Decision:** Only `auth` and `forbidden` mark the binding `attention`. Every
+other outcome — retryable, unavailable, quota, invalid, unsupported, internal —
+leaves the recorded status untouched, so it neither invents a disconnect nor
+clears a real one. `SetOneRequestHealth` continues to restrict request feedback to
+a currently-`active` binding, so a late outcome from an in-flight request cannot
+overwrite an authoritative verdict; `active` is written only by the 15-minute
+re-validation or by a successful key re-save. A live body fetch that fails now
+returns the same durable connection verdict the banner uses, and the reader turns
+it into the in-place reconnect control instead of a generic load error.
+
+**Consequences:** An inbox is flagged for reconnection only for a confirmed
+authorization rejection, matching the conservative contract already documented
+for `inboxConnectionState`. A connector with an incomplete action catalogue
+surfaces as a sync/operation error (amber) rather than a reconnect prompt, and
+the operator is no longer asked to re-enter a key that still works. A genuine
+`attention` state still requires an explicit re-save, which is unchanged.
+
+**Complexity:** A narrowing of the classification in the status callback in
+`internal/app/one.go`, the connection verdict added to the body-failure payload in
+`internal/httpapp/standalone_ui.go`, and the corresponding reader fallback in
+`internal/httpapp/assets/app.js`. No schema, dependency or transport change.
+
+## D128 — The root encryption key is generated when the operator does not supply one
+
+**Decision:** `APP_ENCRYPTION_KEY` is optional. When it is unset, startup uses
+`<DATA_DIR>/encryption_key`; when that file does not exist, MailMoose generates
+32 random bytes, writes them as 64 lowercase hex characters (the
+`openssl rand -hex 32` shape) with mode 0600, and logs the path at WARN so the
+operator can back it up or supply their own. A supplied `APP_ENCRYPTION_KEY`
+always wins and no file is written. An existing key file is never overwritten
+and never regenerated: a file that does not parse is a startup error, because a
+replaced key orphans every stored ciphertext. This supersedes the
+"operator supplies it" half of `D017`.
+
+**Reason:** Requiring a hand-generated root secret before the process will start
+is unusual for self-hosted software, and it makes the first run of a mail server
+a shell exercise before anything can be evaluated. Nothing is encrypted before
+an operator connects a provider, so generating the key on first start costs
+nothing and removes the wall.
+
+**Consequences:** A `/data` backup of a deployment that did not supply its own
+key is self-decrypting, which weakens the separation `D017` protected. Operators
+who want that separation still get it by setting `APP_ENCRYPTION_KEY`.
+Changing the key on a deployment with stored credentials leaves those
+credentials unreadable and they must be re-entered; that is pre-existing
+behaviour, now easier to trigger because both supply paths exist, and
+`README.md`, `.env.example` and `SECURITY.md` say so next to the setting. The
+standalone MX receiver is unaffected: it never receives the key or the data
+directory.
+
+**Complexity:** `cryptox.LoadOrCreateKeyFile`, one call site in
+`cmd/server/main.go`, and the removal of the config requirement. No schema,
+dependency, transport or protocol change.
+
+## D132 — The first public MX session protocol is v1
+
+**Requirement:** Start the first real FOSS release at MX protocol v1. The old
+HTTP/HMAC `mx-v1` transport was never deployed and was removed by `D070`; its
+internal numbering must not dictate the public session protocol's first version.
+
+**Decision:** Renumber the current Dial MX session contract from `mx-v2` to
+`mx-v1`, served at `POST /mx/v1/session`. The frame version byte is `1` and the
+signed authentication transcript's domain separator is `mailmoose-mx-v1`.
+Both single and shared mode use this contract. This is not a restoration of
+the removed HTTP/HMAC transport. Earlier decisions retain their historical
+version names; this decision supersedes those names for the current protocol.
+
+**Consequences:** Core and receiver must be rebuilt and updated together.
+Pre-release v2 peers are incompatible; there is no alias, negotiation or fallback.
+Message storage, encrypted domain keys, DNS `MM1` proofs, `mxfp-v1` retry receipts,
+the Antler manifest schema and the separate `/v1` agent API do not change. No data
+migration is required, and existing domain keys need not be rotated.
+
+**Complexity:** Rename protocol identifiers, session types and source/test files;
+update wire fixtures, handshake consumers and receiver startup logging. No new
+dependency, runtime service or compatibility layer.
+
+## D133 — Strix remediation: delegated authority, destination-bound secrets and approval delivery
+
+**Requirement:** Address the 2026-10-18 Strix findings without removing legitimate
+Admin-created aliases, local approval delivery or self-hosted private networking.
+The API's former Owner alias permission was explicitly recorded in D034; this
+decision deliberately tightens that policy rather than calling it undocumented.
+
+**Decision:**
+
+- **Aliases are account-Admin-managed.** Enforce the permission at the store write
+  boundary and reject forbidden alias fields before any PATCH side effects.
+  Existing cross-domain aliases remain valid delegated receiving/sending
+  identities; inbox Owners need no new domain-administration grant to use them.
+  Existing aliases are not deleted because their rows do not record the creator.
+- **Retained standalone passwords stay with their endpoint.** Test and save share
+  the normalized host, effective port, username and transport-security comparison.
+  A changed endpoint requires its password again before dialing or saving. SMTP
+  never inherits the IMAP password. Settings and encrypted credentials commit
+  atomically with revision checking; readers use a consistent snapshot. Internal
+  description-only changes clear a moved endpoint's old ciphertext.
+- **Control classification requires an issued token.** Random or quoted fake
+  markers are ordinary mail even during a pending approval. Issued tokens,
+  including expired/decided tokens whose request rows remain, are consumed instead
+  of becoming ordinary requesting-inbox content. Lookup failures are retryable.
+  A global token-hash index (migration 079) supports recognition without a scan of
+  historical requests; only hashes are queried and persisted.
+- **The separate nominated approver inbox receives its notification.** Its readers
+  may see the token just as they could at an external mail provider. This is
+  intentional delegation to everyone who can read that inbox, including agents
+  and forwarding connectors. The requesting agent must not have read access to
+  that inbox if approval is intended as an independent human boundary. The
+  requesting inbox itself remains excluded from readable token delivery.
+- **Read and outbound authority are current and consistent.** Transient events
+  require account and inbox readability and obey an explicit inbox filter;
+  inbox-less transient events are Admin-only. Public inbox reads redact the
+  approver for Read-only principals, while internal reads retain it. Relay
+  operations use the connection's freshly loaded authority, including a demotion
+  applied after the socket opened.
+- **An account Remote MX backend is bound to that account.** Both resolution and
+  ingestion check recipient ownership. The shared ingest path also carries the
+  account restriction before receipt lookup/persistence. Receiver-provided
+  authentication evidence does not grant cross-account authority.
+- **Resend sender provenance remains an accepted Low risk.** Svix authenticates
+  Resend's report, not an independent SMTP envelope or original sender identity.
+  The address comparisons can use the same asserted From twice. An attacker still
+  needs the correct live, single-use token for a specific pending request; content
+  binding, expiry and sender comparisons remain unchanged. The demonstrated
+  exposure is a decision on that send request, not account takeover or general
+  mailbox access. An unauthorized approval may nevertheless disclose the draft's
+  existing content/attachments to its existing recipients. No provenance flag or
+  changed acceptance behavior is introduced in this work.
+- **Private outbound stays enabled by default.** MailMoose is self-hosted-only
+  (D064), and `ALLOW_PRIVATE_OUTBOUND=true` remains intentional. D062's blanket
+  private-webhook prohibition is corrected to describe the existing conditional
+  guard. No network-policy change or extra webhook switch is introduced.
+
+**Complexity:** Shared validation and atomic storage for the existing standalone
+connector; a small issued-token lookup and index; account/principal checks at the
+existing boundaries; deterministic regression tests. No new dependency, runtime
+service, destination-binding schema, token format or approval protocol.
+
+## D134 — A settled receiver refusal is an error state, not a retry
+
+**Requirement:** A receiver the core can reach but that will not take the session
+must read as a settled failure. An incompatible receiver build answers `404` for
+the session path this core posts (`D132` renumbered it to `/mx/v1/session`), and
+`failureState` collapsed every such answer into `disconnected`, which the Antler
+status dialog and the account Remote MX panel render as "Reconnecting" — forever,
+because the condition never clears on its own and the retry loop keeps running.
+The operator saw a session still in progress where the receiver had in fact
+answered and declined.
+
+**Decision:** Classify by what the receiver did, and report it:
+
+- A session the receiver answered and declined is **rejected**: refused
+  (`session_rejected`), answered HTTP/1.1 (`http2_required`), answered the other
+  mode (`mode_mismatch`), or answered a Ready this core cannot read
+  (`protocol_mismatch`). `failureState` maps the whole set to `rejected`
+  regardless of whether the receiver was reached before.
+- A receiver's own `5xx` is its transient error (`receiver_error`) and stays the
+  retrying `disconnected` state.
+- A destination the outbound policy refused before any dial
+  (`destination_not_allowed`) is **unavailable**, not a retry: it is a settled
+  local configuration fact.
+- Unchanged: a receiver that has never answered is `unreachable` (DNS, TLS, a
+  refused connection, and every timeout), and one that was reached and dropped is
+  `disconnected`.
+- All four status surfaces follow the state so they cannot disagree: the Antler
+  status dialog rows, the server-rendered setup panel, the account Remote MX pill
+  (previously "connecting" for every non-ready state), and the installation
+  Direct MX panel. Each refusal reason gets its own operator-facing phrase, and a
+  `ready` row whose authorization window has closed reads as expired rather than
+  as an authorization still in progress.
+
+**Reason:** "Reconnecting" is a claim that something is still in progress. A
+receiver that answers `404` is not reconnecting; it is incompatible, and only the
+operator can fix it. Retrying is still correct — a redeployed receiver recovers
+without a core restart — so the fix is the reported state, not the loop. One
+message covers every refused code because at this layer a `401` (a proxy in front
+of the receiver) and a `404` (an older build) are both "the receiver is not
+serving this core", not a credential the operator edits in MailMoose.
+
+**Complexity:** One classification function, one error type carrying the HTTP
+status, three reason tokens and the state mapping in `mxdial`; label and mapping
+updates on the four status surfaces. No new dependency, schema, migration, config
+or behaviour: nothing gates delivery, auth or the retry loop on these states.
+
+## D135 — The public database baseline replaces the pre-release migration lineage
+
+**Historical note:** D136 retires the completed one-time converter, maintenance
+image and transition guide. The public baseline and versioned runner remain.
+
+**Requirement:** Cut the pre-beta consolidation before the public beta. The
+database had grown to 80 migrations; several carried tables, columns and indexes
+that were retired during development but were still physically present, and the
+live schema could not be described by a single owned baseline. The change must
+not lose stored mail, credentials or configuration, and must not be an
+implicit, half-applied upgrade an operator only discovers at startup.
+
+**Decision:**
+
+- **One owned public baseline.** `internal/dbschema` owns the complete schema
+  as `baseline.sql`, applied as the single migration `001` in one serializable
+  transaction, recorded in `schema_migrations` and marked by
+  `PRAGMA user_version=1`. `Format = 1` distinguishes the public `001` from the
+  historical pre-release `001`. The package pins a fingerprint of the whole DDL
+  (including FTS5 shadow structures) and validates a database against it before
+  use; drift is refused, never repaired.
+- **The historical runner is removed.** The per-migration constants, detector
+  runner and the `internal/store/schema.go` / `migrate*.go` code are deleted;
+  `internal/store` calls `dbschema.Migrate` on its pinned writer connection.
+  Provider runtime code that was reached from those files is preserved.
+  Supersedes D046.
+- **Retired objects are dropped from the public schema:** the legacy
+  `api_keys`, `api_key_mailbox_roles` and `hermes_connections` tables (the
+  `clients` family replaced them at migration 032 — supersedes the "retained and
+  dual-written" part of D062), the obsolete `idx_inboxes_id_account` index, and
+  the private handoff columns `notification_status` /
+  `notification_message_id` on `assistant_handling_requests`.
+- **`inboxes.storage_used_bytes` is `NOT NULL DEFAULT 0`.** Conversion
+  materialises only the counters that are `NULL`, using the frozen `080`
+  accounting (messages, drafts, draft attachments, remote metadata rows,
+  remote folders and labels) so a converted inbox reports the same usage the old build
+  would have, then rebuilds `inboxes` with `NOT NULL` and preserves every other
+  column.
+- **Conversion is explicit and offline.** A separate utility,
+  `cmd/prerelease-rebaseline` (packaged with `--target prerelease-rebaseline`,
+  never copied into the normal runtime image), takes exactly one of `--check` or
+  `--apply` and an existing `--data-dir` (default `/data`). It requires the
+  exact pre-release markers `001`–`080` plus the captured `080` structural
+  fingerprint, and refuses a non-Argon2id active password or live non-`v2`
+  ciphertext rather than migrating them; there is no support for arbitrary older
+  chains. `--apply` is fully transactional: it disables foreign keys outside
+  the `BEGIN IMMEDIATE`, restores them, and validates schema, integrity and
+  foreign keys before committing. It leaves FTS untouched and retains all active
+  ids, ciphertext, roles, events, event sequence and mail files. An
+  already-converted database is validated and left alone by both modes. The
+  utility reads no encryption key, changes no mail-content/key files and does
+  no network, sweep or environment-import work. Operator procedure, backup and rollback live in
+  `docs/PRERELEASE_TRANSITION.md`.
+- **The core's MX environment import is removed.** The persisted `mx_settings`
+  row is the sole authoritative receiver configuration; the legacy `MX_ENABLE`,
+  `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and `MX_*` SMTP tunables are no longer
+  imported or validated. Supersedes the import half of D071. The standalone
+  receiver's own environment and the active MX receipt retention are unchanged.
+- **Compatibility that stays.** The public API aliases and shapes (openagent
+  aliases, the notify authoring fields, flat labels/cursors, durable cleanup,
+  receiver signing secrets, uncertainty/idempotency handling and privacy
+  redaction) are retained.
+
+**Reason:** A single locked baseline makes the public schema describable, keeps
+the fingerprint meaningful, and turns a lineage change into a deliberate offline
+action instead of a startup surprise. Dropping the retired objects removes the
+historical migration and redundant credential-persistence baggage.
+
+**Complexity:** One schema package with a baseline, a small offline utility, and
+deletion of the historical runner and the retired tables. No new dependency,
+runtime service or infrastructure.
+
+## D136 — Retire the completed developer database transition
+
+**Requirement:** The operator confirms every existing installation has completed
+the public-baseline transition. The first public beta must not carry migration
+tooling for development databases that no longer need support.
+
+**Decision:** Remove `cmd/prerelease-rebaseline`, `internal/prerelease`, their
+Docker build/image target, the historical schema fixture and the active
+transition guide. Preserve fresh initialization, restart/data-integrity and mail
+workflow coverage under `tests/unit/dbschema`, plus unsupported-schema rejection
+and future public-migration rollback tests. Keep `internal/dbschema`, baseline
+`001`, lineage `1` and its schema fingerprint unchanged; this retirement does
+not migrate, rebuild or modify existing databases.
+
+**Recovery:** The retired converter and its operator instructions remain in Git
+at commit `6938358` for deliberate recovery of an old developer backup. They are
+not part of the supported public upgrade path. Normal `/data` and encryption-key
+backup/restore instructions remain in `docs/SELFHOSTING.md`.
+
+**Complexity:** Deletes completed maintenance code and packaging without adding
+dependencies, runtime options or services. Supersedes only D135's cutover tooling.
+
+## D137 — Published image names, and one edge image for both modes
+
+**Requirement:** A dev image published from the fork for pre-merge UAT must be
+pullable and must never be mistakeable for a release. Two Dockerfiles built the
+same edge binary under two names, so "which image do I run?" had three answers
+for one program.
+
+**Decision:** Two published images.
+
+- `mailmoose` — the core, built from `Dockerfile`.
+- `mailmoose-remote-mx` — the edge, built from `dialmx/Dockerfile`. One image
+  serves both `DIALMX_MODE=shared` (DNS TXT domain proofs and TLS) and
+  `DIALMX_MODE=single` (a shared bearer key); the mode is a runtime setting, not
+  an image choice.
+
+The dev channel published from the fork carries a `dirty-wip-` prefix —
+`dirty-wip-mailmoose` and `dirty-wip-mailmoose-remote-mx` — so a dev image can
+never be mistaken for a release. Releases publish the unprefixed names.
+
+**Why:** `Dockerfile.mx` and `dialmx/Dockerfile` differed only in the
+in-container binary filename (`mailmoose-mx` vs `mailmoose-dialmx`) and their
+comments; every other line — base image, `CGO_ENABLED=0`, non-root uid,
+exposed ports — was identical. Publishing both meant two packages that install
+the same program. `Dockerfile.mx` and the third published image named after the
+standalone receiver are retired.
+
+**Unchanged:** the embedded `mailmoose-mx` binary name (`internal/launcher`),
+the `_mailmoose-mx.<domain>` TXT proof record, the `mailmoose-mx-v1` session
+transcript separator and the `mailmoose-mx/1` Authentication-Results evaluator
+are protocol, DNS and in-image names, not published image names.
+
+**Complexity:** Renames published artifacts, deletes one duplicate Dockerfile
+and collapses two registry packages into one. No Go behaviour change, no new
+dependency, no new service, no new runtime option.
+
+## D138 — Relay replies carry their trigger; slow handlers heartbeat; remote metadata accounting is incremental
+
+**Decision:** Three related reliability changes.
+
+- A relay `outbound` action may carry `reply_to_message_id`, the exact local
+  message or remote arrival id that triggered the agent. The server resolves a
+  remote id through the same `RemoteMessages.ResolveRemoteReply` path a REST
+  reply uses, preserving RFC `In-Reply-To`/`References`, inbox permissions and
+  assistant approval. A local thread id still resolves exactly as before; an
+  omitted field keeps the old local-thread lookup for older gateways.
+- An inbound handler may send `inbound_processing` heartbeats every 20 seconds.
+  A matching heartbeat extends that event's 60-second acknowledgement window,
+  but never past a fixed 30-minute processing lease. Heartbeats never advance
+  the durable cursor; the OpenClaw plugin deduplicates by `bufferId` in memory
+  and remembers completed ids briefly so a completion during a reconnect is
+  acknowledged without a second agent turn.
+- Remote metadata counters move by the exact per-row byte delta on individual
+  inserts, updates, deletes, moves, label changes and thread merges. Batch index
+  and folder passes accumulate their deltas once per transaction.
+  `Store.RemoteMetadataBytes` remains the authoritative check, and the existing
+  full-scan reconcile stays for bulk operations and repair.
+
+**Why:** A remote event used the RFC Message-ID as a local thread id, so relay
+replies to connected mailboxes failed. A handler slower than one minute was
+disconnected and replayed unnecessarily. Every small remote update summed the
+whole mailbox's metadata twice, so a burst of arrivals became quadratic while
+holding the single SQLite writer.
+
+**Unchanged:** at-least-once delivery and durable-cursor semantics; local mail
+reply behaviour; the local-thread protocol fields; storage quotas, cap
+admission and thread-merge rules. Exactly-once execution after a client crash
+is not promised.
+
+## D139 — Relay replies resolve the wire form a stock Hermes gateway sends
+
+**Decision:** The relay reply path accepts the identifiers an unmodified Hermes
+gateway can send.
+
+- A message is resolved in this order: the local thread (unchanged for local
+  mail), an explicit `reply_to_message_id`, the conversation id itself as a
+  local message id, then as a remote message. A remote id may be a metadata id,
+  an arrival id, or an RFC Message-ID (the form a Hermes gateway sends as
+  `chat_id`); the last is matched newest-first within the account.
+- A resolved relay reply with no local thread classifies an unclassified remote
+  message as incoming and answers its sender. An outbound (Sent) message keeps
+  its stored recipients. REST reply behaviour is unchanged.
+- A relayed connected-mailbox event carries a short plain-text preview of the
+  message body. It reuses the cached snippet when one exists and otherwise
+  fetches a bounded preview once (then caches it); failure or timeout leaves
+  the metadata-only placeholder. Mail bodies are never archived.
+
+**Why:** Hermes is used out of the box and cannot be changed to send an
+explicit reply target. Without this, every reply to a connected-mailbox email
+failed, and the gateway stored remote notifications with an empty body.
+
+**Unchanged:** no gateway change is required, local replies keep their
+existing lookup, and the inbox boundary check still applies to every resolved
+target. A notification whose RFC Message-ID is not in the cache yet still
+cannot be answered by that gateway, which sees the failure as before.
+
+## D140 — Email approval binds to the message From, not the provider envelope
+
+**Context:** A nominated approver replying to an approval-request email through an
+ESP (for example Brevo) is received and token-matched, but the ESP rewrites the
+SMTP envelope sender to its own bounce address. The approval handler required both
+`transport.InboundMessage.EnvelopeFrom` and the MIME `From:` to equal the stored
+approver (`D029`), so the reply was consumed and recorded `invalid` with no
+decision. The pending request stayed open and neither party was told.
+
+**Decision:** A webhook approval decision binds to the message's RFC 5322 `From:`
+address plus the live single-use token. The transport envelope sender is still
+persisted, forwarded and logged as relay metadata, but it is no longer an
+approval input. The sender check fails closed on an empty or non-matching `From:`.
+The MX edge keeps its trusted SPF/DKIM/DMARC `authenticated` gate, and the
+standalone path already matched `From:` only (`D097`).
+
+**Reason:** The envelope comparison never authenticated the sender: it is
+caller-asserted on Mailgun, Cloudflare and Postmark and only Resend-signed for
+Resend (`D058`/`D059`/`D133`), so comparing it with `From:` compared the same
+asserted identity twice. Requiring it rejected legitimate replies from ESPs that
+rewrite bounce senders while adding no protection beyond the token. The remaining
+exposure is unchanged: the correct live 128-bit token is still required, and the
+decision is bound to the frozen draft content.
+
+**Feedback:** The pending-request card and the draft review page show the newest
+invalid reply's action, reason and time from `inbound_control_messages`; the
+per-domain receiving log already recorded it. No outbound bounce is sent, because
+the rejected sender may be forged and replying would be backscatter.
+
+**Supersedes:** `D029` in part — its envelope-equality requirement only. The
+token, nominated-approver, expiry and content-fingerprint binding stand.
+
+**Complexity:** One condition removed from the control handler, one indexed store
+read and two UI lines. No schema, dependency or runtime service change.
+
+## D141 — Only a trusted proxy passes a relay upgrade through the HTTPS redirect
+
+**Context:** A connector behind Traefik reached the relay over HTTPS, but the
+proxy omits `X-Forwarded-Proto` on WebSocket upgrade requests. `httpsRedirect`
+then saw plaintext and answered `GET /relay` with a 308 to the canonical
+`https://` origin. A WebSocket client cannot follow that redirect, so the relay
+failed as `InvalidURI` / "scheme isn't ws or wss". The first fix exempted both
+`/relay` and `/relay/enroll` from the redirect for every caller and method.
+
+**Decision:** `httpsRedirect` skips the redirect only for `GET /relay` when the
+request carries a real WebSocket upgrade (`Upgrade: websocket` plus a
+`Connection: upgrade` token, the same two-header test gorilla/websocket
+applies) **and** the caller is trusted (`TRUSTED_PROXIES` matched, or the app
+itself terminated TLS, which already passes earlier). No other path or method is
+exempt: `POST /relay/enroll` is redirected whenever the scheme is unproven.
+
+**Reason:** The enrollment POST mints a new relay secret and returns it in the
+response body, and the default `docker-compose.yml` publishes
+`0.0.0.0:8081`. Exempting it meant an operator who mistakenly exposed that port
+could have a relay credential issued over cleartext with `FORCE_HTTPS=true`,
+which is exactly the misconfiguration the redirect is a net for. A WebSocket
+dial, by contrast, is the one request shape that can never benefit from a scheme
+redirect, carries no secret in its response, and is authenticated by a signed,
+expiring upgrade token. Gating on the trust set is free rather than
+inconvenient: `FORCE_HTTPS=true` without a matchable `TRUSTED_PROXIES` already
+loops every request (`config.Load` refuses `TRUST_PROXY_HEADERS`), so no working
+deployment depends on the wider exception. A direct cleartext caller to an
+exposed port is not a trusted proxy and is still redirected, even for an
+upgrade.
+
+**Limit:** the redirect is defence in depth for enrollment, not a guarantee. The
+server reads the plaintext request body before it can answer; the 308 only
+ensures the new secret is never issued over cleartext. A relay pointed at
+`ws://` directly, bypassing its TLS front, needs `FORCE_HTTPS=false` rather than
+an exemption.
+
+**Complexity:** One predicate and one small header helper in
+`internal/httpapp/server.go`; covered by `TestForceHTTPSRelayPaths`. No schema,
+dependency or config-surface change.
+
+## D142 — Recognise Brevo attachment-extension rejections without retaining provider text
+
+**Context:** Cold UAT found that Brevo rejects `.md` attachments with HTTP 400,
+but the fixed diagnostic suggested checking recipients and sender verification.
+Copying provider error prose, even after truncation or regex redaction, could
+expose credentials, filenames or message content to logs and mailbox readers.
+
+**Decision (2026-10-20):** For Brevo HTTP 400 only, parse JSON error bodies of at
+most 4 KiB. An `invalid_parameter` error whose message identifies an attachment
+extension as invalid, unsupported or not allowed selects a fixed diagnostic:
+"provider rejected an attachment file extension; check Brevo's supported
+attachment types". Never copy the provider's message, code, filename, extension
+or other fields into the error. All other responses keep D088's existing safe
+fallbacks. The existing error propagation exposes this reason in send status,
+worker logs and the domain activity log.
+
+**Limit:** Unrecognised wording or response shapes keep the generic diagnostic.
+Extend recognition with a regression fixture if Brevo changes its response;
+do not fall back to echoing provider prose.
+
+**UAT follow-up (2026-10-20):** The initial fixtures were synthetic and missed
+Brevo's real response: `{"code":"invalid_parameter","message":"Unsupported file format: md"}`.
+Recognise the `Unsupported file format:` message prefix under the same Brevo,
+HTTP 400, `invalid_parameter` and body-size guards, without requiring the words
+"attachment" and "extension". Retain only the fixed diagnostic, never the
+suffix after the colon. The captured response is now an adapter/unit regression
+fixture; the end-to-end fixture uses the same wording with planted secrets to
+verify send-status, worker-log and domain-log safety. No format blocklist or
+proactive validation is introduced.
+
+**Compatibility:** Attachment validation, filenames, content, success handling,
+permanent-error classification and retries are unchanged. This is diagnostic
+classification only, not a general attachment restriction. No UI, API schema,
+dependency or runtime service change.

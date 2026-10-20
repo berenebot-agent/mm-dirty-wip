@@ -1,0 +1,43 @@
+{
+  "auth_header": "Bearer fixture-bearer-token",
+  "bearer_token": "fixture-bearer-token",
+  "body_base64": "RnJvbTogSW52b2ljZSBDbyA8YmlsbGluZythcEBvdXRzaWRlLnRlc3Q+DQpUbzogaGVybWVzQGV4YW1wbGUuY29tDQpTdWJqZWN0OiBJbnZvaWNlIElOVi0xDQpNZXNzYWdlLUlEOiA8Zml4dHVyZUB0ZXN0Pg0KRGF0ZTogV2VkLCAzMCBTZXAgMjAyNiAxNTozMjoyNiArMDAwMA0KDQpzeW50aGV0aWMgZml4dHVyZSBib2R5",
+  "content_type": "message/rfc822",
+  "headers": {
+    "Accept-Encoding": [
+      "gzip"
+    ],
+    "Authorization": [
+      "Bearer fixture-bearer-token"
+    ],
+    "Content-Length": [
+      "183"
+    ],
+    "Content-Type": [
+      "message/rfc822"
+    ],
+    "User-Agent": [
+      "Go-http-client/1.1"
+    ],
+    "X-Mailmoose-Cursor": [
+      "evt_1"
+    ],
+    "X-Mailmoose-Delivery": [
+      "whk_06gf5wgmacg23mm691p9x9c7vm:evt_1"
+    ],
+    "X-Mailmoose-Envelope-From": [
+      "Invoice%20%2B%20Co%20%3Cbilling%2Bap%40outside.test%3E"
+    ],
+    "X-Mailmoose-Envelope-To": [
+      "hermes%40example.com"
+    ],
+    "X-Mailmoose-Event": [
+      "message.received"
+    ],
+    "X-Mailmoose-Message-Id": [
+      "msg_06gf5wgmab1q22qapt12q1f054"
+    ]
+  },
+  "method": "POST",
+  "note": "synthetic MailMoose forward webhook request; do not use as live data"
+}

@@ -1,0 +1,69 @@
+{
+  "id": "mailmoose",
+  "name": "MailMoose",
+  "description": "Email inbox connector for OpenClaw through a MailMoose relay.",
+  "channels": ["mailmoose"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "mailmoose": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["baseUrl", "gatewayId", "secret"],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string",
+            "description": "MailMoose base URL"
+          },
+          "gatewayId": {
+            "type": "string",
+            "description": "Connector gateway id"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Relay authentication secret"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional OpenClaw-side sender allowlist. MailMoose inbox allowlists are the primary gate."
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["allowlist", "open", "pairing"],
+            "default": "allowlist"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Optional agent id to route this inbox to"
+          }
+        }
+      },
+      "uiHints": {
+        "baseUrl": {
+          "label": "MailMoose URL"
+        },
+        "gatewayId": {
+          "label": "Gateway ID"
+        },
+        "secret": {
+          "label": "Relay secret",
+          "sensitive": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+/data/
+.env*
+!dialmx/.env.example
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.exe
+*.test
+*.prof
+.DS_Store
+tests/logs/
+# Built on demand by `make build` (go build ./cmd/server writes ./server when
+# run via the Docker wrapper; lands root-owned in the working tree).
+/server
+# Built on demand by `make mx-fixture` (used by the launcher RSS test).
+tests/fixtures/mailmoose-mx
+repo.zip
+# Scratch/agent working files (ad-hoc test harnesses, probe results). Never
+# committed: they carry live mailbox addresses, inbox identifiers and message
+# ids from real runs.
+.hermes-tmp/
+# The throwaway Strix scan harness mints live keys into this file. Its data dir
+# is already covered by the *.db rules above; the harness scripts themselves are
+# ordinary tooling and stay committable.
+tests/strix/accounts.txt
