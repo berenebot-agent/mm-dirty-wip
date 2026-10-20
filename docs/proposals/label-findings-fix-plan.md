@@ -309,7 +309,7 @@ store errors (`ErrNotFound` → "the destination folder could not be found").
 
 ## Evidence
 
-Repo: `/home/ben/projects/mailmoose/repo` (HEAD `27a7a4e`). Scratch harness (gitignored,
+Repo: `/home/ben/projects/mailmoose/repo` (HEAD `e975514`). Scratch harness (gitignored,
 `.hermes-tmp/`): `label_suite.py`, `labels_revert_folder_move.py`, `label_suite_results.json`.
 
 Key anchors:
