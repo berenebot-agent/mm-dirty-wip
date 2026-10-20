@@ -56,6 +56,29 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
+	guide := regexp.MustCompile(`(?s)<ol class="steps" id="key-hermes-guide" hidden>(.*?)</ol>`).FindString(body)
+	for _, want := range []string{
+		"Before the first message:",
+		"same <code>.env</code>",
+		"EMAIL_HOME_ADDRESS=you@yourdomain.com\nEMAIL_HOME_ADDRESS_NAME=Your Agent Name",
+		"~/.hermes/config.yaml",
+		"merge into any existing <code>display</code> section",
+		"Hermes v0.22.2 requires the global settings",
+		"display:\n  memory_notifications: off\n  suppress_warning_notifications: true",
+		"reloads <code>.env</code> and <code>config.yaml</code>",
+		"normal idle reconnects",
+		"The first reply should contain only the answer",
+		"“Learned” is OpenClaw-side, not fixed by Hermes settings",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Fatalf("Hermes guide missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"notice_delivery", "platforms.email.memory_notifications", "/sethome"} {
+		if strings.Contains(guide, unwanted) {
+			t.Fatalf("Hermes guide contains unsupported remedy %q", unwanted)
+		}
+	}
 	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`, `id="key-openclaw-alpha"`, `id="key-hermes-guide"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
