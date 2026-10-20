@@ -26,6 +26,8 @@ MailMoose serves the web UI and API on port `8081`. Put an HTTPS reverse proxy i
 
 The copy buttons in the interface (secrets, DNS records, webhook URLs) need a secure context: a browser only exposes the clipboard API over HTTPS or on `localhost`. On a plain-HTTP origin the interface hides those buttons rather than offering a copy that cannot work — select the value and copy it by hand, or serve the interface over HTTPS.
 
+Passkeys (sign in with Touch ID, Windows Hello, or a security key) need the same secure context: a browser only runs a WebAuthn ceremony over HTTPS or on `localhost`. On a plain-HTTP origin the interface hides the passkey controls rather than offering a sign-in the browser would refuse.
+
 | Port | Purpose |
 | --- | --- |
 | `8081` | Web interface, REST API and agent connections |
