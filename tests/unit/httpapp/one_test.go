@@ -404,6 +404,10 @@ func TestOneImportScreenIsAddOnlyWithNoDeadEnds(t *testing.T) {
 	// connection this inbox was imported from.
 	f.Change(func(f *onefixture.Fixture) {
 		f.Keys = append(f.Keys, "fixture-rotated-key")
+		// The import above scheduled an index refresh that may still be in
+		// flight with the original key, so retiring the connection from
+		// discovery must not fail that request.
+		f.RetiredKeys = []string{onefixture.Selector}
 		f.Connections = []map[string]any{
 			{"id": "fixture-other-connection", "key": "fixture-other-selector", "platform": "gmail", "active": true, "state": "operational", "environment": "live", "identity": "opaque-not-an-email"},
 		}
