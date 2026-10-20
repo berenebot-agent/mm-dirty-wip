@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The inbox **Connectors** tab now distinguishes relay connectors that have
+  **Never connected** from ones with a **Last connected** timestamp, without
+  claiming live online status. Unredeemed, unexpired OpenClaw setup codes appear
+  separately under **Pending setup codes**, with an expiry time and **Cancel
+  setup** action that invalidates the code. Existing connector deletion remains
+  available for abandoned manual setups.
+
 - A queue row now names the mailbox it came from. The header **Queue** popup
   lists the account's whole mailbox set, so a row for an action in one mailbox
   read the same as a row for another; each row now carries the inbox's name

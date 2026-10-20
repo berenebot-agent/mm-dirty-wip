@@ -723,13 +723,14 @@ type pageData struct {
 	SendingPausedURL      string
 	// InboxOpenID, when set, is the inbox whose edit dialog the dashboard should
 	// reopen on load. InboxOpenTab selects the section.
-	InboxOpenID     string
-	InboxOpenTab    string
-	InboxOpenAlias  string
-	Inboxes         []model.Inbox
-	Messages        []model.Message
-	Credentials     []credentialView
-	InboxConnectors map[string][]credentialView
+	InboxOpenID        string
+	InboxOpenTab       string
+	InboxOpenAlias     string
+	Inboxes            []model.Inbox
+	Messages           []model.Message
+	Credentials        []credentialView
+	InboxConnectors    map[string][]credentialView
+	PendingRelaySetups []store.PendingRelaySetup
 	// AccessGrants maps an inbox id to the secret-free Clients & Access payload
 	// (API keys, mailbox users, pending invites) embedded on its edit button.
 	AccessGrants map[string]string
@@ -925,6 +926,7 @@ type fromOption struct {
 
 type credentialView struct {
 	ID, Kind, Name, Type, Scope, RolesJSON, InboxID, Role string
+	LastConnectedAt                                       *time.Time
 	URL, Mode, AuthMode                                   string
 	// DomainSendJSON is a JSON array of inbox ids (a domain's catch-all) that
 	// hold the key's live domain-wide sending grant, for the edit dialog.
@@ -2030,6 +2032,8 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
   {{if .DomainCredentialSecret}}<dialog id="domain-credential-dialog" class="domain-dialog" data-open="1"><h2>{{.DomainCredentialTitle}}</h2><p class="muted">{{.DomainCredentialInstructions}}</p><ol class="steps"><li>In Postmark, select your Server → Inbound Message Stream → Settings.</li><li>Set the Inbound Domain to this receiving domain. Enable Include raw email content in JSON payload.</li><li>Paste this authenticated URL into the Webhook field. It includes the generated username and password and is shown only once.<div class="setup-url-row"><pre id="domain-credential-url">{{.DomainCredentialWebhookURL}}</pre><button type="button" class="secondary icon-btn" id="domain-credential-copy" title="Copy webhook URL" aria-label="Copy webhook URL">{{copyIcon}}</button></div></li><li>Save the settings in Postmark. Enable SMTP in the Server settings as required for inbound domain forwarding.</li><li>Publish an MX record for the receiving domain pointing to inbound.postmarkapp.com with priority 10. Changing MX records redirects incoming mail; do not replace an existing mail service unintentionally.</li><li>Send a test email to an inbox on this domain and confirm it arrives in MailMoose.</li></ol><p class="muted small">Treat this URL as a password. If lost, regenerate the secret from Receiving; old credentials stop working immediately.</p><div class="dialog-actions"><button type="button" class="btn" data-close-dialog>Done</button></div></dialog>{{end}}
   {{if .DKIMPrivateKey}}<dialog id="dkim-key-dialog" class="domain-dialog" data-open="1"><h2>DKIM private key</h2><p class="muted">This is the key MailMoose signs mail for this domain with. It is shown only now; keep a copy somewhere safe if you want a backup. Do not publish it.</p><div class="secret"><pre id="dkim-private-key">{{.DKIMPrivateKey}}</pre></div><div class="dialog-actions"><button type="button" class="secondary" id="dkim-key-copy">Copy key</button><button type="button" class="btn" data-close-dialog>Done</button></div></dialog>{{end}}
 <div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>
+<template id="pending-relay-setups">{{range .PendingRelaySetups}}<div class="connector-row" data-inbox="{{.InboxID}}" data-expires="{{.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}"><div class="connector-row-main"><div class="connector-row-name">{{.Name}}</div><div class="connector-row-meta">OpenClaw · Pending enrollment · Expires {{localDateTime .ExpiresAt}}</div></div><button type="submit" form="cancel-relay-{{.ID}}" class="secondary btn-sm danger">Cancel setup</button></div>{{end}}</template>
+{{range .PendingRelaySetups}}<form hidden id="cancel-relay-{{.ID}}" method="post" action="/ui/openclaw/setup/{{.ID}}/cancel"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="inbox" value="{{.InboxID}}"></form>{{end}}
 <div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}" data-open-inbox-tab="{{.InboxOpenTab}}" data-open-alias="{{.InboxOpenAlias}}" data-access-members="{{.AccessMembersJSON}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions">{{if or (eq .Kind "webhook") (eq .Kind "hermes") (eq .Kind "openclaw")}}<a class="btn secondary icon-btn" href="/ui/clients/{{.ID}}/log" title="Delivery log" aria-label="Delivery log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3.5h10M3 7h10M3 10.5h7"/><path d="M12 14h1M3 14h6"/></svg></a>{{end}}<button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-domainsend="{{.DomainSendJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" data-url="{{.URL}}" data-mode="{{.Mode}}" data-auth="{{.AuthMode}}" title="Client settings" aria-label="Client settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><button type="button" class="secondary icon-btn danger open-delete-client" data-kind="{{if eq .Kind "hermes"}}hermes{{else if eq .Kind "openclaw"}}openclaw{{else if eq .Kind "webhook"}}webhooks{{else}}keys{{end}}" data-id="{{.ID}}" data-name="{{.Name}}" data-type="{{.Type}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<div class="table-wrap"><table class="domains-table"><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody data-domain-rows>{{range .Domains}}{{$d := .}}<tr data-domain-id="{{.ID}}"><td><b>{{.Name}}</b>{{if .ParentDomainID}} <span class="subdomain-tag" title="Subdomain of {{.ParentDomain}}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 4.6 7h1.8L4 10.6h8L9.6 7h1.8L8 2.2Z"/><path d="M8 10.6V14"/><path d="M5.8 14h4.4"/></svg></span>{{end}}</td><td>{{if .CatchAllInboxID}}<button type="button" class="cell-link domain-catchall-link open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall" title="{{index $.InboxAddr .CatchAllInboxID}}">{{index $.InboxAddr .CatchAllInboxID}}</button>{{else}}<button type="button" class="secondary btn-sm cell-edit domain-catchall-add open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall">Add</button>{{end}}</td><td><button type="button" class="{{if .SendingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="sending" data-sending-button>{{with index $.DomainSendingLight .ID}}<span class="dns-light {{.Light}}" data-sending-light title="{{.Title}}" aria-label="{{.Title}}"></span> {{end}}{{if .SendingProvider}}{{if .SendingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainSendingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><button type="button" class="{{if .ReceivingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="receiving" data-receiving-button>{{with index $.DialMXSetup .ID}}{{if .Light}}<span class="dns-light {{.Light}}" data-receiving-light title="{{.LightTitle}}" aria-label="{{.LightTitle}}"></span>{{end}}{{end}}{{if .ReceivingProvider}}{{if .ReceivingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainReceivingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><span class="domain-actions"><a class="btn secondary icon-btn" href="/ui/domains/{{.ID}}/sending/deliveries" title="Activity log" aria-label="Activity log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M5 5.5h6M5 8.5h6M5 11.5h4"/></svg></a><button type="button" class="secondary icon-btn danger open-delete-domain" data-domain="{{.ID}}" data-name="{{.Name}}" data-inboxes="{{inboxesJSON (index $.DomainInboxes .ID)}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></span></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">Add your first domain.</p>{{end}}</section></div>
@@ -2599,7 +2603,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	// External sending aliases have been removed; no alias dialogs are built.
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Page: "dashboard", ShowOneReconnect: true, Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, InboxReceivingReady: inboxReceivingReady, InboxConn: inboxConn, StandaloneInboxes: standaloneInboxes, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingMX: sendingMX, DomainSendingLight: sendingLight, DomainSendingDKIM: sendingDKIM, DomainSendingDKIMRevealURL: sendingDKIMRevealURL, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, RemoteMXSetup: remoteMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainCredentialTitle: credentialTitle, DomainCredentialInstructions: credentialInstructions, DomainCredentialWebhookURL: credentialWebhookURL, DomainCredentialSecret: credentialSecret, DKIMPrivateKey: dkimPrivateKey, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, AccessGrants: accessGrants, AuthoringSettingsJSON: authoringSettings, InboxRemoteConfig: inboxRemoteConfig, AccessMembersJSON: accessMembersJSON(members), CatchAllInboxes: catchAllInboxes, DomainCatchAllInbox: domainCatchAllInbox, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret, Error: dashboardError})
+	pendingSetups, err := s.Service.Store.ListPendingRelaySetups(ctx, p.AccountID)
+	if err != nil {
+		s.uiError(w, err, http.StatusInternalServerError)
+		return
+	}
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Page: "dashboard", ShowOneReconnect: true, Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, InboxReceivingReady: inboxReceivingReady, InboxConn: inboxConn, StandaloneInboxes: standaloneInboxes, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingMX: sendingMX, DomainSendingLight: sendingLight, DomainSendingDKIM: sendingDKIM, DomainSendingDKIMRevealURL: sendingDKIMRevealURL, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, RemoteMXSetup: remoteMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainCredentialTitle: credentialTitle, DomainCredentialInstructions: credentialInstructions, DomainCredentialWebhookURL: credentialWebhookURL, DomainCredentialSecret: credentialSecret, DKIMPrivateKey: dkimPrivateKey, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, PendingRelaySetups: pendingSetups, AccessGrants: accessGrants, AuthoringSettingsJSON: authoringSettings, InboxRemoteConfig: inboxRemoteConfig, AccessMembersJSON: accessMembersJSON(members), CatchAllInboxes: catchAllInboxes, DomainCatchAllInbox: domainCatchAllInbox, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret, Error: dashboardError})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -3942,6 +3951,19 @@ func (s *Server) uiDeleteHermes(w http.ResponseWriter, r *http.Request) {
 	connectorSettingsRedirect(w, r, "Connection deleted")
 }
 
+func (s *Server) uiCancelRelaySetup(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", http.StatusForbidden)
+		return
+	}
+	if err := s.Service.Store.CancelRelaySetup(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	connectorSettingsRedirect(w, r, "Setup cancelled")
+}
+
 // cloudflareWorkerCode renders the embedded Worker template with the given
 // base URL and generated shared secret.
 func (s *Server) cloudflareWorkerCode(baseURL, secret string) string {
@@ -4016,7 +4038,7 @@ func credentialViews(keys []model.APIKey, conns []store.HermesConnection, webhoo
 		} else {
 			kind = "hermes"
 		}
-		out = append(out, credentialView{ID: h.ID, Kind: kind, Name: h.Name, Type: typ, Scope: scope, InboxID: h.InboxID, Role: role, Enabled: true})
+		out = append(out, credentialView{ID: h.ID, Kind: kind, Name: h.Name, Type: typ, Scope: scope, InboxID: h.InboxID, Role: role, Enabled: true, LastConnectedAt: h.LastConnectedAt})
 	}
 	for _, wh := range webhooks {
 		state := "Active"

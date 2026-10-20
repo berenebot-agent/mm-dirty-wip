@@ -67,6 +67,15 @@ GATEWAY_RELAY_PLATFORMS=email
 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true
 ```
 
+The inbox's **Connectors** tab shows **Never connected** until a relay first
+connects, then **Last connected** with the time its WebSocket connection was
+established. This is connection history, not live online status or proof that
+mail was handled successfully; use the delivery log for delivery outcomes.
+The same history is shown for OpenClaw connectors. Abandoned manual setups can
+be removed with the existing **Delete** action. If the one-time credentials are
+lost, delete the connector and add a new one; update the gateway configuration
+with the replacement credentials.
+
 Hermes Relay receives and replies to existing threads. It cannot start a new outbound email over the relay. Use `/v1/send` with an API key for that.
 
 ## OpenClaw
@@ -92,6 +101,19 @@ openclaw channels add --channel mailmoose --code https://mail.example.com/#<one-
 ```
 
 The plugin must be installed first. The code is single-use and expires after 15 minutes. The setup screen also offers a manual configuration block.
+
+Generating a one-time code does not create a delivery connector until the host
+redeems it. Unredeemed, unexpired codes appear under **Pending setup codes** in
+that inbox's **Connectors** tab, with their name and expiry time. **Cancel setup**
+invalidates the code immediately. Pending codes have no delivery log and do not
+count as connectors for delivery-triggered automatic actions. After redemption,
+the pending entry is replaced by the actual connector, which may still show
+**Never connected** until the gateway opens its relay connection. Refresh the
+page to see changes made by the gateway.
+
+Expired codes no longer appear in the pending list and cannot be redeemed. If a
+code expires or is lost, generate a new one with **Add Connector → OpenClaw →
+One-time code**; cancel any previous, still-valid code you no longer need.
 
 OpenClaw receives mail and replies using the same relay transport as Hermes, with its own connector identity and delivery log.
 
