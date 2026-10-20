@@ -639,12 +639,18 @@
     kind.textContent = kindText(a);
     var meta = document.createElement('span');
     meta.className = 'aq-meta';
-    meta.textContent = a.error || shortID(a.message_id);
+    var detail = a.error || shortID(a.message_id);
     if (!a.error && a.empty_trash) {
-      meta.textContent = a.empty_trash.phase === 'discovering'
+      detail = a.empty_trash.phase === 'discovering'
         ? 'Finding messages… (' + fmtCount(a.empty_trash.total) + ' found)'
         : fmtCount(a.empty_trash.purged) + ' of ' + fmtCount(a.empty_trash.total) + ' purged';
     }
+    // The queue is account-wide, so a row names the mailbox it came from. The
+    // name rides the detail line rather than taking a line of its own.
+    var parts = [];
+    if (a.inbox_name) { parts.push(a.inbox_name); }
+    if (detail) { parts.push(detail); }
+    meta.textContent = parts.join(' · ');
     if (!meta.textContent) { meta.hidden = true; }
     main.append(kind, meta);
     var state = document.createElement('span');

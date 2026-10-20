@@ -405,6 +405,9 @@ The same queue is available through `GET /v1/actions` and `GET /v1/actions/{id}`
 `{"action":"dismiss"}` for settled jobs. These controls require Assistant or
 Owner and are the same core operations the human queue panel uses.
 States are `pending`, `running`, `done`, `failed`, or `ambiguous`.
+Each action also carries `inbox_name`: the display name of the mailbox it
+belongs to, or that mailbox's address when it has no name. The queue spans the
+account's whole mailbox set, so the name places a row.
 
 The queue list also includes a read-only `syncs` array for visible standalone
 inboxes with unsettled metadata sync. Each entry has `inbox_id`, `name`, `address`,
