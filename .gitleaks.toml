@@ -1,0 +1,23 @@
+# MailMoose gitleaks config.
+# Extends the bundled gitleaks default rules (see [extend].use_default),
+# then allowlists specific historical commits that were reviewed and found to
+# contain only test fixtures or documentation prose -- never live credentials.
+# New code is covered by the default rules; do not append new test secrets to
+# these commits (commits are immutable).
+title = "mailmoose"
+[extend]
+use_default = true
+[allowlist]
+description = "reviewed historical findings (test fixtures / docs)"
+commits = [
+    "01346266d8a86d4cd1256c2e6c3068311d9bcb25", # docker-compose.strix-throwaway.yml placeholder
+    "05a6644e7279db7cfcb3c91488f78c611abae8c8", # dkimsign_test.go ed25519 reject fixture
+    "55c3bde487d592edf95f32c14fe4bc82627110b7", # lifecycle_logging_test.go test key
+    "584eb37ca9cbee2526a0a53e4956d7934e3e8703", # dkimsign_test.go public-key fixture
+    "6938358010e2f54b2896ace2a64348b1c548be0f", # docs/DECISIONS.md prose
+    "76e3bdf637d7155d87a959e77cd76767a36279f6", # README.md example env
+    "8cb33efd51f2c8c595e0cf6241dfd733d0d2cc7e", # keyfile_test.go test key
+    "9ba1b03f13e9277f23fd74d7c76959b2aa2f535b", # crypto_test.go base64 fixture
+    "a897206f08789bc5c5c7901d40dad2fee50402cc", # mx_test / httpapp / config_test fixtures
+    "bd16c40f7cf8b3b29ba82a54601a4dc6285c170d", # ws_test.go RFC6455 example key
+]
