@@ -12,7 +12,7 @@ Bring your own email providers, connect AI agents or applications, and control e
 
 [Quickstart](#quickstart) · [Receiving providers](#receive-email-your-way) · [Agent connectors](#connect-your-agent) · [Documentation](#documentation)
 
-**Public beta** · v0.1.0-beta.1 · Open source · Self-hosted
+**Public beta** · Open source · Self-hosted
 
 [![CI](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
@@ -84,7 +84,9 @@ services:
       # and uncomment the next line, pasting the generated key.
       # APP_ENCRYPTION_KEY: "paste-generated-key-here"
 
-      BASE_URL: "https://mail.example.com"
+      #Optional but strongly recommended to configure a proper URL behind reverse proxy.
+      #Many sender settings depend on this value - it must be real URL you use to access mailmoose.
+      #BASE_URL: "https://mail.example.com"
     volumes:
       - ./data:/data
     ports:
