@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+All notable changes to MailMoose are documented in this file. The format is
+based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
+project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
+
+## [Unreleased]
+
+## [0.1.0-beta.1] - 2026-10-20
+
+First public beta. MailMoose is one self-hosted container for email you own:
+create inboxes on your own domains or connect existing mailboxes, then give
+agents and applications scoped access, with sending held for your approval or
+allowed directly for keys you trust. Behaviour may still change between beta
+releases.
 
 - Follow-up: recognise Brevo's real `Unsupported file format: md` response,
   which does not contain "attachment" or "extension". The safe diagnostic now
@@ -199,12 +211,6 @@
   notification email is ever sent (any previously queued handoff notification is
   retired), an ambiguous or failed append unfreezes the local draft, and
   switching a standalone inbox to remote-draft clears any approver.
-
-All notable changes to MailMoose are documented in this file. The format is
-based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
-project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
-
-## [Unreleased]
 
 ### Changed
 
@@ -1465,8 +1471,7 @@ standalone, and whether the approver is enabled for the effective mode. See
   discovery documents; only trusted proxies may assert `X-Forwarded-Proto`.
 - MX edge credentials are 256-bit.
 
-[Unreleased]: https://github.com/dellarb/mailmoose/commits/main
-# Google standalone inboxes
+### Google standalone inboxes
 
 - Added standalone provider selection with IMAP/SMTP, Google/Gmail and a
   Microsoft/Outlook coming-next choice.
@@ -1475,7 +1480,7 @@ standalone, and whether the approver is enabled for the effective mode. See
 - Added Gmail API operations, native labels and stable IDs, progressive metadata
   caching, History API updates, notification polling, sending and draft handoff.
 - Added Google setup documentation and deterministic transport/OAuth fixtures.
-# Durable mailbox action queue
+### Durable mailbox action queue
 
 - Domain and standalone message actions share async submission and `?wait=true`,
   matching send. Queued actions survive restart and execute in message order.
@@ -1485,3 +1490,6 @@ standalone, and whether the approver is enabled for the effective mode. See
 - Read/unread, labels, spam, trash, restore, bulk move and purge—including Empty
   Trash—use the shared action worker. Optimistic views preserve provider locators.
 - Existing clients expecting immediate mutations should add `?wait=true`.
+
+[Unreleased]: https://github.com/dellarb/mailmoose/compare/v0.1.0-beta.1...main
+[0.1.0-beta.1]: https://github.com/dellarb/mailmoose/releases/tag/v0.1.0-beta.1
