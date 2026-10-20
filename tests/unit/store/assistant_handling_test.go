@@ -3,12 +3,53 @@ package store_test
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
+
+func TestHandoffCursorIncludesEqualTimestamps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, _, boxes := testStore(t)
+	box := boxes[0]
+	p := assistant(box, u.AccountID)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		d, err := s.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Text: "body"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _, err := s.CreateAssistantHandling(ctx, p, store.AssistantHandlingInsert{DraftID: d.ID, InboxID: box.ID, Mode: model.AuthoringRemoteDraft, ContentHash: "hash", HandoffID: d.ID, MessageID: "<" + d.ID + "@test>", RemoteFolder: "Drafts"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, r.ID)
+	}
+	db := rawDB(t, s.Path())
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE assistant_handling_requests SET requested_at=?`, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(ids)
+	var after model.AssistantHandlingRequest
+	for _, id := range ids {
+		r, ok, err := s.ClaimNextHandoff(ctx, after.RequestedAt, after.ID)
+		if err != nil || !ok || r.ID != id || r.Attempts != 1 {
+			t.Fatalf("claim: %+v, ok=%v, err=%v; want %s", r, ok, err, id)
+		}
+		after = r
+	}
+	if r, ok, err := s.ClaimNextHandoff(ctx, after.RequestedAt, after.ID); err != nil || ok {
+		t.Fatalf("pass did not finish: %+v, %v, %v", r, ok, err)
+	}
+	if r, ok, err := s.ClaimNextHandoff(ctx, time.Time{}, ""); err != nil || !ok || r.ID != ids[0] || r.Attempts != 2 {
+		t.Fatalf("next pass: %+v, %v, %v", r, ok, err)
+	}
+}
 
 // standaloneBox creates a standalone inbox owned by the account.
 func standaloneBox(t *testing.T, s *store.Store, accountID, address string) model.Inbox {
@@ -157,7 +198,7 @@ func TestCreateAssistantHandlingFreezesAndSettles(t *testing.T) {
 	}
 
 	// Claim, confirm publication, and idempotently re-confirm.
-	claimed, ok, err := s.ClaimNextHandoff(ctx, "wk")
+	claimed, ok, err := s.ClaimNextHandoff(ctx, time.Time{}, "")
 	if err != nil || !ok || claimed.ID != created.ID || claimed.Attempts != 1 {
 		t.Fatalf("claim %+v ok=%v err=%v", claimed, ok, err)
 	}
@@ -218,7 +259,7 @@ func TestHandoffAmbiguousIsExplicitAndNotRetried(t *testing.T) {
 		t.Fatalf("ambiguous handoff left the draft frozen: %+v err=%v", d, err)
 	}
 	// It is no longer pending, so the worker does not retry it.
-	if _, ok, _ := s.ClaimNextHandoff(ctx, "wk"); ok {
+	if _, ok, _ := s.ClaimNextHandoff(ctx, time.Time{}, ""); ok {
 		t.Fatal("ambiguous handoff was re-claimed")
 	}
 	// It may still be resolved to Published by a later verified lookup, but a

@@ -58,6 +58,13 @@ func TestSendRequestFreezeCancelReject(t *testing.T) {
 	if _, err = s.AddDraftAttachment(ctx, asst, d.ID, model.DraftAttachment{Filename: "a.txt", Size: 1, RawPath: "drafts/a"}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("attach while pending err=%v", err)
 	}
+	// A send prepared before the request froze the draft must fail at commit.
+	if _, _, err = s.CommitOutbound(ctx, store.OutboundRecord{Inbox: box, DraftID: d.ID, To: d.To, Text: "unsaved edits", SizeBytes: 1}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale send consumed frozen draft: %v", err)
+	}
+	if _, err = s.GetDraft(ctx, asst, d.ID); err != nil {
+		t.Fatalf("failed send removed draft: %v", err)
+	}
 	// A second request for the same draft is rejected.
 	if _, _, err = s.CreateSendRequest(ctx, asst, d.ID, "hash-2"); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("double request err=%v", err)

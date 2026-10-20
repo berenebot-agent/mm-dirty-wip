@@ -128,7 +128,11 @@ func (s *Store) writeDeliveryFailureTx(ctx context.Context, tx *sql.Tx, f delive
 	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,'')`, id, f.AccountID, f.InboxID, subject, fromAddress, strings.Join(to, " "), textBody); err != nil {
 		return "", nil, err
 	}
-	if err = adjustStorageTx(ctx, tx, f.AccountID, f.InboxID, size); err != nil {
+	// A full mailbox must not roll back a known terminal delivery outcome.
+	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=MAX(0,storage_used_bytes+?) WHERE id=? AND account_id=?`, size, f.InboxID, f.AccountID); err != nil {
+		return "", nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes+?) WHERE id=?`, size, f.AccountID); err != nil {
 		return "", nil, err
 	}
 	ev, err := insertEventTx(ctx, tx, f.AccountID, f.InboxID, "message.received", id, receivedPayload(id, f.InboxID, threadID, false, "", ""))

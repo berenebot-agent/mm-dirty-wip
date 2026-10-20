@@ -357,13 +357,8 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, accountID, newEmail
 	if newEmail == "" || !strings.Contains(newEmail, "@") {
 		return fmt.Errorf("a valid email address is required")
 	}
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	var ph string
-	if err = tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id=? AND account_id=?`, userID, accountID).Scan(&ph); err != nil {
+	if err := s.read.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id=? AND account_id=?`, userID, accountID).Scan(&ph); err != nil {
 		if err == sql.ErrNoRows {
 			return ErrNotFound
 		}
@@ -372,6 +367,11 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, accountID, newEmail
 	if !auth.CheckPassword(ph, currentPassword) {
 		return ErrForbidden
 	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	var other string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE email=? AND id!=?`, newEmail, userID).Scan(&other)
 	if err == nil {
@@ -380,8 +380,14 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, accountID, newEmail
 	if err != sql.ErrNoRows {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=? AND account_id=?`, newEmail, userID, accountID); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=? AND account_id=? AND password_hash=?`, newEmail, userID, accountID, ph)
+	if err != nil {
 		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrForbidden
 	}
 	return tx.Commit()
 }

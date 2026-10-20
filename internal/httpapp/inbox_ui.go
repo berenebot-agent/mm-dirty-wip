@@ -509,6 +509,10 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, derr.Error(), 400)
 			return
 		}
+		if d.Status == model.DraftStatusPendingApproval {
+			http.Error(w, "draft is awaiting approval; use Review Draft to approve it", http.StatusConflict)
+			return
+		}
 		in.InboxID = box.ID
 		if in.ReplyToMessageID == "" {
 			in.ReplyToMessageID = d.ReplyToMessageID

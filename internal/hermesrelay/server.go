@@ -596,7 +596,7 @@ func (s *Server) awaitAcknowledgement(ctx context.Context, h store.HermesConnect
 	for {
 		select {
 		case id := <-ackCh:
-			if id >= evID {
+			if id == evID {
 				return nil
 			}
 		case id := <-beatCh:

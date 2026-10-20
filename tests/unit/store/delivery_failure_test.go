@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,61 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
+
+func TestTerminalFailureOverQuotaCommitsOutcome(t *testing.T) {
+	t.Parallel()
+	for _, cap := range []string{"account", "inbox", "both"} {
+		t.Run(cap, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			s, u, _, boxes := testStore(t)
+			box := boxes[0]
+			p := model.Principal{AccountID: u.AccountID, Admin: true}
+			m := outboundForFailure(t, s, box)
+			db := rawDB(t, s.Path())
+			defer db.Close()
+			if cap != "inbox" {
+				if _, err := db.ExecContext(ctx, `UPDATE accounts SET storage_quota_bytes=storage_used_bytes WHERE id=?`, u.AccountID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if cap != "account" {
+				if _, err := db.ExecContext(ctx, `UPDATE inboxes SET storage_quota_bytes=storage_used_bytes WHERE id=?`, box.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.BeginMessageSend(ctx, u.AccountID, m.ID, "attempt"); err != nil {
+				t.Fatal(err)
+			}
+			failed, events, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx", "attempt")
+			if err != nil || failed.Status != "failed" || failed.LastError != "550 rejected" || len(events) != 2 {
+				t.Fatalf("terminal outcome: %+v, events=%+v, err=%v", failed, events, err)
+			}
+			if inFlight, err := s.MessageSendInFlight(ctx, u.AccountID, m.ID); err != nil || inFlight {
+				t.Fatalf("pre-send marker remains: %v, %v", inFlight, err)
+			}
+			if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx", "attempt"); err != nil {
+				t.Fatal(err)
+			}
+			notices, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Direction: "inbound"})
+			if err != nil || len(notices) != 1 {
+				t.Fatalf("notices: %+v, %v", notices, err)
+			}
+			want := m.SizeBytes + notices[0].SizeBytes
+			acc, err := s.GetAccount(ctx, u.AccountID)
+			if err != nil || acc.StorageUsedBytes != want {
+				t.Fatalf("account accounting: %+v, want %d, err=%v", acc, want, err)
+			}
+			updated, err := s.GetInbox(ctx, p, box.ID)
+			if err != nil || updated.StorageUsedBytes != want {
+				t.Fatalf("inbox accounting: %+v, want %d, err=%v", updated, want, err)
+			}
+			if _, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: box, To: []string{"x@y.test"}, SizeBytes: 1}); !errors.Is(err, store.ErrQuota) {
+				t.Fatalf("ordinary sends bypass quota: %v", err)
+			}
+		})
+	}
+}
 
 // outboundForFailure enqueues a normal outbound message From the inbox's own
 // address, so a terminal failure has a well-defined sender to notify.
