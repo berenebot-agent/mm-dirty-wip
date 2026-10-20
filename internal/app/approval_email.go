@@ -90,6 +90,10 @@ func mailtoControl(inboxAddress, action, token, draftSubject string) string {
 // and both body alternatives are shown when present. Agent/owner-provided
 // content is escaped before it is embedded in the HTML alternative.
 func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment, inbox model.Inbox, token string) (string, string, error) {
+	inboxLabel := inbox.Address
+	if name := strings.TrimSpace(inbox.DisplayName); name != "" {
+		inboxLabel = name + " <" + inbox.Address + ">"
+	}
 	to := strings.Join(d.To, ", ")
 	cc := strings.Join(d.CC, ", ")
 	bcc := strings.Join(d.BCC, ", ")
@@ -109,7 +113,7 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 
 	var text strings.Builder
 	text.WriteString("An email draft needs your approval before it is sent.\r\n\r\n")
-	text.WriteString(inbox.Address + " has asked you to approve the draft below.\r\n")
+	text.WriteString(inboxLabel + " has asked you to approve the draft below.\r\n")
 	text.WriteString("To approve, reply to this email with \"Approve\" as the first line.")
 	text.WriteString(" To reject, reply with anything else.")
 	text.WriteString(" If the buttons in this email work, you can use those instead.")
@@ -137,7 +141,7 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	rejectURL := mailtoControl(inbox.Address, controlReject, token, d.Subject)
 	var h strings.Builder
 	h.WriteString("<p>An email draft needs your approval before it is sent.</p>")
-	h.WriteString("<p><strong>" + html.EscapeString(inbox.Address) + "</strong> has asked you to approve the draft below. ")
+	h.WriteString("<p><strong>" + html.EscapeString(inboxLabel) + "</strong> has asked you to approve the draft below. ")
 	h.WriteString("Choose an action, then <strong>send the email your client opens</strong>. Nothing changes until you send it.</p>")
 	h.WriteString(`<p><a href="` + html.EscapeString(approveURL) + `" style="display:inline-block;padding:10px 16px;background:#1f6feb;color:#fff;text-decoration:none;border-radius:6px;margin-right:8px">Approve &amp; Send</a>`)
 	h.WriteString(`<a href="` + html.EscapeString(rejectURL) + `" style="display:inline-block;padding:10px 16px;background:#b42318;color:#fff;text-decoration:none;border-radius:6px">Reject</a></p>`)
