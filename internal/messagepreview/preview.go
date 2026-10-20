@@ -13,6 +13,10 @@ const MaxRunes = 200
 // Text collapses whitespace and control characters and caps a preview by Unicode
 // characters, not bytes. Empty remains empty internally; the API supplies "-".
 func Text(text string) string {
+	return boundedText(text, MaxRunes)
+}
+
+func boundedText(text string, maxRunes int) string {
 	var out strings.Builder
 	count, space := 0, false
 	for _, r := range text {
@@ -21,14 +25,14 @@ func Text(text string) string {
 			continue
 		}
 		if space {
-			if count >= MaxRunes {
+			if count >= maxRunes {
 				break
 			}
 			out.WriteByte(' ')
 			count++
 			space = false
 		}
-		if count >= MaxRunes {
+		if count >= maxRunes {
 			break
 		}
 		out.WriteRune(r)
@@ -43,11 +47,19 @@ func FromBodies(text, markup string) string {
 	if preview := Text(text); preview != "" {
 		return preview
 	}
+	return HTML(markup, MaxRunes)
+}
+
+// HTML extracts at most maxRunes of readable text without executing HTML.
+func HTML(markup string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
 	z := html.NewTokenizer(strings.NewReader(markup))
-	z.SetMaxBuf(64 << 10)
+	z.SetMaxBuf(max(64<<10, 4*maxRunes))
 	var out strings.Builder
 	skip := ""
-	for out.Len() < 4*MaxRunes {
+	for out.Len() < 4*maxRunes {
 		t := z.Next()
 		if t == html.ErrorToken {
 			// EOF, malformed HTML, or an oversized token ends the preview.
@@ -73,12 +85,12 @@ func FromBodies(text, markup string) string {
 		} else if t == html.TextToken && skip == "" {
 			chunk := z.Text()
 			for _, r := range string(chunk) {
-				if out.Len() >= 4*MaxRunes {
+				if out.Len() >= 4*maxRunes {
 					break
 				}
 				out.WriteRune(r)
 			}
 		}
 	}
-	return Text(out.String())
+	return boundedText(out.String(), maxRunes)
 }

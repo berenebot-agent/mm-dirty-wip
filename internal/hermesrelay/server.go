@@ -15,10 +15,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/messagepreview"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/ws"
@@ -668,10 +670,17 @@ func messageEvent(m model.Message) map[string]any {
 	}
 	text := strings.TrimSpace(m.Text)
 	if text == "" {
-		text = "(HTML email; open the message to view content)"
+		text = messagepreview.HTML(m.HTML, 60001)
+	}
+	if text == "" {
+		text = "(No readable text body; full message remains available via the message-detail API)"
 	}
 	if len(text) > 60000 {
-		text = text[:60000] + "\n\n[message truncated in realtime delivery; full message remains available via API]"
+		end := 60000
+		for !utf8.RuneStart(text[end]) {
+			end--
+		}
+		text = text[:end] + "\n\n[message truncated in realtime delivery; full message remains available via API]"
 	}
 	display := fmt.Sprintf("From: %s\nTo: %s\nSubject: %s\n\n%s", m.From.Address, strings.Join(m.To, ", "), m.Subject, text)
 	ts := m.CreatedAt
