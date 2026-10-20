@@ -17,8 +17,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,6 +105,14 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 		return msg, binding, err
 	}
 	delivery := strings.TrimSpace(p.MessageID)
+	if delivery == "" {
+		raw, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return msg, binding, err
+		}
+		sum := sha256.Sum256(raw)
+		delivery = "pm-" + hex.EncodeToString(sum[:])
+	}
 	return transport.InboundMessage{
 		Provider:          "postmark",
 		Recipient:         binding.Recipient,
