@@ -132,7 +132,7 @@ func TestBrevoAttachmentRejectionVisibleInSendStatusAndLogs(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		io.WriteString(w, `{"code":"invalid_parameter","message":"Invalid attachment extension: report.md api-key=xkeysib-secret private-body"}`)
+		io.WriteString(w, `{"code":"invalid_parameter","message":"Unsupported file format: md report.md api-key=xkeysib-secret private-body"}`)
 	}))
 	defer api.Close()
 	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "xkeysib-secret", "api_base": api.URL}); err != nil {

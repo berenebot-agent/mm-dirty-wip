@@ -109,7 +109,7 @@ func TestSendAttachmentExtensionRejection(t *testing.T) {
 			t.Errorf("attachment changed: %#v", body.Attachment)
 		}
 		w.WriteHeader(http.StatusBadRequest)
-		io.WriteString(w, `{"code":"invalid_parameter","message":"Extension .md is not allowed for attachments"}`)
+		io.WriteString(w, `{"code":"invalid_parameter","message":"Unsupported file format: md"}`)
 	}))
 	defer srv.Close()
 	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "xkeysib-secret", APIBase: srv.URL}, transport.OutboundMessage{
