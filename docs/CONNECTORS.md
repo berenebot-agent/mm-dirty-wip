@@ -54,8 +54,27 @@ See [API.md](API.md) for the complete interface.
 Hermes connects *out* to MailMoose over a WebSocket. No inbound port is required on the Hermes host. Unacknowledged messages are replayed when it reconnects.
 
 1. Open the inbox's **Connectors** tab, add a **Hermes relay connection**, and select its role.
-2. Copy the generated environment block into your Hermes gateway's `.env` file.
-3. Restart Hermes.
+2. Add the relay block below to your gateway's `.env` — usually `~/.hermes/.env`; replace existing `GATEWAY_RELAY_*` lines, since one relay connection owns the gateway.
+3. **Before the first message:** add a home address alongside those relay lines in the same `.env`, or Hermes sends correspondents a “No home channel is set” notice.
+
+   ```dotenv
+   EMAIL_HOME_ADDRESS=you@yourdomain.com
+   EMAIL_HOME_ADDRESS_NAME=Your Agent Name
+   ```
+
+4. Turn off memory and self-improvement notices globally in `~/.hermes/config.yaml` (merge into any existing `display` section); Hermes v0.22.2 requires the global settings:
+
+   ```yaml
+   display:
+     memory_notifications: off
+     suppress_warning_notifications: true
+   ```
+
+5. Restart the gateway so it reloads `.env` and `config.yaml`: `hermes gateway restart`.
+6. Leave `GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true` in place to keep your other messaging platforms (Telegram, WhatsApp…) connected alongside the relay. Remove that line and the relay becomes the gateway's only messaging platform.
+7. Check this connector's delivery log; `~/.hermes/logs/gateway.log` shows `relay adapter registered` and normal idle reconnects (`relay ws reconnected`) about every 90 seconds. The first reply should contain only the answer: “No home channel” means check the home-address settings; “Learned” is OpenClaw-side, not fixed by Hermes settings.
+
+Keep these setup instructions in step with the Add Client dialog's Hermes guide in `internal/httpapp/ui.go`.
 
 The generated block looks like:
 
@@ -116,6 +135,8 @@ code expires or is lost, generate a new one with **Add Connector → OpenClaw �
 One-time code**; cancel any previous, still-valid code you no longer need.
 
 OpenClaw receives mail and replies using the same relay transport as Hermes, with its own connector identity and delivery log.
+
+OpenClaw's “Learned” notice needs OpenClaw-side configuration; the Hermes settings above do not fix it.
 
 ## Webhooks
 
