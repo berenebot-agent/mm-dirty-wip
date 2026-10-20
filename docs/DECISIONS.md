@@ -5145,6 +5145,18 @@ the two shells).
 
 **Date:** 2026-10-15. **Approved by:** Ben.
 
+**Antler UI update (2026-10-21, approved by Ben):** The local-DNS hard-gate
+presentation below is superseded for Antler setup and status. A current receiver
+grant proves TXT authority and that receiver's MX routing; an independently cached
+negative DNS result must not contradict it. DNS-step record lights follow receiver
+proofs, and repair prompts follow explicit receiver refusals (`not_mx` or
+`key_unavailable`). Unknown, expired, or unreachable receiver states do not prove
+that records are missing. A ready sibling does not hide another receiver's MX
+refusal. The local watcher, API verdicts, extra-MX warning, and receiver security
+gates are unchanged. Busy refresh requests are coalesced, stale snapshots get a
+bounded retry, and successful setup Finish saves and closes the dialog; reopening
+shows status. Rotation retains its separate completion flow.
+
 **Requirement:** On a brand-new domain in Antler MX mode the MX check read
 `mismatch` while the TXT check reported `pending`, which the operator read as
 "the work is underway" — but nothing was pending. Two problems sat behind that.

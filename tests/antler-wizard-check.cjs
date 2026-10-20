@@ -164,6 +164,7 @@ function harness(mode) {
 
   const dlg = new Element('DIALOG');
   dlg.open = true;
+  dlg.close = () => { dlg.open = false; dlg.emit('close'); };
   const form = new Element('FORM');
   form.dataset.antlerDomain = 'domain-1';
   form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com';
@@ -173,6 +174,8 @@ function harness(mode) {
   if (mode === 'subdomain') { form.dataset.antlerParent = ''; }
   form.dataset.antlerConnectors = JSON.stringify(mxList);
   form.dataset.antlerStatus = JSON.stringify(seedStatus);
+  form.dataset.antlerDns = JSON.stringify([{ kind: 'mx', state: 'not_found' }, { kind: 'txt', state: 'not_found' }]);
+  form.dataset.antlerInstructions = JSON.stringify({ txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList });
   form.closestMap = { dialog: dlg };
   const provider = new Element('SELECT');
   provider.value = 'dialmx';
@@ -231,6 +234,7 @@ function harness(mode) {
     },
     status: world.statuses,
     dns: world.dns,
+    dns_stale: !!world.stale,
     unexpected_mx: world.unexpected,
     instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList }
   });
@@ -242,7 +246,7 @@ function harness(mode) {
     head: new Element('HEAD'),
     body: new Element('BODY'),
     hidden: false,
-    addEventListener: () => {}
+    addEventListener: (name, fn) => { document[name] = fn; }
   };
   const window = {
     setTimeout(fn, delay) {
@@ -262,7 +266,7 @@ function harness(mode) {
     dispatchEvent(event) { (world.windowEvents[event.type] || []).slice().forEach(fn => fn(event)); return true; },
     location: { assign() {} },
     Event: function (type) { this.type = type; },
-    mailmooseEventsSource: null,
+     mailmooseEventsSource: new Element(),
     // The real app.js installs window.mailmooseCopy (assets/app.js) and every
     // copy control routes through it. The closure under test calls
     // window.mailmooseCopy.wire(btn, opts) while building the Antler
@@ -295,6 +299,9 @@ function harness(mode) {
       world.requests.push({ url, options });
       if (options.method !== 'GET') { world.saved = JSON.parse(options.body); }
       if (world.rejectSave && options.method !== 'GET') { return Promise.reject(new Error('network error')); }
+      if (world.holdGet && options.method === 'GET') {
+        return new Promise(resolve => { world.releaseGet = () => resolve({ ok: true, json: () => Promise.resolve(response()) }); });
+      }
       return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) });
     }
   };
@@ -326,7 +333,7 @@ function harness(mode) {
   const pends = (delay, predicate = () => true) => world.timers.some(t => t.delay === delay && predicate(t));
   return { world, dlg, form, group, provider, service, email, enforcement, footer, save, close,
            rotate, workerRegenerate, removeReceiving, danger, wizard, back, mxList, seedStatus,
-           flush, settle, submit, collect, fireTimer, gets, pends };
+            flush, settle, submit, collect, fireTimer, gets, pends, document, window };
 }
 
 // --- status view ---------------------------------------------------------
@@ -374,8 +381,7 @@ async function statusView() {
   assert.match(cellOf(0).children[0].className, /amber/, 'a connector with no status is amber pending');
   assert.equal(cellOf(0).children[1].textContent, 'Pending');
 
-  // The inline remediation is DNS-driven, so a domain whose TXT and MX are both
-  // wrong shows both fixes at once — the receiver would stop at the first gate.
+  // Repair prompts follow the receiver refusal, not an independent DNS cache.
   h.world.dns = [
     { kind: 'txt', state: 'mismatch', reason: 'stale' },
     { kind: 'mx', state: 'not_found', reason: 'none' }
@@ -384,23 +390,19 @@ async function statusView() {
   await h.fireTimer(t => t.delay === 60000);
   const remediation = () => h.wizard.nodes['.antler-records'].children.find(el => el.className === 'antler-dns-remediation') || new Element('DIV');
   assert.match(h.collect(remediation()), /Domain not authorized/, 'the TXT fix is shown');
-  assert.match(h.collect(remediation()), /No MX records are published/, 'the MX fix is shown alongside it');
+   assert.doesNotMatch(h.collect(remediation()), /MX records/, 'a local DNS failure does not invent a receiver routing refusal');
 
-  // A healthy domain shows no remediation at all.
+  // Local DNS cannot erase a receiver's explicit refusal either.
   h.world.dns = [{ kind: 'txt', state: 'ok' }, { kind: 'mx', state: 'ok' }];
   await h.fireTimer(t => t.delay === 60000);
-  assert.equal(remediation().children.length, 0, 'a healthy domain has no remediation');
+   assert.match(h.collect(remediation()), /Domain not authorized/, 'receiver refusal remains actionable even if local DNS matches');
 
-  // A check that could not be completed is still a hard gate: the operator must
-  // not proceed on a record we cannot confirm, so it is a red prompt to check
-  // DNS and retry, with the expected record to copy in case it is missing — not
-  // a soft "retrying" note that leaves the way open.
+  // A local lookup error does not alter the receiver's actionable key refusal.
   h.world.dns = [{ kind: 'txt', state: 'dns_error', reason: 'TXT lookup failed; retrying' }, { kind: 'mx', state: 'ok' }];
   h.world.statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }];
   await h.fireTimer(t => t.delay === 60000);
   const unverified = h.collect(remediation());
-  assert.match(unverified, /could not be verified/, 'a dns_error check tells the operator it is unconfirmed');
-  assert.match(unverified, /Do not proceed until it is confirmed/, 'a dns_error check says not to proceed');
+   assert.match(unverified, /Domain not authorized/, 'receiver key refusal shows the TXT repair');
   assert.match(unverified, /Record value/, 'a dns_error check still shows the record to copy');
 }
 
@@ -517,10 +519,17 @@ async function wizard(mode) {
 
   // The receivers step gates Next on one ready receiver, and is not gated on all
   // of them.
+  await h.submit();
+  assert.equal(h.save.disabled, true, 'without a ready receiver Next stays disabled');
+  h.back.emit('click');
+  assert.equal(h.wizard.panels[1].hidden, false, 'Back returns to DNS instructions');
+  h.world.dns = [{ kind: 'mx', state: 'not_found' }, { kind: 'txt', state: 'not_found' }];
   h.world.statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'connecting', smtp_hostname: 'mx2.example.com' }];
   await h.submit();
   assert.equal(h.wizard.panels[2].hidden, false, 'the receivers step is shown');
   assert.equal(h.save.disabled, false, 'one ready receiver unlocks Next');
+  assert.doesNotMatch(h.collect(h.wizard.nodes['.antler-receivers']), /No MX records|Domain not authorized/, 'wizard receivers do not contradict readiness');
+  assert.match(h.collect(h.wizard.nodes['.antler-records']), /Matching/, 'DNS instructions reflect the receiver proof');
   if (HAVE.wizardCountdown) {
     assert.match(h.collect(h.wizard.nodes['.antler-checks']), /checking again in \d+s/, 'the receivers step also counts down');
   }
@@ -532,10 +541,16 @@ async function wizard(mode) {
   h.world.statuses = [{ state: 'disconnected' }];
   assert.equal(h.save.disabled, false, 'Finish is never blocked on readiness');
   h.enforcement.value = 'hard';
+  h.world.rejectSave = true;
+  await h.submit();
+  assert.equal(h.dlg.open, true, 'failed Finish keeps the dialog open');
+  assert.equal(h.wizard.panels[3].hidden, false, 'failed Finish stays on the policy step');
+  assert.equal(h.enforcement.value, 'hard', 'failed Finish preserves the policy');
+  h.world.rejectSave = false;
   await h.submit();
 
-  // Finishing saves the config once and lands on the status view.
-  assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save settings' : 'Save email', 'Finish returns to the saved status view');
+  // Finishing saves and closes; reopening presents the saved status view.
+   assert.equal(h.dlg.open, false, 'Finish closes the dialog after saving');
   assert.match(h.collect(h.wizard.nodes['.antler-records']), /Connector Status/, 'the status table is shown after Finish');
   // The footer's close control is relabelled as the wizard becomes the saved
   // status view. It was only set once at init, so a freshly-finished setup left
@@ -546,6 +561,10 @@ async function wizard(mode) {
     : { service: 'antler', enforcement: 'hard', contact_email: 'ops@example.com' };
   assert.deepEqual(h.world.saved, { provider: 'dialmx', config: expectConfig },
     'Finish writes the config with the chosen enforcement and never rotates');
+  h.dlg.open = true;
+  h.dlg.emit('open');
+  await h.settle();
+  assert.match(h.collect(h.wizard.nodes['.antler-records']), /Connector Status/, 'reopening shows status rather than restarting setup');
 
   // Nothing polls once the dialog is closed.
   h.dlg.open = false;
@@ -652,6 +671,58 @@ async function liveUpdates() {
   assert.equal(h.save.hidden, true, 'an unchanged contact email offers no Save');
 }
 
+async function receiverTruth() {
+  const h = harness('status');
+  await h.settle();
+  const records = () => h.collect(h.wizard.nodes['.antler-records']);
+  h.world.dns = [{ kind: 'mx', state: 'not_found' }, { kind: 'txt', state: 'not_found' }];
+  h.world.statuses = h.seedStatus;
+  await h.fireTimer(t => t.delay === 60000);
+  assert.doesNotMatch(records(), /Domain not authorized|Check these MX|No MX records/, 'ready receivers override negative local DNS');
+  h.world.statuses = [h.seedStatus[0], { state: 'rejected', reason: 'not_mx', smtp_hostname: 'mx2.example.com' }];
+  await h.fireTimer(t => t.delay === 60000);
+  assert.match(records(), /Check these MX records/, 'a sibling routing refusal remains visible');
+  for (const status of [{ state: 'connecting' }, { state: 'unreachable' }, { state: 'ready', expires_at: '1970-01-01T00:00:00Z' }]) {
+    h.world.statuses = [Object.assign({ smtp_hostname: 'mx.example.com' }, status)];
+    await h.fireTimer(t => t.delay === 60000);
+    assert.doesNotMatch(records(), /Ready to receive|Check these MX|Domain not authorized/, 'unknown or expired readiness does not invent DNS failures');
+  }
+}
+
+async function queuedRefresh() {
+  const h = harness('status');
+  await h.settle();
+  const push = () => h.window.mailmooseEventsSource.emit('mx.dns_changed', { data: '{"payload":{"domain_id":"domain-1"}}' });
+  h.world.holdGet = true;
+  push();
+  const before = h.gets();
+  push(); push();
+  h.world.holdGet = false;
+  h.world.releaseGet();
+  await h.settle();
+  assert.equal(h.gets(), before + 1, 'busy pushes coalesce into one follow-up');
+  h.world.stale = true;
+  push();
+  await h.settle();
+  const stale = h.gets();
+  assert.ok(h.pends(2000), 'stale results schedule a bounded retry');
+  await h.settle();
+  assert.equal(h.gets(), stale, 'stale responses do not spin');
+  h.world.stale = false;
+  await h.fireTimer(t => t.delay === 2000);
+  assert.equal(h.gets(), stale + 1, 'the stale retry reads the completed check');
+  h.document.hidden = true;
+  push();
+  assert.equal(h.gets(), stale + 1, 'hidden tabs defer pushes');
+  h.document.hidden = false;
+  h.document.visibilitychange();
+  await h.settle();
+  assert.equal(h.gets(), stale + 2, 'visible tabs consume the pending update');
+  h.dlg.close();
+  push();
+  assert.equal(h.gets(), stale + 2, 'closed dialogs do not fetch');
+}
+
 const SUITES = {
   statusView,
   statusSettings,
@@ -660,12 +731,14 @@ const SUITES = {
   wizardCustom: () => wizard('custom'),
   introCopy,
   rotation,
-  liveUpdates
+  liveUpdates,
+  receiverTruth,
+  queuedRefresh
 };
 (async () => {
   // The suites that pass against the shipped behaviour. statusSettings is the S5
   // feature suite; run it by name to see what it is waiting on.
-  const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'introCopy', 'rotation', 'liveUpdates'];
+   const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'introCopy', 'rotation', 'liveUpdates', 'receiverTruth', 'queuedRefresh'];
   const names = process.argv.slice(2).length ? process.argv.slice(2) : defaultSuites;
   for (const name of names) {
     const fn = SUITES[name];
