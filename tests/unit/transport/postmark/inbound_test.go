@@ -81,6 +81,25 @@ func TestReceiveValidBasicAuth(t *testing.T) {
 	}
 }
 
+func TestReceiveEmptyMessageIDUsesStableDeliveryID(t *testing.T) {
+	var tr postmark.Transport
+	raw := "From: b@test\r\nTo: a@example.com\r\n\r\nhello"
+	var deliveryID string
+	for range 2 {
+		msg, _, err := tr.Receive(context.Background(), request(t, "u", "p", "a@example.com", raw, " "), fakeResolver{user: "u", pass: "p"}, t.TempDir()+"/m.eml", 4096)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.DeliveryID == "" || msg.ProviderMessageID != msg.DeliveryID {
+			t.Fatalf("delivery %q provider %q", msg.DeliveryID, msg.ProviderMessageID)
+		}
+		if deliveryID != "" && msg.DeliveryID != deliveryID {
+			t.Fatalf("delivery ID changed: %q != %q", msg.DeliveryID, deliveryID)
+		}
+		deliveryID = msg.DeliveryID
+	}
+}
+
 func TestReceiveWrongCredentialsRejected(t *testing.T) {
 	var tr postmark.Transport
 	raw := "From: b@test\r\n\r\nhi"
