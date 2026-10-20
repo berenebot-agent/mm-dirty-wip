@@ -88,3 +88,24 @@ jobs:
           name: ci-logs
           path: ci-logs/
           if-no-files-found: ignore
+
+  gitleaks:
+    name: secret scan (full history)
+    # Runs on every push/PR. Scans the whole checked-out history for committed
+    # secrets; fails the build on any new finding. Historical false positives
+    # are allowlisted in the committed .gitleaks.toml (see that file for the
+    # review notes). Uses the gitleaks container image directly to avoid the
+    # GITLEAKS_LICENSE requirement of gitleaks-action for org-owned repos.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, so the full commit graph must be present.
+          fetch-depth: 0
+      - name: scan
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/.gitleaks.toml:/cfg.toml:ro" \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --log-opts="--all" -c /cfg.toml --no-banner
