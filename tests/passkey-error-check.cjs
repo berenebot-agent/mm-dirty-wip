@@ -37,6 +37,8 @@ async function check(register, error, expected) {
       querySelectorAll() { return []; },
       getElementById(id) {
         if (id === 'passkey-status') return status;
+        // Only the button this page carries: the login page offers sign-in,
+        // the account page offers registration.
         return id === (register ? 'passkey-add' : 'passkey-signin') ? button : null;
       }
     },
@@ -60,6 +62,50 @@ async function check(register, error, expected) {
   assert.equal(button.disabled, false);
 }
 
+// An origin that cannot run a WebAuthn ceremony must not offer the control at
+// all: the button is removed from the page and no error text is written.
+function checkInsecure(id) {
+  const removed = [];
+  const status = { textContent: '', classList: { toggle() {} } };
+  const parent = {
+    children: [],
+    parentNode: null,
+    removeChild(node) {
+      removed.push(node.id);
+      node.parentNode = null;
+      this.children = this.children.filter(c => c !== node);
+    }
+  };
+  const button = {
+    id,
+    disabled: false,
+    parentNode: parent,
+    getAttribute() { return '/mock'; },
+    addEventListener() {},
+    closest() { return null; }
+  };
+  parent.children = [button];
+  const context = {
+    document: {
+      querySelector() { return { value: 'csrf' }; },
+      querySelectorAll() { return []; },
+      getElementById(el) {
+        if (el === 'passkey-status') return status;
+        return el === id ? button : null;
+      }
+    },
+    window: {
+      PublicKeyCredential: {}, isSecureContext: false,
+      location: { hostname: 'ui.example.net' }
+    },
+    navigator: { credentials: {} }
+  };
+  vm.runInNewContext(moduleSource, context);
+  assert.deepEqual(removed, [id], 'insecure origin kept the passkey control');
+  assert.equal(status.textContent, '', 'insecure origin wrote an error message');
+  assert.equal(button.disabled, false);
+}
+
 (async () => {
   for (const register of [true, false]) {
     await check(register, { name: 'SecurityError', message: 'The relying party ID is not a registrable domain suffix' },
@@ -67,5 +113,7 @@ async function check(register, error, expected) {
     await check(register, { name: 'NotAllowedError', message: 'The operation was cancelled.' }, /^The operation was cancelled\.$/);
     await check(register, { name: 'SecurityError', message: 'An unrelated security error' }, /^An unrelated security error$/);
   }
+  checkInsecure('passkey-signin');
+  checkInsecure('passkey-add');
   console.log('Passkey registration/sign-in error checks passed');
 })().catch(err => { console.error(err); process.exitCode = 1; });

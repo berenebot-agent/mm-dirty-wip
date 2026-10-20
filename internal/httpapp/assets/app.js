@@ -7573,25 +7573,46 @@ function generateBearerSecret() {
     });
   }
 
-  var signin = document.getElementById('passkey-signin');
-  if (signin) {
-    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
-      signin.disabled = true;
-      signin.title = 'Passkeys require HTTPS and a supported browser';
-      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
-    } else {
-      wire(signin, document.getElementById('passkey-status'), false);
+  // canUsePasskeys reports whether this origin can run a WebAuthn ceremony at
+  // all. The API and the secure-context rule are both browser-enforced, so a
+  // control offered where they do not hold can only fail.
+  function canUsePasskeys() {
+    return !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+  }
+
+  // hidePasskeyControl removes a control the browser cannot use. Removing it
+  // rather than disabling it keeps the page free of a dead button and of an
+  // explanation for a requirement the page simply does not meet.
+  function hidePasskeyControl(button) {
+    if (!button) { return; }
+    // The login page wraps its button and status line in one block; the
+    // account page puts the add button beside the password-recovery form, so
+    // only the button goes there.
+    var node = button;
+    if (button.closest) {
+      var block = button.closest('.auth-action');
+      if (block) { node = block; }
+    }
+    var parent = node.parentNode;
+    if (!parent) { return; }
+    parent.removeChild(node);
+    // A row of actions left with nothing in it is dead space.
+    if (node === button && parent.children && parent.children.length === 0 && parent.parentNode) {
+      parent.parentNode.removeChild(parent);
     }
   }
+
+  var signin = document.getElementById('passkey-signin');
   var add = document.getElementById('passkey-add');
-  if (add) {
-    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
-      add.disabled = true;
-      add.title = 'Passkeys require HTTPS and a supported browser';
-      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
-    } else {
-      wire(add, document.getElementById('passkey-status'), true);
-    }
+  var status = document.getElementById('passkey-status');
+  if (!canUsePasskeys()) {
+    hidePasskeyControl(signin);
+    hidePasskeyControl(add);
+    // Nothing will report a failure, so the status line goes too.
+    if (status && status.parentNode) { status.parentNode.removeChild(status); }
+  } else {
+    if (signin) { wire(signin, status, false); }
+    if (add) { wire(add, status, true); }
   }
 
   /* Each passkey row is a name plus a gear button that opens that passkey's

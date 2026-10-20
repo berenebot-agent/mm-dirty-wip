@@ -232,10 +232,10 @@ for t in "${SELECTED[@]}"; do
             ;;
         js)
             node tests/connector-editor-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
-            # The dialog and copy interaction checks drive real app.js closures
-            # against a DOM stand-in; they cover what the Go suite cannot (timers,
-            # SSE listeners, clipboard writes, and feedback). Node is required on
-            # the host.
+            # The dialog, copy and passkey interaction checks drive real app.js
+            # closures against a DOM stand-in; they cover what the Go suite
+            # cannot (timers, SSE listeners, clipboard writes, WebAuthn
+            # ceremonies, and feedback). Node is required on the host.
             if [ "$rc" -eq 0 ]; then
                 node tests/antler-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
@@ -244,6 +244,9 @@ for t in "${SELECTED[@]}"; do
             fi
             if [ "$rc" -eq 0 ]; then
                 node tests/copy-controls-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                node tests/passkey-error-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
                 node tests/empty-trash-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
