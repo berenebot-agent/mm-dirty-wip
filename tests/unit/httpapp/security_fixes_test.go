@@ -351,9 +351,9 @@ func signIn(t *testing.T, h http.Handler) *http.Cookie {
 
 // TestPasskeysRequireSecureContext covers the passkey gating: a plain-HTTP
 // deployment reached by IP or hostname must not offer passkeys (the browser
-// refuses WebAuthn outside a secure context), and its account page must explain
-// why instead of rendering controls. An https origin, and http on localhost,
-// keep passkeys enabled.
+// refuses WebAuthn outside a secure context), and its account page must render
+// no passkey controls and no explanation. An https origin, and http on
+// localhost, keep passkeys enabled.
 func TestPasskeysRequireSecureContext(t *testing.T) {
 	t.Parallel()
 	t.Run("http by hostname is disabled", func(t *testing.T) {
@@ -365,7 +365,7 @@ func TestPasskeysRequireSecureContext(t *testing.T) {
 		if strings.Contains(rr.Body.String(), "passkey-signin") {
 			t.Fatal("login page offers passkey sign-in over plain HTTP")
 		}
-		// The account page must explain the requirement, not show the controls.
+		// The account page must show no passkey controls and no explanation.
 		session := signIn(t, h)
 		rr = httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/account", nil)
@@ -375,8 +375,11 @@ func TestPasskeysRequireSecureContext(t *testing.T) {
 		if strings.Contains(body, `id="passkey-add"`) {
 			t.Fatal("account page shows passkey-add over plain HTTP")
 		}
-		if !strings.Contains(body, "Passkeys need HTTPS") {
-			t.Fatal("account page does not explain the HTTPS requirement")
+		if strings.Contains(body, "Passkeys need HTTPS") {
+			t.Fatal("account page explains the HTTPS requirement over plain HTTP")
+		}
+		if strings.Contains(body, "Sign in without a password using a passkey") {
+			t.Fatal("account page shows the passkey section over plain HTTP")
 		}
 	})
 	t.Run("https is enabled", func(t *testing.T) {
@@ -386,6 +389,19 @@ func TestPasskeysRequireSecureContext(t *testing.T) {
 		h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))
 		if !strings.Contains(rr.Body.String(), "passkey-signin") {
 			t.Fatal("login page omits passkey sign-in over HTTPS")
+		}
+		// The account page keeps the passkey controls.
+		session := signIn(t, h)
+		rr = httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/account", nil)
+		req.AddCookie(session)
+		h.ServeHTTP(rr, req)
+		body := rr.Body.String()
+		if !strings.Contains(body, `id="passkey-add"`) {
+			t.Fatal("account page omits passkey-add over HTTPS")
+		}
+		if !strings.Contains(body, "Sign in without a password using a passkey") {
+			t.Fatal("account page omits the passkey section over HTTPS")
 		}
 	})
 	t.Run("http on localhost is enabled", func(t *testing.T) {
