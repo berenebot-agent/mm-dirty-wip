@@ -117,7 +117,7 @@ func AsAmbiguous(err error) bool {
 
 // ProviderError builds a safe diagnostic from a provider's non-2xx response.
 // Arbitrary response bodies and reason phrases are never retained.
-func ProviderError(provider, status string, _ []byte) error {
+func ProviderError(provider, status string, body []byte) error {
 	// Provider bodies can echo credentials or private infrastructure details.
 	// Never persist arbitrary text, including an apparently harmless prefix.
 	diagnostic := "provider rejected the request; check the provider dashboard"
@@ -135,6 +135,18 @@ func ProviderError(provider, status string, _ []byte) error {
 	code := "unknown status"
 	if len(status) >= 3 && status[0] >= '1' && status[0] <= '5' && status[1] >= '0' && status[1] <= '9' && status[2] >= '0' && status[2] <= '9' {
 		code = status[:3]
+	}
+	if provider == "brevo" && code == "400" && len(body) <= 4096 {
+		var rejection struct{ Code, Message string }
+		if json.Unmarshal(body, &rejection) == nil && rejection.Code == "invalid_parameter" {
+			message := strings.ToLower(rejection.Message)
+			// Classify the reason, never echo provider text that could contain secrets.
+			if strings.Contains(message, "attachment") && strings.Contains(message, "extension") &&
+				(strings.Contains(message, "not allowed") || strings.Contains(message, "not supported") ||
+					strings.Contains(message, "unsupported") || strings.Contains(message, "invalid")) {
+				diagnostic = "provider rejected an attachment file extension; check Brevo's supported attachment types"
+			}
+		}
 	}
 	return fmt.Errorf("%s returned HTTP %s: %s", provider, code, diagnostic)
 }

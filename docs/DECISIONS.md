@@ -145,6 +145,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D138: Relay replies carry their trigger; slow handlers heartbeat; remote metadata accounting is incremental](#d138-relay-replies-carry-their-trigger-slow-handlers-heartbeat-remote-metadata-accounting-is-incremental)
 - [D139: Relay replies resolve the wire form a stock Hermes gateway sends](#d139-relay-replies-resolve-the-wire-form-a-stock-hermes-gateway-sends)
 - [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
+- [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
 
 ---
 
@@ -2952,6 +2953,10 @@ I/O observes context cancellation after dialing, including DATA and its final
 reply. Webhook attempts have individual budgets and cancellation-independent
 outcome persistence, so a slow client cannot consume subsequent clients' budget.
 
+**Refined by D142:** Brevo's HTTP 400 attachment-extension rejection selects a
+more specific fixed diagnostic from its structured error; no provider text is
+retained.
+
 Resend rejects recipient overflow before unauthenticated lookup rather than
 acknowledging truncated delivery. Mailgun URL-encoded MIME streams to disk with
 bounded fields/occurrences. API message responses consistently sanitize HTML
@@ -5751,3 +5756,28 @@ an exemption.
 **Complexity:** One predicate and one small header helper in
 `internal/httpapp/server.go`; covered by `TestForceHTTPSRelayPaths`. No schema,
 dependency or config-surface change.
+
+## D142 — Recognise Brevo attachment-extension rejections without retaining provider text
+
+**Context:** Cold UAT found that Brevo rejects `.md` attachments with HTTP 400,
+but the fixed diagnostic suggested checking recipients and sender verification.
+Copying provider error prose, even after truncation or regex redaction, could
+expose credentials, filenames or message content to logs and mailbox readers.
+
+**Decision (2026-10-20):** For Brevo HTTP 400 only, parse JSON error bodies of at
+most 4 KiB. An `invalid_parameter` error whose message identifies an attachment
+extension as invalid, unsupported or not allowed selects a fixed diagnostic:
+"provider rejected an attachment file extension; check Brevo's supported
+attachment types". Never copy the provider's message, code, filename, extension
+or other fields into the error. All other responses keep D088's existing safe
+fallbacks. The existing error propagation exposes this reason in send status,
+worker logs and the domain activity log.
+
+**Limit:** Unrecognised wording or response shapes keep the generic diagnostic.
+Extend recognition with a regression fixture if Brevo changes its response;
+do not fall back to echoing provider prose.
+
+**Compatibility:** Attachment validation, filenames, content, success handling,
+permanent-error classification and retries are unchanged. This is diagnostic
+classification only, not a general attachment restriction. No UI, API schema,
+dependency or runtime service change.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Brevo attachment-extension rejections now identify the unsupported attachment
+  type in send status, worker logs and the domain activity log, rather than
+  suggesting recipient or sender-verification problems. Only a fixed diagnostic
+  is retained, never provider response text or credentials. Attachment names,
+  content and retry behaviour are unchanged.
+
 - The inbox **Connectors** tab now distinguishes relay connectors that have
   **Never connected** from ones with a **Last connected** timestamp, without
   claiming live online status. Unredeemed, unexpired OpenClaw setup codes appear
