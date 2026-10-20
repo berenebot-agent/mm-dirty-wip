@@ -58,13 +58,14 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	body := rr.Body.String()
 	guide := regexp.MustCompile(`(?s)<ol class="steps" id="key-hermes-guide" hidden>(.*?)</ol><p class="muted" id="key-result-label">`).FindString(body)
 	for _, want := range []string{
-		"Optional but recommended — reduce extra emails:",
+		`<div class="banner warn"><b>Optional but recommended — reduce extra emails</b>`,
+		"Create the relay connection:",
 		"same <code>.env</code>",
 		"EMAIL_HOME_ADDRESS=you@yourdomain.com\nEMAIL_HOME_ADDRESS_NAME=Your Agent Name",
 		"~/.hermes/config.yaml",
 		"merge into any existing <code>display</code> section",
 		"display:\n  memory_notifications: off\n  suppress_warning_notifications: true",
-		"Restart the gateway to reload the configuration",
+		"Restart the Hermes gateway (required)",
 	} {
 		if !strings.Contains(guide, want) {
 			t.Fatalf("Hermes guide missing %q", want)
