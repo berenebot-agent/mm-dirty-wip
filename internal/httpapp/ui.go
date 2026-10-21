@@ -193,23 +193,11 @@ func mxStateLabel(state string) string {
 	}
 }
 
-// mxTargetHost resolves the SMTP hostname an operator should publish in a Direct
-// MX domain's MX records. The included receiver advertises its configured
-// hostname, so the panel can name the target before the receiver is live, just
-// as the receiver editor prefills it; an unset hostname falls back to the public
-// receiver URL host. A separately hosted receiver's hostname is not part of the
-// core's configuration, so it is only known from the live handshake.
-func (s *Server) mxTargetHost(ctx context.Context, st app.MXReceiverStatus) string {
+// The Direct MX DNS target is MailMoose's public receiving URL hostname, not
+// the independently configurable SMTP greeting.
+func (s *Server) mxTargetHost(st app.MXReceiverStatus) string {
 	if st.Mode != app.MXModeIncluded {
 		return st.SMTPAddr
-	}
-	settings, err := s.Service.GetMXReceiverSettings(ctx)
-	if err != nil {
-		s.Log.Error("cannot read MX receiver settings", "error", err)
-		return ""
-	}
-	if settings.Hostname != "" {
-		return settings.Hostname
 	}
 	if publicURL, err := url.Parse(s.Service.Config.ReceiverURL()); err == nil {
 		return publicURL.Hostname()
@@ -2491,7 +2479,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			State:      st.State,
 		}
 		if st.Configured {
-			mxSetup.TargetHost = s.mxTargetHost(ctx, st)
+			mxSetup.TargetHost = s.mxTargetHost(st)
 		}
 		break
 	}
