@@ -501,9 +501,10 @@ type MessageDelivery struct {
 	DeliveredAt time.Time `json:"delivered_at"`
 }
 
-// BlockedMessage is a metadata-only record of inbound mail rejected by an
-// inbox's allowed-senders list. It is deliberately separate from Message so it
-// can never be reached by the API, relay or inbox views.
+// BlockedMessage is a metadata-only record of inbound mail that was not
+// stored: rejected by an inbox's allowed-senders list, or refused because the
+// account or the inbox storage quota is full. It is deliberately separate from
+// Message so it can never be reached by the API, relay or inbox views.
 type BlockedMessage struct {
 	ID         string     `json:"id"`
 	AccountID  string     `json:"-"`

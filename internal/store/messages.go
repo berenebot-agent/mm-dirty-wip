@@ -1526,10 +1526,11 @@ type BlockedRecord struct {
 	ReceivedAt        time.Time
 }
 
-// CommitBlockedInbound records metadata for mail rejected by an inbox's
-// allowed-senders list. It deliberately writes no message row, no raw file, no
-// FTS entry and no event, so the blocked mail can never reach the inbox view,
-// the API or the relay connector.
+// CommitBlockedInbound records metadata for inbound mail that was not stored:
+// rejected by an inbox's allowed-senders list, or refused because the account
+// or the inbox storage quota is full. It deliberately writes no message row, no
+// raw file, no FTS entry and no event, so the blocked mail can never reach the
+// inbox view, the API or the relay connector.
 func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (model.BlockedMessage, bool, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {

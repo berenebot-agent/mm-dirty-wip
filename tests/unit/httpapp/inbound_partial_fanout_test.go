@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/config"
@@ -156,6 +157,22 @@ func TestResendPartialFanOutIsRetryable(t *testing.T) {
 	}
 	if got, err := svc.Store.ListMessages(ctx, principal, store.MessageFilter{InboxID: second.ID}); err != nil || len(got) != 0 {
 		t.Fatalf("second inbox messages=%d err=%v, want 0 before retry", len(got), err)
+	}
+
+	// The quota refusal is visible in the domain's receiving log (UAT D-2):
+	// before this, a refused inbound message left no trace in the product.
+	entries, err := svc.Store.ListDomainReceivingLog(ctx, principal.AccountID, box.DomainID, 10, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := false
+	for _, e := range entries {
+		if e.InboxID == second.ID && e.Reason == "storage quota exceeded" {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatalf("no quota refusal in the receiving log (entries: %+v)", entries)
 	}
 
 	// Clear the quota obstacle and retry the same event: only the missing inbox
