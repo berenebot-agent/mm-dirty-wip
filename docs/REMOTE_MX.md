@@ -13,7 +13,7 @@ For the receiver included with MailMoose, see [Direct MX](EMAIL_PROVIDERS.md#inb
 
 Both options need an SMTP hostname reachable on **port 25**. Your MailMoose core opens a connection **outbound** to the receiver; it does not need an incoming SMTP port. The receiver passes mail to the core, which stores it in `/data`.
 
-## Dial MX: shared receiver
+## Dial MX: shared receiver (This is the mode the Antler MX service runs in)
 
 Run a public receiver with an HTTPS session endpoint and a valid TLS certificate.
 
