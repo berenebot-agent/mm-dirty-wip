@@ -55,6 +55,16 @@ All notable changes to MailMoose are documented here. This project follows
   operator can see mail being turned away by a full mailbox instead of finding
   it only in the container log. The refusal itself is unchanged: the sender
   still retries, and the mail is still delivered once there is room.
+- Moving a message to a folder is now discoverable by an API client. The route
+  `POST /v1/inboxes/{id}/messages/{messageId}/move` has always worked, but it
+  was missing from the machine-readable contract, so it appeared in neither
+  `GET /openapi.json` nor the agent guide at `GET /agent`, and a client that
+  read those could not find a way to file a message out of a custom folder. The
+  route is now in both, with its request body documented. The two answers that
+  used to be dead ends name it: a folder-backed label cannot be removed (the
+  message says where to move it instead), and a system folder such as the
+  Inbox is not a label (the answer still is a `404`, but it says to use the
+  move route).
 
 ### Changed
 

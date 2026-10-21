@@ -62,9 +62,28 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	if got.Code != http.StatusConflict {
 		t.Fatalf("remove folder %d: %s", got.Code, got.Body.String())
 	}
+	// The refusal must name the route that does the moving.
+	if body := got.Body.String(); !strings.Contains(body, "/messages/{messageId}/move") {
+		t.Fatalf("the conflict must name the move route: %s", body)
+	}
+	// A system folder is not a label: the answer points at the move route too.
+	inboxFolder, err := svc.Store.GetSystemFolder(context.Background(), p.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = request(http.MethodPost, path, `{"label_id":"folder:`+inboxFolder.ID+`","operation":"add"}`)
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("system folder %d: %s", got.Code, got.Body.String())
+	}
+	if body := got.Body.String(); !strings.Contains(body, "/messages/{messageId}/move") {
+		t.Fatalf("a system folder must name the move route: %s", body)
+	}
 	got = request(http.MethodPost, path, `{"label_id":"folder:not_this_inbox","operation":"add"}`)
 	if got.Code != http.StatusNotFound {
 		t.Fatalf("unknown folder %d: %s", got.Code, got.Body.String())
+	}
+	if body := got.Body.String(); strings.Contains(body, "/move") {
+		t.Fatalf("an unknown label must not claim a move route: %s", body)
 	}
 	got = request(http.MethodPost, path, `{"label_id":"tag:Invoices","operation":"remove"}`)
 	if got.Code != 200 {

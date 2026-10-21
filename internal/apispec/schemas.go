@@ -244,6 +244,10 @@ var schemas = map[string]any{
 		"operation": map[string]any{"type": "string", "enum": []string{"add", "remove"}, "description": "add or remove."},
 	}, "operation"),
 
+	"MessageMove": obj(map[string]any{
+		"folder_id": str("Destination folder id, from GET /v1/inboxes/{id}/folders. It must belong to the same inbox."),
+	}, "folder_id"),
+
 	"IdentityList": obj(map[string]any{"identities": arrayOf("Identity", "Accessible identities.")}, "identities"),
 
 	"InboxFailure": obj(map[string]any{

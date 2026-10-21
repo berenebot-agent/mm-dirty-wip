@@ -193,7 +193,7 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 		if target == nil {
 			// API clients may apply a new tag by ID without pre-creating it.
 			if !strings.HasPrefix(labelID, "tag:") {
-				return store.MessageActionInput{}, "label not found", nil
+				return store.MessageActionInput{}, s.labelNotFound(ctx, p, box, labelID), nil
 			}
 			name = strings.TrimPrefix(labelID, "tag:")
 		}
@@ -242,7 +242,7 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 	}
 	if target.Kind == "folder" {
 		if operation == "remove" {
-			return store.MessageActionInput{}, "folder-backed labels cannot be removed; move the message instead", nil
+			return store.MessageActionInput{}, "folder-backed labels cannot be removed; move the message with POST /v1/inboxes/{id}/messages/{messageId}/move", nil
 		}
 		destination := target.FolderID
 		if box.Kind == model.InboxKindStandalone && !s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID) {
@@ -251,6 +251,29 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 		return store.MessageActionInput{Kind: "move", Destination: destination}, "", nil
 	}
 	return store.MessageActionInput{Kind: "label", Label: target.Name, LabelOp: operation, ProviderLabel: s.providerLabelInbox(ctx, p, box)}, "", nil
+}
+
+// labelNotFound explains an unresolvable label id. The catalogue holds the
+// custom folders of an inbox, so a client that filed a message by a system
+// folder id (Inbox, Archive, ...) is told where the moving route is instead of
+// being left with a bare "not found".
+func (s *Server) labelNotFound(ctx context.Context, p model.Principal, box model.Inbox, labelID string) string {
+	const notFound = "label not found"
+	id := strings.TrimPrefix(labelID, "folder:")
+	if id == labelID {
+		return notFound
+	}
+	folder, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, box.ID, id)
+	if err != nil {
+		return notFound
+	}
+	// A seeded system folder carries a protected role; a custom folder is a
+	// plain folder or label role and is in the catalogue already.
+	system := folder.IsSystem || (folder.Role != model.FolderRoleFolder && folder.Role != model.FolderRoleLabel)
+	if !system {
+		return notFound
+	}
+	return notFound + "; system folders are not labels, move the message with POST /v1/inboxes/{id}/messages/{messageId}/move"
 }
 
 // providerLabelInbox reports whether an inbox's additive labels are owned by the
@@ -327,7 +350,7 @@ func (s *Server) apiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request)
 		if problem == "forbidden" {
 			code = http.StatusForbidden
 		}
-		if problem == "label not found" {
+		if strings.Contains(problem, "label not found") {
 			code = http.StatusNotFound
 		}
 		if strings.Contains(problem, "cannot be removed") {
