@@ -6,17 +6,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [0.1.0-beta.2] - 2026-10-20
 
-### Changed
-
-- Release polish to address full github publish
-
-### Fixed
-
-- The inbox settings button no longer jumps between the far left of the mailbox
-  toolbar and the right-hand button group. The Outbox has no bulk actions, so its
-  settings button was the only control on that toolbar and rendered alone on the
-  left, while every other mailbox view put it in the button group on the right.
-  It now closes the button group on every mailbox view.
+- Release polish to address full github publish workflow.
 
 ## [0.1.0-beta.1] - 2026-10-20
 
