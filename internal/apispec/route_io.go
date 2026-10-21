@@ -89,6 +89,8 @@ var routeIOByKey = map[string]routeIO{
 	"DELETE /v1/inboxes/{id}/label-catalog/{labelId}":              {},
 	"POST /v1/inboxes/{id}/messages/{messageId}/labels": {Request: "MailboxLabelAction", Response: "Message",
 		Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 202, Schema: "MessageActionResult"}}},
+	"POST /v1/inboxes/{id}/messages/{messageId}/move": {Request: "MessageMove", Response: "Message",
+		Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 202, Schema: "MessageActionResult"}}},
 	"GET /v1/inboxes/{id}/remote":               {Response: "RemoteConfig"},
 	"PUT /v1/inboxes/{id}/remote":               {Request: "RemoteConfigPut", Response: "Inbox"},
 	"POST /v1/inboxes/{id}/remote/test":         {Request: "RemoteConfigTest", Response: "RemoteTestResult"},
