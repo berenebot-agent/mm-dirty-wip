@@ -4,9 +4,17 @@ MailMoose supports a wide range of options for receiving and sending email, or c
 
 | | Providers |
 | --- | --- |
-| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) |
+| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Remote MX](#inbound-remote-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) · [SendGrid](#inbound-sendgrid) |
 | **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
 | **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
+
+The API names for these providers — the value that goes in `"provider"` when you
+configure a domain over the API — are `mx` (Direct MX), `dialmx` (Antler MX),
+`remotemx` (Remote MX), `mailgun`, `cloudflare`, `resend`, `postmark`,
+`sendgrid`, `brevo` and `smtp`. Each provider's section below names its own.
+The label the interface shows and the API name are different strings — the
+picker says "Remote MailMoose MX" where the API says `remotemx` — so copy the
+name from the provider's section rather than from the dropdown.
 
 Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
 
@@ -15,6 +23,8 @@ Domains can inherit their parent's sending and receiving settings. Provider cred
 For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md) — including the [proxy requirements for the receiver session](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
 
 ## Inbound: Direct MX
+
+**API provider name:** `mx`
 
 **Direct MX (SMTP delivery)** receives email directly from other mail servers using the SMTP receiver bundled with MailMoose.
 
@@ -30,7 +40,24 @@ In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for
 
 Direct MX is not needed for Antler MX or provider-webhook receiving. For a separately operated receiver, configure [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account) instead.
 
+## Inbound: Remote MX
+
+**API provider name:** `remotemx`
+
+**Remote MX** receives email through a separate SMTP receiver that you run
+yourself. MailMoose opens an outbound connection to that receiver and never
+needs an inbound port of its own. Choose it when the receiver is dedicated to
+this account; for one public receiver shared by many domains, choose **Dial
+MX** instead.
+
+The receiver's session endpoint speaks **HTTP/2 only** and needs a
+non-buffering reverse proxy in front of it. Both requirements, the failure
+signatures and the `curl --http2` check are in the
+[Remote SMTP receiving guide](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
+
 ## Inbound: Antler MX
+
+**API provider name:** `dialmx`
 
 **Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
 
@@ -58,6 +85,8 @@ To send outbound mail, configure a separate provider under the domain's **Sendin
 
 ## Inbound: Mailgun
 
+**API provider name:** `mailgun`
+
 **Website:** [www.mailgun.com](https://www.mailgun.com/)
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
@@ -80,6 +109,8 @@ https://your-host.example/internal/ingest/mailgun/raw-mime
 MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Inbound: Cloudflare Email Routing
+
+**API provider name:** `cloudflare`
 
 **Website:** [developers.cloudflare.com](https://developers.cloudflare.com/email-routing/)
 
@@ -104,6 +135,8 @@ network addresses. See [Cloudflare's Email Routing guide](https://developers.clo
 
 ## Inbound: Resend
 
+**API provider name:** `resend`
+
 **Website:** [resend.com](https://resend.com/)
 
 Resend sends a signed notification to MailMoose, which fetches the original
@@ -122,6 +155,8 @@ cannot read received mail.
 If several domains use the same Resend webhook, configure its signing secret and API key for each domain.
 
 ## Inbound: Postmark
+
+**API provider name:** `postmark`
 
 **Website:** [postmarkapp.com](https://postmarkapp.com/)
 
@@ -142,6 +177,26 @@ webhook caller, not the envelope sender; see the relevant note in
 [SECURITY.md](../SECURITY.md). Postmark is inbound-only; choose a separate
 sending provider.
 
+## Inbound: SendGrid
+
+**API provider name:** `sendgrid`
+
+**Website:** [sendgrid.com](https://sendgrid.com/)
+
+1. In SendGrid, open **Settings → Inbound Parse** and click **Add Host & URL**.
+2. Point the receiving domain's **MX** record at `mx.sendgrid.net` with
+   priority 10.
+3. In MailMoose, open the domain's **Receiving** panel, choose **SendGrid**, and
+   save. MailMoose displays the webhook URL to paste into SendGrid.
+4. Set the receiving domain in SendGrid and paste that webhook URL.
+5. Tick **POST the raw, full MIME message**, then create a webhook security
+   policy with signature verification and attach it to the parse setting.
+6. Copy the public key the policy returns, paste it into the MailMoose panel and
+   save.
+7. Send a test message and confirm it appears in the intended inbox.
+
+SendGrid is inbound-only; choose a separate sending provider.
+
 ## Outbound
 
 Sending is configured per domain. Open a domain's page, choose a **Sending**
@@ -154,11 +209,15 @@ sending for that domain only.
 
 #### Outbound: Mailgun
 
+**API provider name:** `mailgun`
+
 **Website:** [www.mailgun.com](https://www.mailgun.com/)
 
 Enter the API key and sending domain shown in the Mailgun account.
 
 #### Outbound: Brevo
+
+**API provider name:** `brevo`
 
 **Website:** [www.brevo.com](https://www.brevo.com/)
 
@@ -166,15 +225,21 @@ Enter an API key and verify the sender address with Brevo.
 
 #### Outbound: Resend
 
+**API provider name:** `resend`
+
 **Website:** [resend.com](https://resend.com/)
 
 Enter an API key and verify the sending domain with Resend.
 
 #### Outbound: SMTP
 
+**API provider name:** `smtp`
+
 Enter the relay hostname, port, credentials and connection security requested by the form.
 
 #### Outbound: Direct MX
+
+**API provider name:** `mx`
 
 No relay credentials are used. The operator must be able to send directly to recipient mail servers on port 25.
 

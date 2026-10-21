@@ -1,6 +1,8 @@
 # MailMoose — API Contract
 
-This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
+This document describes the native API contract and its explicit compatibility
+surfaces. OpenAPI defines the operation schemas; the sections below explain
+semantics and provider capabilities.
 
 > **Route listings are generated.** `internal/apispec` is the single source of
 > truth for the endpoint reference at the end of this document; run `make docs`
@@ -159,15 +161,16 @@ surface below and [MAILBOX_BEHAVIOR.md](MAILBOX_BEHAVIOR.md).
 
 Standalone Google/Gmail inboxes also use this surface (D098). Connect using the
 human wizard with a BYO Google OAuth Web client; see
-[Google/Gmail setup](EMAIL_PROVIDERS.md#google-gmail).
+[Google/Gmail setup](EMAIL_PROVIDERS.md#google--gmail).
 Google list views cache metadata and synchronize through the History API; body
 and attachment reads remain live. Folder locators are Gmail label IDs, with
 `ARCHIVE` a derived view. A message can occur in multiple label views with the
 same stable ID. Label changes update Gmail; archive removes `INBOX`. Sending
 uses Gmail API, RemoteDraft creates a native Gmail draft, and Gmail maintains
 the Sent copy. Permanent deletion and custom system-role remapping are
-unsupported. Search `cursor` values are opaque strings for Google and must be
-passed back without parsing. Provider tokens and client secrets are never exposed.
+unsupported. Search uses the same `before` / `next_cursor` convention as other
+listings; tokens are opaque and must be passed back without parsing. Provider
+credentials and client secrets are never exposed.
 
 Routes under `/v1/inboxes/{id}/…` dispatch on the inbox kind, so one set of
 endpoints reads a domain inbox (local store) and a standalone inbox (live remote
@@ -196,11 +199,37 @@ server) alike. Every listing returns the shared **envelope**:
   when an account-wide listing spans several inboxes, so one unreachable mailbox
   does not fail the whole request. Only a stable `code` and a short safe message
   are exposed; never raw provider or store text.
-- An **account-wide** listing (no `inbox` scope) merges the local store and every
-  authorized remote inbox into one globally date-sorted stream; the opaque cursor
-  records each source's own progress plus the global key of the last item, so
-  resuming never duplicates or skips an item. A per-source failure is reported in
-  `errors` and does not fail the page.
+- An **account-wide** listing (no `inbox` scope) merges authorized sources by
+  choosing their newest available heads, not by concatenating inboxes. Message
+  and search continuations preserve each provider's native order and tie-breaks;
+  sorting a provider window by MailMoose IDs would break its continuation. The
+  opaque cursor records source progress. A per-source failure is reported in
+  `errors` and does not fail the page. Listings are not a frozen snapshot when
+  messages change between requests.
+
+Message, thread and search pages use **`before=<next_cursor>`** on both
+inbox-scoped and account-wide routes. Keep the same filters when continuing and
+stop when `next_cursor` is empty or absent. Tokens are opaque, not dates or
+provider identifiers. Search no longer accepts the old `cursor` parameter.
+`/v1/messages?inbox={id}`, `/v1/threads?inbox={id}` and
+`/v1/search?inbox={id}` use the same handlers as their inbox-scoped forms.
+Empty optional envelope fields (`next_cursor`, `errors`) may be omitted.
+
+### Shared contract and provider capabilities
+
+| Operation | Domain | Connected mailbox |
+|---|---|---|
+| Message items, filters, pagination, roles | Same native contract | Same native contract |
+| Message detail and raw MIME | Locally stored | Live fetch; unavailable provider returns an error, not a cached body |
+| Labels | Persistent additive tags and folder destinations | Catalogue describes additive labels/categories or exclusive folder destinations |
+| Permanent deletion | Supported after Trash | IMAP/Outlook subject to provider constraints; Google/One unsupported |
+| Assistant request-send | MailMoose approval | Remote draft by default; MailMoose approval can be configured |
+| Sending identities | Primary, managed aliases and explicit domain grants | Connected address; no managed-domain alias grant |
+| Transport setup | Domain sending/receiving settings | Per-inbox connector or human OAuth setup |
+
+These differences do not select a different message schema. Inspect the label
+catalogue's capabilities and the inbox's authoring settings rather than guessing
+from `kind`. `permissions.can_send` reports authorization, not provider readiness.
 
 The common routes:
 
@@ -209,30 +238,33 @@ GET    /v1/inboxes/{id}/folders
 POST   /v1/inboxes/{id}/folders
 PATCH  /v1/inboxes/{id}/folders/{folderId}
 DELETE /v1/inboxes/{id}/folders/{folderId}
-GET    /v1/inboxes/{id}/messages        ?folder=&before=&label=&from=&to=&limit=
+GET    /v1/inboxes/{id}/messages        ?folder=&before=&label_id=&from=&to=&unread=&has_attachment=&limit=
 GET    /v1/inboxes/{id}/messages/{messageId}
 GET    /v1/inboxes/{id}/messages/{messageId}/content
 GET    /v1/inboxes/{id}/messages/{messageId}/attachments/{part}
 POST   /v1/inboxes/{id}/messages/{messageId}/move   {"folder_id":"..."}
-GET    /v1/inboxes/{id}/threads         ?folder=&limit=
+GET    /v1/inboxes/{id}/threads         ?folder=&before=&limit=
 GET    /v1/inboxes/{id}/threads/{threadId}
-GET    /v1/inboxes/{id}/search          ?q=&folder=&from=&to=&label=&limit=
-GET    /v1/inboxes/{id}/labels
+GET    /v1/inboxes/{id}/search          ?q=&folder=&from=&to=&subject=&label_id=&unread=&has_attachment=&before=&limit=
+GET    /v1/inboxes/{id}/label-catalog
 ```
 
 Also under `/v1/messages/{id}` for both kinds: `GET …/content` (raw MIME) and
-`GET …/attachments/{part}` (one MIME part). `part` is a numeric dotted MIME part
-path (e.g. `1.2`).
+`GET …/attachments/{part}` (one attachment). For local mail `part` is a flat
+numeric attachment index; the attachment-ID download route is preferable. For
+connected mail it is a dotted MIME part path (e.g. `1.2`), discovered from MIME.
 
 ### Folders, roles and labels
 
 Every inbox has a single hierarchical **folder** tree. A folder carries a
 `role` (`folder`, `inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`,
-`outbox`, `label`) or is an ordinary custom folder. A message belongs to exactly
-one folder; moving it emits `message.folder_changed`. A protected system folder
+`outbox`, `label`) or is an ordinary custom folder. Local, IMAP and Outlook mail
+belongs to one folder; Gmail supports multiple label views. Moving a message
+emits `message.folder_changed`. A protected system folder
 cannot be renamed or deleted, and a non-empty folder is refused (nothing is
-silently cascaded). **Labels are not folders**: a label is free-text metadata on
-a message and is independent of the folder tree on both inbox kinds.
+silently cascaded). The **label catalogue** distinguishes additive tags from
+exclusive folder-backed move destinations; inspect its capabilities rather than
+assuming every label is independent of folders.
 
 Move a message with `POST /v1/inboxes/{id}/messages/{messageId}/move` and
 `{"folder_id":"<folder-id>"}`. The destination must belong to that inbox.
@@ -430,12 +462,13 @@ A wait timeout returns `504` with the action handle; it does not cancel the job.
 Failed or uncertain actions return `409` with their action record. Submission
 checks mailbox scope and roles before enqueueing; purge still requires Trash.
 Clients that previously depended on immediate mutation must add `?wait=true`.
-Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) queues up to 500 purges per
-request and returns `202` with `actions`; `?wait=true` returns the completed
-`purged` count when the entire Trash fits in that batch. If more than 500 cached
-messages are trashed, the response includes `truncated: true` and `remaining: true`
-(and does not wait), so call the endpoint again after the queued batch is
-processed. Standalone enumeration covers the cached Trash index.
+Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) starts a durable parent action
+that discovers Trash targets and purges them in background batches without a
+total batch cap. IMAP/Outlook enumerate provider-side Trash, not only the cache;
+Google/One permanent deletion remains unsupported. The default `202` includes
+the parent action and a `Location` for progress. Repeated submissions reuse an
+unsettled operation. `?wait=true` waits up to 30 seconds: `200` includes `purged`,
+`409` reports a failed/uncertain action, and `504` includes its continuing handle.
 
 Actions execute in submission order per message. Transient absolute-state patches
 have bounded retries; moves and purge with uncertain remote outcomes are never
@@ -459,7 +492,6 @@ folder
 label
 from
 to
-after
 before
 unread
 has_attachment
@@ -530,7 +562,8 @@ Normalized message:
   "read": false,
   "size_bytes": 2048,
   "is_spam": false,
-  "labels": ["Invoices", "Unpaid"]
+  "labels": ["Invoices", "Unpaid"],
+  "label_ids": ["tag:Invoices", "tag:Unpaid"]
 }
 ```
 
@@ -546,25 +579,46 @@ receiver instead.
 
 ### Labels
 
-Labels are free-text tags on a message. There is no label catalogue: a label
-exists only while at least one message carries it. Labels are shared across the
-account and a message may have many. Matching ignores case and surrounding
-whitespace; the displayed casing is the one first assigned.
+Use the inbox's **provider-aware catalogue**, including when it has no labels:
 
-A label is trimmed and internal runs of whitespace collapsed. It must be
+```http
+GET    /v1/inboxes/{id}/label-catalog
+POST   /v1/inboxes/{id}/label-catalog
+PATCH  /v1/inboxes/{id}/label-catalog/{labelId}
+DELETE /v1/inboxes/{id}/label-catalog/{labelId}
+POST   /v1/inboxes/{id}/messages/{messageId}/labels?wait=true
+```
+
+Catalogue entries expose `id`, `name`, `kind` (`tag` or `folder`), `membership`
+(`multiple` or `exclusive`), `source`, and supported remove/rename/delete actions.
+The catalogue's `capabilities` describes creation and edit support even when
+`items` is empty. A domain inbox can keep an empty named tag; Gmail/One own their
+provider labels, Outlook exposes categories and folder destinations, and raw
+IMAP uses folder-backed destinations. Labels are inbox-scoped; an account-wide
+name filter matches that name within each authorized inbox.
+
+Apply a catalogue entry with `{"label_id":"tag:Invoices","operation":"add"}`;
+use `remove` only where `can_remove` is true. Adding an exclusive folder-backed
+label **moves** the message; it is not another independent classification.
+System folders use the explicit move endpoint. Label writes require Assistant
+or Owner and follow the normal queued-action / `?wait=true` convention.
+
+A native additive tag is trimmed and internal runs of whitespace collapsed. It must be
 non-empty, at most 64 characters, and must not contain control characters, `/`
 or `\`. (The path separators are rejected so a label can be addressed by its own
 URL query parameter without path-encoding ambiguity.) An invalid label is
-rejected with a validation error.
+rejected with a validation error. Provider-owned labels follow provider naming
+rules and can include hierarchical names; use returned catalogue IDs verbatim.
 
 ```http
 GET /v1/labels
 ```
 
-Returns the distinct labels currently in use, scoped to the key's authorized
-inboxes.
+This is the legacy flat-name view, scoped to the key's authorized inboxes. It
+does not describe capabilities, empty labels or exclusive destinations.
 
-Set a message's labels with `PATCH /v1/messages/{id}`:
+Legacy replace-set additive-label writes remain available through
+`PATCH /v1/messages/{id}`:
 
 ```json
 {"labels": ["Invoices", "Unpaid"]}
@@ -605,14 +659,24 @@ Optional filters:
 ```text
 inbox
 label
+label_id
+folder
 from
 to
-after
+subject
+unread
 before
 has_attachment
+limit
 ```
 
-Search operates only within the key's authorized inbox set.
+Search operates only within the key's authorized inbox set. Both route forms
+accept `q`, `folder`, `label`, `label_id`, `from`, `to`, `subject`, `unread`,
+`has_attachment`, `before`, and `limit`; the account-wide form also accepts
+`inbox`. Omit `q` for a filter-only search. Use plain text for portable searches:
+local mail uses FTS5 while connected mailboxes use their provider's search engine;
+advanced syntax, tokenization and searchable fields are not identical. There is
+no portable date-range filter; `before` is a continuation, never a timestamp.
 
 ## 7. Attachments
 
@@ -635,8 +699,9 @@ Metadata:
 ```
 
 `GET /v1/messages/{id}/content` streams the raw RFC5322 MIME; `GET
-/v1/messages/{id}/attachments/{part}` streams one MIME part by its numeric
-dotted part path (e.g. `1.2`). For a **standalone** inbox's message only the
+/v1/messages/{id}/attachments/{part}` downloads a local attachment by flat
+numeric index or a connected attachment by dotted MIME part path (e.g. `1.2`).
+For a **standalone** inbox's message only the
 header is cached, so the `attachments` listing is empty and parts are downloaded
 structurally by path (the body is fetched live and never archived).
 
@@ -1075,6 +1140,11 @@ accepts `"regenerate_secret": true`. Provider schemas:
   `cloudflare: {"webhook_secret"}` (generated by MailMoose);
   `resend: {"api_key","webhook_secret","api_base?"}`;
   `postmark: {"username","password"}` (both generated by MailMoose);
+  `sendgrid: {"public_key"}` (the base64 public key of the SendGrid Inbound
+  Parse security policy);
+  `remotemx: {}` (no config — the receiver's URL and bearer key are
+  account-scoped and set through the account's Remote MX settings, not per
+  domain);
   `dialmx: {"service?","contact_email?","receiver_urls?","enforcement?"}` —
   `service` is `antler` (the zero-config Antler MX shared relay, the default) or
   `custom`. Antler requires a valid `contact_email` and resolves the hosted
@@ -1087,6 +1157,33 @@ accepts `"regenerate_secret": true`. Provider schemas:
   `enforcement` is `moderate`
   (default) or `hard`. A save that supplies only `receiver_urls` is treated as
   custom, so legacy configurations are never silently migrated.
+
+The `provider` field takes the provider's **name**, not the label the web
+interface shows:
+
+| `provider` value | Interface label | Direction |
+| --- | --- | --- |
+| `dialmx` | Antler MX (Dial MX for a custom receiver) | receiving |
+| `mx` | Direct MX | receiving and sending |
+| `remotemx` | Remote MailMoose MX | receiving |
+| `cloudflare` | Cloudflare | receiving |
+| `mailgun` | Mailgun (Mailgun API when sending) | receiving and sending |
+| `postmark` | Postmark | receiving |
+| `resend` | Resend | receiving and sending |
+| `sendgrid` | SendGrid | receiving |
+| `brevo` | Brevo API | sending |
+| `smtp` | SMTP | sending |
+
+`dialmx` carries two services: `"service": "antler"` (the hosted Antler MX
+relay, the default) and `"service": "custom"` (a receiver you run yourself,
+shared by many domains — the Dial MX option in
+[Remote SMTP receiving](REMOTE_MX.md)). The picker shows a longer description
+for Antler MX and Remote MX, and Direct MX's own description already names the
+bundled receiver; the name is the same in every case.
+
+A name is accepted only in its own direction — `remotemx` is a receiving
+provider and `brevo` a sending one — and a name that is not registered for the
+direction being saved is refused with a `400`.
 
 A blank secret on a same-provider save keeps the stored value; changing provider
 never reuses old fields or secrets. Non-secret fields are whole-config values:
@@ -1432,7 +1529,7 @@ Generated from `internal/apispec`; do not edit by hand.
 
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
-| GET | /v1/search | Search messages (FTS5) | read |
+| GET | /v1/search | Search messages | read |
 
 ### Labels
 

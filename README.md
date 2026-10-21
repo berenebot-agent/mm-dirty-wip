@@ -131,6 +131,12 @@ Give your agent a MailMoose URL and API key. MailMoose provides built-in discove
 
 See the [agent connector guide](docs/CONNECTORS.md).
 
+Domain and connected inboxes share the same native message schema and mailbox
+API. Follow `next_cursor` with `before` for lists, threads and search; inspect
+label capabilities and authoring settings rather than branching on inbox type.
+See the [API capability matrix](docs/API.md#shared-contract-and-provider-capabilities)
+for deliberate provider limits, including remote body availability and deletion.
+
 ## Documentation
 
 | Guide | Covers |

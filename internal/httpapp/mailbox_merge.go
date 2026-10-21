@@ -10,19 +10,16 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/limits"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // This file implements the account-wide merged pagination for the common message
 // and thread listings. A listing that spans the local store and several remote
-// inboxes must present one globally date-sorted stream, not per-inbox
-// concatenation, and a single opaque cursor must let a client resume without
-// duplicates or gaps. The cursor records per-source progress (each source's own
-// native cursor) plus the global stable key of the last item returned, so a later
-// page can (a) ask each source for exactly the items strictly after its own
-// progress and (b) drop anything not strictly older than the global key, which
-// prevents an interleaved item from being returned twice across sources.
+// inboxes merge source heads, not per-inbox concatenation. The opaque cursor
+// records each source's native progress. Thread pages also retain a global key;
+// message/search pages preserve native provider order, including tied dates.
 
 // commonCursor is the opaque pagination token for a merged account-wide listing.
 // Min is the global stable key ("<RFC3339Nano>|<id>") of the last item returned;
@@ -42,7 +39,7 @@ type commonCursor struct {
 
 // encodeCommonCursor serializes a cursor to an opaque, URL-safe token.
 func encodeCommonCursor(c commonCursor) string {
-	if c.Min == "" && len(c.From) == 0 {
+	if c.Min == "" && len(c.From) == 0 && len(c.Scan) == 0 {
 		return ""
 	}
 	b, err := json.Marshal(c)
@@ -67,7 +64,39 @@ func decodeCommonCursor(raw string) (commonCursor, bool) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return commonCursor{}, false
 	}
-	return c, true
+	return c, c.Min != "" || len(c.From) > 0 || len(c.Scan) > 0
+}
+
+// pageLookahead avoids the store resetting an over-ceiling limit to its default.
+func pageLookahead(limit int) int {
+	if limit >= limits.PageSizeMaxList {
+		return limits.PageSizeMaxList
+	}
+	return limit + 1
+}
+
+func (s *Server) listingCompleteness(ctx context.Context, p model.Principal, inboxID string, failures []model.InboxFailure) model.ListCompleteness {
+	if len(failures) > 0 {
+		return model.CompletenessPartial
+	}
+	boxes, err := s.readableInboxes(ctx, p)
+	if err != nil {
+		return model.CompletenessUnknown
+	}
+	result := model.CompletenessComplete
+	for _, mb := range boxes {
+		if !mb.routed || (inboxID != "" && mb.inbox.ID != inboxID) {
+			continue
+		}
+		coverage := s.remoteIndexCompleteness(ctx, p.AccountID, mb.inbox.ID)
+		if coverage == model.CompletenessPartial {
+			return coverage
+		}
+		if coverage == model.CompletenessUnknown {
+			result = coverage
+		}
+	}
+	return result
 }
 
 // sourceCursor returns a source's native cursor from a decoded cursor.
@@ -141,7 +170,7 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 	// FolderScoped/MailboxID, which the scoped route sets directly and this merge
 	// must carry through for the account-wide route to agree.
 	localFilter.Before = cur.sourceCursor("local")
-	localFilter.Limit = limit + 1
+	localFilter.Limit = pageLookahead(limit)
 	msgs, lerr := s.Service.Store.ListMessages(ctx, p, localFilter)
 	if lerr != nil {
 		return nil, "", nil, normalizeMailboxStoreError(lerr)
@@ -151,18 +180,18 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 		entries = append(entries, mergedItem{msg: m, source: "local", cursor: m.ID, ts: messageSortTime(m), key: stableKey(messageSortTime(m), m.ID)})
 	}
 
-	// Remote sources: every inbox the principal may read. Spam, trashed and
-	// direction are local-only concepts with no remote equivalent, so a query
-	// using them is answered from the local store alone rather than silently
-	// mixing in remote mail that cannot satisfy the filter.
-	localOnly := f.SpamOnly || f.Trashed || f.Direction != ""
+	// Remote state filters use mapped system roles, just like single-inbox reads.
 	boxes, berr := s.readableInboxes(ctx, p)
 	if berr != nil {
 		return nil, "", nil, berr
 	}
 	scanCursors := map[string]string{}
 	for _, mb := range boxes {
-		if localOnly || !mb.routed || !mb.remoteConfigured() {
+		if !mb.routed || !mb.remoteConfigured() {
+			continue
+		}
+		scopeFolder, present := s.remoteFilterFolder(ctx, p.AccountID, mb.inbox.ID, folder, f)
+		if !present {
 			continue
 		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
@@ -183,11 +212,11 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 		exhausted := false
 		var rerr error
 		for page := 0; page < remoteFilterScanMaxPages && collected <= limit; page++ {
-			rawLimit := limit + 1
+			rawLimit := pageLookahead(limit)
 			if rawLimit < remoteFilterScanPage {
 				rawLimit = remoteFilterScanPage
 			}
-			res, e := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, folder, rawLimit, scanBefore)
+			res, e := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, scopeFolder, rawLimit, scanBefore)
 			if e != nil {
 				rerr = e
 				break
@@ -233,42 +262,36 @@ func remoteSourceCursor(v app.RemoteMessageView) string {
 	return v.ID
 }
 
-// pageMerged sorts candidates by (time desc, id desc), drops any item not
-// strictly older than the cursor's global key, returns the page, and builds the
-// next cursor. Incoming per-source progress is preserved so a source that
-// contributed nothing to this page is not reset to its newest window on the next
-// request (which would drop its older items after the global-key filter).
+// pageMerged merges source heads without reordering a source's native results.
+// Provider search cursors follow native order, which need not use our ID as the
+// tie-breaker. Sorting a whole provider window by our IDs can skip unreturned mail.
 func pageMerged(entries []mergedItem, cur commonCursor, limit int, scan map[string]string) ([]model.Message, string) {
-	minKey := cur.Min
-	sort.SliceStable(entries, func(i, j int) bool {
-		if !entries[i].ts.Equal(entries[j].ts) {
-			return entries[i].ts.After(entries[j].ts)
-		}
-		return entries[i].msg.ID > entries[j].msg.ID
-	})
-	// Drop duplicates: anything not strictly older than the cursor key was
-	// already delivered on a previous page.
-	if minKey != "" {
-		filtered := entries[:0]
-		for _, e := range entries {
-			if keyBefore(e.key, minKey) {
-				filtered = append(filtered, e)
+	sources := map[string][]mergedItem{}
+	for _, entry := range entries {
+		sources[entry.source] = append(sources[entry.source], entry)
+	}
+	page := make([]mergedItem, 0, limit)
+	for len(page) < limit {
+		var best mergedItem
+		found := false
+		for _, source := range sources {
+			if len(source) > 0 && (!found || keyBefore(best.key, source[0].key)) {
+				best, found = source[0], true
 			}
 		}
-		entries = filtered
+		if !found {
+			break
+		}
+		page = append(page, best)
+		sources[best.source] = sources[best.source][1:]
 	}
-	page := entries
-	truncated := false
-	if len(page) > limit {
-		page = page[:limit]
-		truncated = true
-	}
+	truncated := len(entries) > len(page) || (limit == limits.PageSizeMaxList && len(page) == limit)
 	out := make([]model.Message, 0, len(page))
 	// Seed the next cursor with the incoming per-source progress, then advance
 	// only the sources that actually contributed an item to this page. A source
 	// that returned nothing keeps its prior position (or stays unstarted), so the
 	// next request resumes it where it left off rather than from the newest item.
-	next := commonCursor{Min: minKey, From: map[string]string{}, Scan: map[string]string{}}
+	next := commonCursor{From: map[string]string{}, Scan: map[string]string{}}
 	for src, c := range cur.From {
 		if c != "" {
 			next.From[src] = c
@@ -277,7 +300,6 @@ func pageMerged(entries []mergedItem, cur commonCursor, limit int, scan map[stri
 	advanced := map[string]bool{}
 	for _, e := range page {
 		out = append(out, e.msg)
-		next.Min = e.key
 		next.From[e.source] = e.cursor
 		advanced[e.source] = true
 	}
@@ -340,7 +362,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		source string
 	}
 	var entries []tentry
-	local, lerr := s.Service.Store.ListThreadsInFolderBefore(ctx, p, "", limit+1, cur.sourceCursor("local"), folder)
+	local, lerr := s.Service.Store.ListThreadsInFolderBefore(ctx, p, "", pageLookahead(limit), cur.sourceCursor("local"), folder)
 	if lerr != nil {
 		return nil, "", nil, normalizeMailboxStoreError(lerr)
 	}
@@ -358,7 +380,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 			continue
 		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
-		threads, rerr := mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, folder, limit+1, cur.sourceCursor(mb.inbox.ID))
+		threads, rerr := mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, folder, pageLookahead(limit), cur.sourceCursor(mb.inbox.ID))
 		if rerr != nil {
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 			continue
@@ -403,7 +425,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		next.Min = e.key
 		next.From[e.source] = e.cursor
 	}
-	if !truncated {
+	if !truncated && !(limit == limits.PageSizeMaxList && len(page) == limit) {
 		return out, "", failures, nil
 	}
 	return out, encodeCommonCursor(next), failures, nil
@@ -416,19 +438,21 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 // search does not filter on it. Each remote source is asked for exactly the UIDs
 // strictly below its own resumable UID cursor (carried in the common cursor), so a
 // later page resumes the server search instead of re-reading the newest window.
-// Completeness is partial when a remote source participates or a failure occurs.
-func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, folder, from, to, subject string, labels labelFilter, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
+// Completeness describes source coverage, independently of pagination.
+func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q string, folder, from, to, subject string, labels labelFilter, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
 	if limit <= 0 {
 		limit = 1
 	}
 	localFilter := store.MessageFilter{
+		InboxID:       inboxID,
 		From:          from,
 		To:            to,
+		Subject:       subject,
 		Unread:        unread,
 		HasAttachment: hasAttachment,
 		Labels:        labels.Names,
 		Before:        cur.sourceCursor("local"),
-		Limit:         limit + 1,
+		Limit:         pageLookahead(limit),
 	}
 	if folder != "" {
 		localFilter.FolderScoped = true
@@ -456,7 +480,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 	}
 	scanCursors := map[string]string{}
 	for _, mb := range boxes {
-		if !mb.routed || !mb.remoteConfigured() {
+		if !mb.routed || (inboxID != "" && mb.inbox.ID != inboxID) || (inboxID == "" && !mb.remoteConfigured()) {
 			continue
 		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
@@ -512,8 +536,10 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 				rerr = e
 				break
 			}
-			if res.Completeness != model.CompletenessComplete {
+			if res.Completeness == model.CompletenessPartial {
 				completeness = model.CompletenessPartial
+			} else if res.Completeness != model.CompletenessComplete && completeness == model.CompletenessComplete {
+				completeness = model.CompletenessUnknown
 			}
 			for _, v := range res.Items {
 				if hasAttachment != nil && v.HasAttach != *hasAttachment {
@@ -558,6 +584,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			scanUID = res.NextCursor
 		}
 		if rerr != nil {
+			if inboxID != "" {
+				return nil, "", model.CompletenessUnknown, nil, rerr
+			}
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 			completeness = model.CompletenessPartial
 		} else if collected == 0 && !exhausted && scanUID != 0 {
@@ -579,6 +608,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 // express every local filter) so from/to/unread/has_attachment/label are never
 // silently ignored. Spam/trash/direction are local-only and are not matched here.
 func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
+	if f.ThreadID != "" && m.ThreadID != f.ThreadID {
+		return false
+	}
 	if f.From != "" && !strings.Contains(strings.ToLower(m.From.Address), strings.ToLower(strings.TrimSpace(f.From))) {
 		return false
 	}
@@ -617,6 +649,23 @@ func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
 	return true
 }
 
+func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, folder string, f store.MessageFilter) (string, bool) {
+	role := ""
+	switch {
+	case f.Trashed:
+		role = model.FolderRoleTrash
+	case f.SpamOnly:
+		role = model.FolderRoleSpam
+	case f.Direction == "outbound":
+		role = model.FolderRoleSent
+	}
+	if role == "" {
+		return folder, true
+	}
+	mapped, ok := s.remoteRoleFolder(ctx, accountID, inboxID, role)
+	return mapped.Path, ok
+}
+
 // decodeCursorOrLegacy parses an opaque merged cursor, falling back to treating a
 // raw value as a local source cursor. The fallback keeps a plain message-id
 // "before" working for a local/legacy caller while the opaque token carries the
@@ -629,7 +678,9 @@ func decodeCursorOrLegacy(raw string) (commonCursor, bool) {
 	if c, ok := decodeCommonCursor(raw); ok {
 		return c, true
 	}
-	// Not a merged token: treat it as a local-only cursor. A value that decodes
-	// as base64 but not as JSON lands here too, which is the intended fallback.
-	return commonCursor{From: map[string]string{"local": raw}}, true
+	// Keep legacy local message IDs without accepting arbitrary malformed tokens.
+	if strings.HasPrefix(raw, "msg_") {
+		return commonCursor{From: map[string]string{"local": raw}}, true
+	}
+	return commonCursor{}, false
 }

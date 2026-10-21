@@ -80,8 +80,9 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   seeded system or operator-created) or `remote` (mirrored from the provider).
   `IsSystem` marks a protected seeded folder; `RoleLocked` marks an explicit
   operator role mapping that a reconcile must never re-infer. Folders are
-  **not** aliases or labels: managed aliases belong to inboxes and labels are
-  free-text message metadata, both independent of the folder tree.
+  **not** aliases: managed aliases belong to inboxes. The public label catalogue
+  distinguishes additive tags from exclusive folder-backed move destinations;
+  provider capability descriptors, not the word "label", determine the action.
 - `RemoteLocator{FolderPath, UIDValidity, UID, MessageID}` — the remote routing
   address. `Empty()` reports a local record. A locator is valid only while its
   `UIDValidity` still matches the folder.
@@ -442,17 +443,24 @@ transient scope/`LIST` shortfall or a generation flip.
   IMAP arrivals are queued for bounded background prefix reads in the existing worker;
   existing mail is not back-generated. `created_at` is never replaced
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
-- **Account-wide listings merge into one globally ordered stream.**
-  `internal/httpapp/mailbox_merge.go` merges the local store with every
-  authorized remote inbox into a single date-sorted page (not per-inbox
-  concatenation). The opaque cursor (`commonCursor`) records each source's own
-  native progress plus the **global stable key** (`<RFC3339Nano>|<id>`) of the
-  last returned item, so a later page resumes each source strictly after its own
-  progress and drops anything not strictly older than the global key — no
-  duplicates, no gaps, even when items interleave across sources or share a
-  timestamp. The per-source key is the message/thread **id** (not a timestamp),
-  because a timestamp is not unique and would drop same-second siblings on the
-  next page. A source failure is recorded per-inbox and never fails the page.
+- **Account-wide listings merge sources rather than concatenate inboxes.**
+  `internal/httpapp/mailbox_merge.go` resumes each source through its native
+  keyset or provider continuation, carried inside an opaque `commonCursor`.
+  Message/search pages select the newest available source head without
+  reordering an individual provider's results: provider tie-breaking need not
+  match MailMoose IDs, and sorting a provider window then resuming its native
+  cursor could skip unreturned messages. Local message/search ordering uses
+  received time (creation time if unavailable), then ID. Thread merging also
+  carries a global stable key. A source failure is recorded per-inbox and never
+  fails the account-wide page; a single-inbox request reports its source failure.
+  Provider ordering remains provider-defined; pagination is not a frozen snapshot
+  when mail changes between requests.
+- **One pagination input for native mailbox listings.** Both inbox-scoped and
+  equivalent `?inbox=` message/thread/search routes use the same handlers.
+  Continue with `before=<next_cursor>` and unchanged filters. Tokens are opaque,
+  not dates or IMAP UIDs; the old standalone search `cursor` input is rejected
+  with an instruction to use `before`. See `docs/API.md` §3a for the capability
+  matrix and §6 for the portable search boundary.
 - **Search and filtered lists continue correctly under local filtering.**
   Because the remote source cannot express every local filter (notably
   `has_attachment`), the merge and the scoped remote list pull successive raw
@@ -463,8 +471,11 @@ transient scope/`LIST` shortfall or a generation flip.
   non-matches. When a bounded scan reaches its per-request page cap without
   finding a match, it carries a **scan continuation** (`commonCursor.Scan`, or the
   returned `next_cursor` for the scoped list) so the next request resumes deeper
-  instead of silently omitting a match beyond the cap. Completeness is `partial`
-  whenever a remote source participates or a failure occurs.
+  instead of silently omitting a match beyond the cap. Completeness describes
+  source coverage, not the existence of a next page: completed indexes/provider
+  enumerations can be `complete`; known incomplete coverage or source failures
+  are `partial`; indeterminate coverage is `unknown`. Remote participation alone
+  does not force `partial`.
 - Routes are registered in `internal/httpapp/server.go`; the API reference is a
   generated artifact (`make docs`) and `tests/unit/apispec` guards its counts.
   The external-alias UI/API/routes/schemas are removed with no compatibility
