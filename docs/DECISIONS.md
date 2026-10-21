@@ -149,7 +149,10 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D143: Passkey controls are hidden where WebAuthn cannot run](#d143-passkey-controls-are-hidden-where-webauthn-cannot-run)
 - [D144: The receiver session endpoint's proxy requirements are documented for operators](#d144--the-receiver-session-endpoints-proxy-requirements-are-documented-for-operators)
 - [D145: An account Admin key holds the domain-wide sending grant implicitly](#d145--an-account-admin-key-holds-the-domain-wide-sending-grant-implicitly)
-- [D146: The installation MX receiver is added in the Admin page, in both modes](#d146--the-installation-mx-receiver-is-added-in-the-admin-page-in-both-modes)
+- [D146: The installation receiver Admin card was superseded](#d146--the-installation-receiver-admin-card-was-superseded)
+- [D147: The status the receiver URL answered is surfaced in the Receiving panel](#d147--the-status-the-receiver-url-answered-is-surfaced-in-the-receiving-panel)
+- [D148: Connectors return to the dashboard Clients list behind a per-admin toggle](#d148--connectors-return-to-the-dashboard-clients-list-behind-a-per-admin-toggle)
+- [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
 
 ---
 
@@ -2136,8 +2139,9 @@ authentication policy and durable delivery semantics.
 > configured through the API. The account-level Remote MX receiver (D084) is the
 > UI-supported path for a separately operated receiver.
 >
-> **Amended by D146.** The installation receiver is added in the Admin page in
-> both modes. The per-domain Direct MX panel stays Included-only.
+> **Amended by D149.** The Included receiver is configured from the domain's
+> Direct MX Receiving panel. The account-level Remote MX (D084) remains a
+> separate provider for receivers operated outside the core.
 
 **Requirement:** The installation-wide MX receiver must be configurable from the
 system-administrator UI/API and survive restarts, instead of being fixed by the
@@ -5971,7 +5975,13 @@ is always answerable.
 schema change, no new dependency, transport or runtime service. One query
 replaces the per-inbox domain lookups the bootstrap used to make.
 
-## D146 — The installation MX receiver is added in the Admin page, in both modes
+## D146 — The installation receiver Admin card was superseded
+
+> **Superseded by D149.** The installation-wide receiver card was added to
+> Admin, then removed after review: it split Direct MX configuration away from
+> the domain Receiving flow and conflated Direct MX with Remote MX.
+
+The historical decision below records the short-lived Admin-card approach.
 
 **Requirement:** The public beta UAT (finding D-4) found the installation-wide
 Direct MX receiver's Remote mode reachable only by reading the source: the
@@ -6102,3 +6112,42 @@ deletion and the delivery-log link are unchanged); the change passes through
 store field, one validation loop, and ~40 lines of JavaScript clone of the
 Groups toggle semantics. No schema, migration, dependency, transport or new
 surface.
+
+## D149 — Direct MX stays in Receiving; Remote MX is a separate provider
+
+**Requirement:** Keep receiver setup with domain Receiving, remove the duplicate
+Admin settings surface and make the UI distinguish direct delivery to the
+MailMoose core from a separately operated receiver.
+
+**Decision (2026-10-21, human approved):** Direct MX means delivery to the
+receiver bundled with the core. Its shared receiver controls remain in the
+Direct MX provider panel in domain Receiving, not in Settings → Admin. The
+panel shows the domain's MX target first, followed by a yellow notice that the
+receiver settings are shared by all Direct MX domains, then domain-level
+receiver enforcement and the Included receiver hostname, limits, verification,
+network/timeouts and STARTTLS controls. The dialog widens when Direct MX is
+selected. There is no Included/Remote selector in the Direct MX UI.
+
+Remote MX remains a distinct receiving provider for an operator-run receiver:
+MailMoose connects outbound over HTTP/2, and the receiver URL/key are configured
+in the account's Remote MX settings surfaced from Receiving. The UI links to the
+Remote SMTP receiving guide and does not present that receiver as the core's
+internal listener.
+
+The Direct MX setup does not ask the operator to publish an SPF record for the
+receiving domain. SPF verification evaluates the incoming sender's domain; the
+receiver's MX hostname is what belongs in the receiving domain's MX record.
+
+The installation API's `remote` mode remains available to API clients as an
+advanced installation-level configuration; it is not offered as a Direct MX
+mode in the human UI. The account-level Remote MX provider remains the normal UI
+path for a receiver operated separately.
+
+**Reason:** The Admin card created a second place to edit Direct MX and put a
+deployment-wide receiver choice away from the Receiving workflow. The product
+already has a separate account-level Remote MX provider for external receivers.
+Keep Direct MX direct-to-core, explain its shared scope in the panel, and keep
+the distinct remote setup in Remote MX.
+
+**Complexity:** UI layout and help text only, plus removal of the duplicate
+Admin form/routes. No runtime, API or schema change.

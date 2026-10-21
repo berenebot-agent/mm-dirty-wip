@@ -40,16 +40,19 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	}
 	// The status panel is present and reflects the configured receiver. Without a
 	// live runtime the state is not "active", so the honest warning must show.
-	if !strings.Contains(body, "Direct MX receiver") {
-		t.Fatalf("admin receiving dialog missing Direct MX status panel:\n%s", body)
+	if !strings.Contains(body, "Shared receiver") || !strings.Contains(body, "Point this domain's MX record at <code>mx.test</code>") {
+		t.Fatalf("admin receiving dialog missing Direct MX setup and shared-settings notice:\n%s", body)
 	}
-	// The steps must steer the operator to the Direct MX panel and away from the
-	// receiver's SMTP greeting name, which is not the MX target.
-	if strings.Contains(body, "advertised SMTP hostname (shown below)") {
-		t.Fatal("Direct MX steps still promise the SMTP hostname is always shown below")
+	if strings.Contains(uiGet(t, h, cookie, "/admin").Body.String(), "id=\"mx-settings\"") {
+		t.Fatal("Direct MX settings must not also appear on the Admin page")
 	}
-	if !strings.Contains(body, "Do not use the SMTP greeting hostname") {
-		t.Fatalf("Direct MX steps must distinguish the MX target from the greeting hostname:\n%s", body)
+	if strings.Contains(body, "Direct MX receiver") || strings.Contains(body, "Publish an SPF record") {
+		t.Fatalf("Direct MX setup has duplicate or misleading instructions:\n%s", body)
+	}
+	// The MX target is named directly; the greeting hostname is a separate
+	// receiver setting below and is not described as the DNS target.
+	if strings.Contains(body, "Do not use the SMTP greeting hostname") {
+		t.Fatal("Direct MX setup retains redundant MX-target guidance")
 	}
 	// The panel names the MX target from the configured hostname even with no
 	// live runtime, rather than showing nothing.

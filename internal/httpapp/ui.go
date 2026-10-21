@@ -475,7 +475,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, body string, dat
 // extra definitions are appended after the shell's own defines and before the
 // body define wraps the page body.
 func (s *Server) renderExtra(w http.ResponseWriter, r *http.Request, extra, body string, data any) {
-	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "mx-editor"}}` + mxReceiverSection + `{{end}}{{define "mx-included-fields"}}` + mxIncludedFields + `{{end}}{{define "mx-install-editor"}}` + mxInstallSection + `{{end}}{{define "account-operators"}}` + accountOperatorsSection + `{{end}}` + extra + `{{define "body"}}` + body + `{{end}}`)
+	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "mx-editor"}}` + mxReceiverSection + `{{end}}{{define "account-operators"}}` + accountOperatorsSection + `{{end}}` + extra + `{{define "body"}}` + body + `{{end}}`)
 	if err != nil {
 		s.Log.Error("template parse failed", "error", err)
 		http.Error(w, "could not render page", 500)
@@ -860,16 +860,9 @@ type pageData struct {
 	InviteLink           string
 	Operators            []memberView
 	Accounts             []store.AccountSummary
-	// Installation MX receiver panel shown on /admin. MXForm carries the
-	// non-secret editable values (including any preserved failed submission);
-	// the private STARTTLS key is never part of it.
-	MXForm              mxFormView
-	MXStatus            app.MXReceiverStatus
-	MXIncludedSupported bool
-
-	DraftCounts  map[string]int
-	SendRequests []SendRequestRow
-	ReviewDraft  *model.Draft
+	DraftCounts          map[string]int
+	SendRequests         []SendRequestRow
+	ReviewDraft          *model.Draft
 	// ReviewInvalidReply is the newest invalid approval reply for the pending
 	// request shown on the review page, if any.
 	ReviewInvalidReply *store.ControlMessage
@@ -2101,7 +2094,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{end}}<style>
 .antler-wizard [hidden]{display:none!important}.antler-progress{font-size:13px;color:#666;border-bottom:1px solid #ddd;padding-bottom:8px}.antler-intro{margin:0 0 14px}.antler-intro p{margin:0 0 10px}.antler-intro figure{margin:12px 0}.antler-intro img{display:block;width:100%;height:auto;border:1px solid #ddd;border-radius:8px;background:#fff}.antler-dns-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}.antler-dns-table th{text-align:left;color:#666;font-weight:600;border-bottom:1px solid #ddd;padding:6px}.antler-dns-table td{vertical-align:middle;padding:8px 6px;border-bottom:1px solid #eee;overflow-wrap:anywhere}.antler-dns-table th:nth-child(1),.antler-dns-table td:nth-child(1){width:48%}.antler-dns-table th:nth-child(2),.antler-dns-table td:nth-child(2),.antler-dns-table th:nth-child(3),.antler-dns-table td:nth-child(3){width:26%}.antler-dns-remediation{margin:8px 0;padding:8px 10px;background:#fff8e1;border:1px solid #f1d58a;border-radius:4px;overflow-wrap:anywhere}.antler-dns-remediation summary{cursor:pointer;font-weight:600}.antler-dns-remediation p{margin:8px 0;font-size:12px}.antler-settings{margin-top:14px;padding-top:10px;border-top:1px solid #eee}.antler-settings h3{margin:0 0 4px}.antler-settings label{display:block;margin-top:8px;font-size:13px}.antler-settings input,.antler-settings select{display:block;margin-top:2px}.antler-dns-remediation button{padding:3px 8px;font-size:12px}.dns-remediation-row{display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap}.dns-remediation-label{flex:0 0 88px;font-size:12px;font-weight:600;color:#666}.dns-remediation-value{flex:1 1 220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:#fff;border:1px solid #e6d9a8;border-radius:3px;padding:3px 6px;overflow-wrap:anywhere}.antler-light{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}.antler-light.green{background:#188038}.antler-light.amber{background:#f9ab00}.antler-light.red{background:#b3261e}.antler-checks{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.antler-check-note{font-size:12px}.antler-manifest-note{flex-basis:100%;margin:0;font-size:12px}.antler-check-note[aria-busy="true"]:before{content:"";display:inline-block;width:12px;height:12px;border:2px solid #ccc;border-top-color:#1557b0;border-radius:50%;margin-right:8px;animation:antler-spin 1s linear infinite}.antler-checking .antler-light.amber{box-sizing:border-box;background:transparent;border:2px solid rgba(249,171,0,.35);border-top-color:#f9ab00;animation:antler-spin 1s linear infinite}@keyframes antler-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.antler-check-note[aria-busy="true"]:before{animation:none}.antler-checking .antler-light.amber{animation:none;background:#f9ab00;border:0}}
 </style>{{range .Domains}}{{$d := .}}{{$sel := index $.DomainReceivingSelected .ID}}
-<dialog id="domain-receiving-dialog-{{.ID}}" class="domain-dialog"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "receiving")}} data-open="1"{{end}}>
+<dialog id="domain-receiving-dialog-{{.ID}}" class="domain-dialog{{if or (eq $sel "mx") (eq $sel "remotemx")}} domain-dialog--wide{{end}}"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "receiving")}} data-open="1"{{end}}>
 <h2>Receiving · {{.Name}}</h2>
 <style>
 .antler-dialog .provider-box,.antler-dialog .antler-wizard,.antler-dialog .antler-records{max-height:none;overflow:visible}
@@ -2122,6 +2115,11 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <label>Provider</label>
 <select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainReceivingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{if .SelectLabel}}{{.SelectLabel}}{{else}}{{.ProviderLabel}}{{end}}</option>{{end}}</select>
 <p class="muted provider-hint"{{if $sel}} hidden{{end}}>Choose a provider to configure receiving.</p>
+{{if $.MXSetup}}{{$m := $.MXSetup}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>
+{{if $m.TargetHost}}<p class="muted small">Point this domain's MX record at <code>{{$m.TargetHost}}</code>.</p>{{end}}
+<div class="banner warn"><b>Shared receiver</b> · all Direct MX domains use these receiver settings.</div>
+{{if and (not $m.Configured) (not $.Principal.SystemAdmin)}}<p class="muted small">A system administrator must configure the receiver before this domain can receive mail.</p>{{end}}
+</section>{{end}}
 {{range index $.DomainReceivingEditors $d.ID}}{{$e := .}}{{if or (not .Generated) .Steps .WebhookURL .HasOverridable}}
 <div class="provider-fields provider-box" data-provider="{{.Provider}}"{{if not .Selected}} hidden{{end}}>
 {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
@@ -2131,27 +2129,19 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{if not .HasOverridable}}{{if .KeepSecrets}}<p class="muted small">Saving updates this domain's receiving configuration. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted small">Saving replaces this domain's receiving configuration. Required secrets must be entered.</p>{{end}}{{end}}
 </div>
 {{end}}{{end}}
-{{if $.MXSetup}}{{$m := $.MXSetup}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>
-<h3 class="section-head">Direct MX receiver</h3>
-{{if $m.TargetHost}}<p class="muted small">Point this domain's MX record at <code>{{$m.TargetHost}}</code>.</p>{{end}}
-{{if and (not $m.Configured) (not $.Principal.SystemAdmin)}}<p class="muted small">A system administrator must set up the Included receiver before this domain can receive mail.</p>{{end}}
-<p class="muted small">Shared receiver · all Direct MX domains.</p>
-{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}{{template "mx-editor" .}}{{end}}{{end}}
-</section>{{end}}
+{{if $.MXSetup}}{{$m := $.MXSetup}}{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}{{template "mx-editor" .}}{{end}}{{end}}{{end}}
 </form>
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
-<h3 class="section-head">Remote MX receiver</h3>
-{{if $r.Configured}}<p class="muted small">This account's own receiver at <code>{{$r.URL}}</code> · <span class="pill{{if or (eq $r.State "unavailable") (eq $r.State "failed")}} danger{{else if ne $r.State "active"}} amber{{end}}">{{mxStateLabel $r.State}}</span>{{if $r.Detail}} · {{$r.Detail}}{{end}}</p>
-<p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No DNS key record is needed: your receiver authenticates this core with its bearer key.</p>
-{{else}}<p class="muted small">No Remote MX receiver is configured for this account yet. Add your own receiver below, then select it here.</p>{{end}}
-{{if $.Principal.Admin}}<details class="remote-mx-editor" open><summary>Account receiver settings</summary>
+<p class="muted small">Set up a receiver you run separately. MailMoose connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mailmoose/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
+<p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No per-domain DNS proof or key is needed.</p>
+{{if $.Principal.Admin}}<div class="remote-mx-editor">
 {{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
 <form method="post" action="/ui/account/mx" class="cfg-form" autocomplete="off" style="margin-top:8px">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <input type="hidden" name="rx_revision" value="{{$r.Revision}}">
 <label>Receiver URL</label>
 <input name="rx_url" placeholder="https://mx.example.com" value="{{$r.URL}}">
-<p class="muted small">The URL MailMoose connects to outbound. Use the origin of your standalone Dial MX receiver, running with <code>DIALMX_MODE=single</code>.</p>
+<p class="muted small">Use the session URL of your standalone receiver.</p>
 <label>Bearer key{{if $r.KeyConfigured}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label>
 <input name="rx_bearer_key" type="password" autocomplete="off" placeholder="{{if $r.KeyConfigured}}unchanged{{else}}the receiver's DIALMX_CORE_KEY{{end}}">
 <p class="muted small">This must match <code>DIALMX_CORE_KEY</code> on the receiver. The saved key is never displayed.</p>
@@ -2165,7 +2155,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <div class="dialog-actions"><button class="secondary" type="submit">Save receiver</button></div>
 </form>
 {{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><button class="secondary danger" type="submit">Remove receiver</button></form>{{end}}
-</details>{{end}}
+</div>{{end}}
 </section>{{end}}
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
 <h3 class="section-head">{{if eq .Service "antler"}}Antler MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
@@ -2538,7 +2528,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 					form.Error = r.URL.Query().Get("error")
 				}
 			}
-			mxSetup.Editors[d.ID] = mxReceiverEditorView{DomainID: d.ID, CSRF: csrf(r), MXForm: form, MXStatus: status, MXIncludedSupported: status.IncludedSupported}
+			mxSetup.Editors[d.ID] = mxReceiverEditorView{DomainID: d.ID, CSRF: csrf(r), MXForm: form, MXIncludedSupported: status.IncludedSupported}
 		}
 	}
 	// Remote MX: an account-owned single-mode receiver. Build the panel when the

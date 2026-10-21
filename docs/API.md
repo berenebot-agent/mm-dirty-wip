@@ -925,10 +925,11 @@ return the recorded disposition. For receiver choices and setup, see
 
 ### Installation MX receiver (system administrator, session-authenticated)
 
-A domain chooses whether it receives by MX; the **installation** decides how the
-core reaches the receiver every MX domain uses. That installation setting is the
-single `mx_settings` row, edited in the web interface at **Settings → Admin → MX
-receiver** (Included or Remote) or through this API (both modes):
+A domain chooses whether it receives by MX; the **installation** owns the
+receiver used by Direct MX domains. The Included receiver settings are edited
+in the domain's Direct MX Receiving panel; the installation-level `mx_settings`
+row can also be read or changed through this API, including its advanced Remote
+mode:
 
 ```http
 GET    /v1/admin/mx
