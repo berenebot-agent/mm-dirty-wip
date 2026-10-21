@@ -131,13 +131,9 @@ jobs:
           tags: ${{ steps.mx_meta.outputs.tags }}
           labels: ${{ steps.mx_meta.outputs.labels }}
 
-      # Idempotent: a re-run of the same tag (or a release created by hand in
-      # the GitHub UI) must not fail the whole job. The images are already
-      # published by this point, so a release that cannot be created is
-      # reported in the step log but does not turn a successful publish into a
-      # failed run.
+      # Idempotent: skip creation if the GitHub Release already exists.
+      # A genuine release-creation failure must fail the workflow.
       - name: Create GitHub release if needed
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
