@@ -138,12 +138,12 @@ var routes = []Route{
 	{Method: "GET", Path: "/v1/attachments/{id}", Summary: "Download an attachment", Role: "read", Group: "Attachments"},
 
 	// Threads.
-	{Method: "GET", Path: "/v1/threads", Summary: "List threads", Role: "read", Group: "Threads"},
+	{Method: "GET", Path: "/v1/threads", Summary: "List threads", Role: "read", Group: "Threads", Query: []Param{qFolder, qLimit}},
 	{Method: "GET", Path: "/v1/threads/{id}", Summary: "Get a thread", Role: "read", Group: "Threads"},
 	{Method: "GET", Path: "/v1/threads/{id}/messages", Summary: "List messages in a thread", Role: "read", Group: "Threads"},
 
 	// Search.
-	{Method: "GET", Path: "/v1/search", Summary: "Search messages (FTS5)", Description: "FTS5 full-text search. Query parameters: q (required), inbox, label (repeatable), from, to, has_attachment, before and limit.", Role: "read", Group: "Search"},
+	{Method: "GET", Path: "/v1/search", Summary: "Search messages (FTS5)", Description: "FTS5 full-text search. Query parameters: q (required), inbox, folder, label (repeatable), from, to, has_attachment, before and limit.", Role: "read", Group: "Search", Query: []Param{qQ, qInbox, qFolder, qLabel, qFrom, qTo, qHasAtt, qBefore, qLimit}},
 
 	// Labels.
 	{Method: "GET", Path: "/v1/labels", Summary: "List distinct labels in use", Description: "Distinct free-text labels currently in use; matching ignores case and surrounding whitespace.", Role: "read", Group: "Labels"},

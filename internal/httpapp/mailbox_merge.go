@@ -133,6 +133,10 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 
 	// Local source.
 	localFilter := f
+	if folder != "" && !localFilter.FolderScoped {
+		localFilter.FolderScoped = true
+		localFilter.MailboxID = folder
+	}
 	// A folder-backed label scope is a folder id; the store applies it through
 	// FolderScoped/MailboxID, which the scoped route sets directly and this merge
 	// must carry through for the account-wide route to agree.
@@ -336,7 +340,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		source string
 	}
 	var entries []tentry
-	local, lerr := s.Service.Store.ListThreadsBefore(ctx, p, "", limit+1, cur.sourceCursor("local"))
+	local, lerr := s.Service.Store.ListThreadsInFolderBefore(ctx, p, "", limit+1, cur.sourceCursor("local"), folder)
 	if lerr != nil {
 		return nil, "", nil, normalizeMailboxStoreError(lerr)
 	}
@@ -425,6 +429,10 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		Labels:        labels.Names,
 		Before:        cur.sourceCursor("local"),
 		Limit:         limit + 1,
+	}
+	if folder != "" {
+		localFilter.FolderScoped = true
+		localFilter.MailboxID = folder
 	}
 	if labels.Scope != "" {
 		localFilter.FolderScoped = true
