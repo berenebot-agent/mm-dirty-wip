@@ -4,30 +4,9 @@ All notable changes to MailMoose are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0-beta.2] - 2026-10-20
 
-### Changed
-
-- Copy buttons in the web interface are hidden when the interface is served over
-  plain HTTP. A browser only exposes the clipboard API in a secure context
-  (HTTPS or `localhost`), so a copy that cannot work is no longer offered — the
-  value stays visible and selectable by hand.
-- The shared copy message is now shown in front of an open dialog's backdrop
-  instead of behind it.
-- Passkey controls are hidden when the interface is served over plain HTTP. A
-  browser only runs a WebAuthn ceremony in a secure context (HTTPS or
-  `localhost`), so a passkey sign-in that cannot work is no longer offered, and
-  the account page no longer explains the requirement in place of the
-  controls. Registered passkeys, and the option to re-enable password sign-in,
-  stay reachable.
-
-### Fixed
-
-- The inbox settings button no longer jumps between the far left of the mailbox
-  toolbar and the right-hand button group. The Outbox has no bulk actions, so its
-  settings button was the only control on that toolbar and rendered alone on the
-  left, while every other mailbox view put it in the button group on the right.
-  It now closes the button group on every mailbox view.
+- Release polish to address full github publish workflow.
 
 ## [0.1.0-beta.1] - 2026-10-20
 
@@ -51,6 +30,3 @@ Relay; and an OpenClaw connector (early alpha).
   provider credentials.
 
 Behaviour and APIs may change between beta releases.
-
-[Unreleased]: https://github.com/dellarb/mailmoose/compare/v0.1.0-beta.1...main
-[0.1.0-beta.1]: https://github.com/dellarb/mailmoose/releases/tag/v0.1.0-beta.1
