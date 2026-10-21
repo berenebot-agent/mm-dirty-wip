@@ -898,6 +898,14 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 		if limit <= 0 || limit > limits.PageSizeMaxList {
 			limit = limits.PageSizeDefault
 		}
+		// A folder filter means the same thing here as on the inbox-scoped
+		// route: for a domain inbox the value is a folder id, so the query is
+		// scoped to that folder instead of returning every folder's messages. An
+		// already-resolved label scope wins, so it is never overwritten.
+		if folder != "" && !f.FolderScoped {
+			f.FolderScoped = true
+			f.MailboxID = folder
+		}
 		f.Before = before
 		f.Limit = limit
 		if limit < limits.PageSizeMaxList {

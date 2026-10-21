@@ -449,6 +449,7 @@ Filters may include:
 ```text
 inbox
 thread
+folder
 label
 from
 to
@@ -460,6 +461,12 @@ spam
 include_spam
 trashed
 ```
+
+`folder` scopes the listing to one folder: a folder id for a domain inbox, a
+folder path for a standalone inbox — the same rule the inbox-scoped route uses.
+On the account-wide route it applies to the inbox named by `inbox=`; without that
+scope it narrows the connected (standalone) inboxes by folder path and leaves the
+local store unfiltered.
 
 `spam=true` lists only Spam; `include_spam=true` includes Spam and non-Spam.
 By default (neither set) Spam is excluded from ordinary reads. `trashed=true`

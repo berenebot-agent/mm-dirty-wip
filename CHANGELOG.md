@@ -20,6 +20,9 @@ All notable changes to MailMoose are documented here. This project follows
   transition, and the row says whether it was sent, failed, is in flight or was
   interrupted, with the attempt count when the delivery took more than one
   attempt. The per-attempt history is unchanged on the domain's activity log.
+- `GET /v1/messages` now honours the `folder` filter for a domain inbox, the
+  same way the inbox-scoped route does. The filter was accepted and ignored, so
+  the whole inbox came back instead of the folder's messages.
 
 ### Changed
 
