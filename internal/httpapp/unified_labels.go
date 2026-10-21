@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -336,6 +337,42 @@ func (s *Server) apiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.submitMessageAction(w, r, m.ID, action, false)
+}
+
+// POST /v1/inboxes/{id}/messages/{messageId}/move
+// {"folder_id":"..."} moves a message to a folder in the same inbox.
+func (s *Server) apiMoveMessage(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		FolderID string `json:"folder_id"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	m, _, err := s.resolveActionMessage(r, p, r.PathValue("messageId"))
+	if err != nil || m.InboxID != mb.inbox.ID {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	folder, err := s.Service.Store.GetFolderByID(r.Context(), p.AccountID, mb.inbox.ID, strings.TrimSpace(in.FolderID))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "folder not found")
+		} else {
+			mapStoreError(w, err)
+		}
+		return
+	}
+	destination := folder.ID
+	if mb.inbox.Kind == model.InboxKindStandalone && !s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, mb.inbox.ID) {
+		destination = folder.Path
+	}
+	s.submitMessageAction(w, r, m.ID, store.MessageActionInput{Kind: "move", Destination: destination}, false)
 }
 
 func (s *Server) uiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request) {
