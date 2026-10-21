@@ -38,6 +38,8 @@ You also need the correct **public DNS records**:
 
 In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. The system administrator can adjust the receiver's shared SMTP settings in that Direct MX panel; all Direct MX domains use the same receiver. Opening the port or publishing DNS records alone does not enable the receiver for a domain. For a receiver you run separately, use [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
 
+The provider list offers Direct MX before the receiver exists, and saving a domain does not configure the receiver. **A Direct MX domain receives no mail at all until the installation's receiver is configured**, which a system administrator does in that same Direct MX panel. A domain that reads as set up for Direct MX is therefore not necessarily receiving yet.
+
 Direct MX is not needed for Antler MX or provider-webhook receiving. For a separately operated receiver, configure [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account) instead.
 
 ## Inbound: Remote MX
