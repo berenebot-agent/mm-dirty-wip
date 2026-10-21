@@ -148,6 +148,8 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
 - [D143: Passkey controls are hidden where WebAuthn cannot run](#d143-passkey-controls-are-hidden-where-webauthn-cannot-run)
 - [D144: The receiver session endpoint's proxy requirements are documented for operators](#d144--the-receiver-session-endpoints-proxy-requirements-are-documented-for-operators)
+- [D145: An account Admin key holds the domain-wide sending grant implicitly](#d145--an-account-admin-key-holds-the-domain-wide-sending-grant-implicitly)
+- [D146: The installation MX receiver is added in the Admin page, in both modes](#d146--the-installation-mx-receiver-is-added-in-the-admin-page-in-both-modes)
 
 ---
 
@@ -2133,6 +2135,9 @@ authentication policy and durable delivery semantics.
 > **Amended.** The UI edits the Included receiver only; the `remote` mode is
 > configured through the API. The account-level Remote MX receiver (D084) is the
 > UI-supported path for a separately operated receiver.
+>
+> **Amended by D146.** The installation receiver is added in the Admin page in
+> both modes. The per-domain Direct MX panel stays Included-only.
 
 **Requirement:** The installation-wide MX receiver must be configurable from the
 system-administrator UI/API and survive restarts, instead of being fixed by the
@@ -5965,3 +5970,56 @@ is always answerable.
 (`ListEnabledCatchAlls`), and one bootstrap handler change. No migration, no
 schema change, no new dependency, transport or runtime service. One query
 replaces the per-inbox domain lookups the bootstrap used to make.
+
+## D146 — The installation MX receiver is added in the Admin page, in both modes
+
+**Requirement:** The public beta UAT (finding D-4) found the installation-wide
+Direct MX receiver's Remote mode reachable only by reading the source: the
+documented switch had no discoverable route. The installation receiver is the
+one shared receiver every Direct MX domain points its MX record at
+(`mx_settings`, a singleton row — D071). Its mode decides where that receiver
+lives: the child bundled inside this deployment, or one the operator runs
+themselves. The per-domain Direct MX panel is Included-only (D071's amendment,
+`8a22ae98`), so the Remote mode had no interface at all, and a deployment that
+cannot run the bundled child (no root) had no way to receive mail by SMTP.
+
+**Decision (2026-10-21, human approved):** The Admin page carries an **MX
+receiver** card that adds the shared receiver in either mode.
+
+- **One form, two ways to add a receiver.** A radio chooses **Included** (the
+  bundled child) or **Remote** (a receiver you run: URL, bearer key, optional
+  private CA). Only the selected mode's fields are saved, exactly as the API
+  decides it: the server reads the submitted mode's fields, so a value left in
+  the other block can never fail the save. The Included field set is one shared
+  template with the per-domain editor, so the two cannot drift.
+- **It edits the installation setting, not a domain's.** The choice is
+  installation-wide, so it lives with the other installation settings and only a
+  system administrator may change it. A domain still only chooses *whether* it
+  receives by MX; the per-domain Direct MX panel stays Included-only, because a
+  domain must not re-point the receiver every other account's domains use.
+- **The card is also the status view.** It shows the configured mode, the live
+  state and the SMTP/session addresses, and it can clear the receiver.
+- **The deployment files already promise it.** `docker-compose.yml`,
+  `docker-compose.advanced.yml` and `.env.example` tell the operator to "sign
+  in as the system administrator and set Admin -> MX receiver" to Included or
+  Remote. That card was removed with the /admin panel in `8a22ae98` and the
+  files were never corrected, so this build makes them true rather than
+  rewriting them.
+
+**Reason:** The setting is real, documented and reachable only by `curl`; the
+guides, the Compose files and the environment example all point at an interface
+that does not exist, and the finding is a self-hoster hitting a dead end. The
+alternative — leaving Remote to the API — keeps the dead end for exactly the
+deployments that cannot use the bundled receiver at all, and leaves the shipped
+files lying. The alternative the finding also suggests — putting the choice in
+the per-domain Direct MX panel — was already tried and rejected: the receiver is
+shared by every Direct MX domain on the instance, so a per-domain control would
+silently re-point other accounts' mail.
+
+**Complexity:** Local to `internal/httpapp`: one shared template split out of
+the domain editor, one new card template, two UI routes
+(`POST /ui/admin/mx`, `POST /ui/admin/mx/clear`) over the existing service path,
+and a dozen lines of browser glue that show the selected mode's fields. No
+schema, migration, dependency, transport or runtime service change; the API
+contract is unchanged, and the form and the API go through the same service
+validation.

@@ -238,6 +238,9 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/admin/invites/{id}/reissue", s.withSession(s.withCSRF(s.uiAdminReissueInvite)))
 	m.HandleFunc("POST /ui/admin/invites/{id}/revoke", s.withSession(s.withCSRF(s.uiAdminRevokeInvite)))
 	m.HandleFunc("POST /ui/admin/accounts/{id}/quota", s.withSession(s.withCSRF(s.uiAdminSetQuota)))
+	// Installation-wide MX receiver (system administrator).
+	m.HandleFunc("POST /ui/admin/mx", s.withSession(s.withCSRF(s.uiInstallMXSave)))
+	m.HandleFunc("POST /ui/admin/mx/clear", s.withSession(s.withCSRF(s.uiInstallMXClear)))
 	m.HandleFunc("POST /ui/domains/{id}/mx", s.withSession(s.withCSRF(s.uiAdminMXSave)))
 	m.HandleFunc("POST /ui/domains/{id}/mx/clear", s.withSession(s.withCSRF(s.uiAdminMXClear)))
 	// Account-owned Remote MX receiver (account Admin).

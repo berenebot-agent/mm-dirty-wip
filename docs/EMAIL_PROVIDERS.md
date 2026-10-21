@@ -26,7 +26,7 @@ You also need the correct **public DNS records**:
 2. Set your domain's **MX** record to that hostname, not an IP address. Use the hostname shown in the MailMoose receiving setup.
 3. Configure **SPF** and other sender-authentication records separately if you also send mail from this domain.
 
-In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. Opening the port or publishing DNS records alone does not enable the receiver for a domain.
+In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. Opening the port or publishing DNS records alone does not enable the receiver for a domain. The system administrator adds the installation's one shared receiver first, at **Settings → Admin → MX receiver**: the receiver bundled with the deployment, or [one you run yourself](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
 
 Direct MX is not needed for Antler MX or provider-webhook receiving. Advanced setups can use a [separate SMTP receiver](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
 
