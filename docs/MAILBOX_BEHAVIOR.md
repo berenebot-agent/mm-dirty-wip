@@ -342,8 +342,9 @@ transient scope/`LIST` shortfall or a generation flip.
   `From`; see the accepted risk below). `RemoteDraft` is a standalone-only mode:
   a domain inbox cannot be set to it (the write is rejected, and a legacy domain
   row stored as `remote_draft` normalizes back to the kind default on read), and
-  `requestRemoteDraft` requires `kind=standalone` and a mapped remote Drafts
-  folder.
+  `requestRemoteDraft` requires `kind=standalone`. A remote Drafts folder that
+  does not exist is not a request-time refusal: the remote server refuses the
+  append and the handoff settles terminally as `failed` (see "Settlement").
 - **Publication and Sent-copy are separate state machines.** A
   handoff's publication state (`pending`/`published`/`ambiguous`/`failed`) is
   independent of its Sent-copy, which is a separate durable job that never
@@ -361,9 +362,11 @@ transient scope/`LIST` shortfall or a generation flip.
   non-secret fields. A handoff never queues a notification job and never sends a
   notification email; the web UI exposes no handoff surface at all.
 - **Settlement is automatic, bounded and never a blind retry.** A handoff that
-  publishes is cleaned up. A terminal outcome (a permanent append failure, an
-  unverifiable append after the bounded attempt budget, or more than one remote
-  match) **unfreezes its local draft** so it is never trapped now that no resolve
+  publishes is cleaned up. A terminal outcome (a permanent append failure — a
+  remote refusal that cannot resolve itself, such as a destination folder that
+  does not exist or a server that refuses the operation — an unverifiable append
+  after the bounded attempt budget, or more than one remote match) **unfreezes
+  its local draft** so it is never trapped now that no resolve
   or retry UI remains: the human acts on the draft directly. An append is
   **never automatically retried** once terminal — an `ambiguous` outcome is not
   re-appended (a second copy could be created). A **transient verification

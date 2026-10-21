@@ -727,7 +727,10 @@ email, and never involves an approver (switching a standalone inbox to
 `draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`
 and `draft.handoff_failed`. An unverifiable remote append is reported
 `ambiguous`, never retried blindly, and its local draft is unfrozen so it is not
-trapped. A handoff on an inbox with no remote Drafts folder is refused.
+trapped. A handoff whose remote Drafts folder does not exist fails terminally:
+the append is refused as `failed` with the reason `the connected mailbox has no
+Drafts folder`, the handoff is not retried, and the local draft is unfrozen so
+it can be edited or requested again.
 
 A draft response carries a **`handoff`** object when a RemoteDraft handoff is
 active or most recent, exposing the immutable `handoff_id` and
