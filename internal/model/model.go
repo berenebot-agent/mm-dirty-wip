@@ -757,7 +757,7 @@ type APIKey struct {
 	// DomainSend lists the inbox ids (a domain's catch-all) where this key holds
 	// the domain-wide sending grant, keyed to whether the grant is currently
 	// live (the inbox is still the enabled catch-all). It is never set for an
-	// Admin key, which already may send as anything.
+	// Admin key, which holds the grant implicitly.
 	DomainSend map[string]bool `json:"domain_send,omitempty"`
 }
 
@@ -773,11 +773,11 @@ type Principal struct {
 	SystemAdmin  bool
 	MailboxRoles map[string]string
 	ViaSession   bool
-	// DomainSend lists the inbox ids where this principal holds a live
+	// DomainSend lists the inbox ids where this principal holds an explicit
 	// domain-wide sending grant: it may put any address on that inbox's domain in
 	// the From of a message it sends from that inbox. It is the send-authority
 	// counterpart to MailboxRoles and is empty for an account Admin (which holds
-	// the capability implicitly) and for sessions.
+	// the grant implicitly, on each domain's enabled catch-all) and for sessions.
 	DomainSend map[string]bool
 	// Timezone is the effective display time zone (IANA name) for this session,
 	// resolved from the user override then the account default. Empty means UTC.

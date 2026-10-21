@@ -784,6 +784,12 @@ live only while the inbox is its domain's enabled catch-all and is checked at
 send time, so a revoked grant rejects the send with the same `403`. A session
 (the web UI) never has the grant, so it keeps the primary-or-alias rule.
 
+An **account Admin key** holds the grant implicitly, on the same terms: it may
+send as any address on a domain, but only from that domain's enabled catch-all
+inbox, and the grant is lost as soon as the key stops being an Admin key.
+`GET /v1/bootstrap` therefore reports `send_any_in_domain` for an Admin key on
+the catch-all inbox only, with `send_any_domain` naming the domain.
+
 ### Reply
 
 ```http

@@ -4543,6 +4543,13 @@ design); Google/Microsoft unowned-address behaviour is not gated; and a wildcard
 address cannot be approved from the web UI or sent by system mail, because those
 paths hold no key.
 
+**Follow-up (2026-10-21):** the "Account Admin keys get the capability for
+free" bullet above was not true of the code: the advertisement treated an Admin
+as holding the grant while the enforcement read the grant from the sending
+key's own binding row, which an Admin key never has, so the send was refused.
+D145 makes the two agree — an Admin key holds the grant implicitly, on the same
+catch-all anchor as any other key.
+
 ## D116 — Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness
 
 **Flash follow-up (2026-10-13):** the initial cookie-presence check below did not
@@ -5897,3 +5904,64 @@ authoritative diagnosis, so the guide points there instead of guessing.
 **Complexity:** Documentation only: one new section in `docs/REMOTE_MX.md`, two
 linked pointers, and a changelog entry. No code, API, schema, dependency or
 runtime service change. The optional Receiving-panel improvement stays open.
+
+## D145 — An account Admin key holds the domain-wide sending grant implicitly
+
+**Requirement:** The public beta UAT (finding D-9) found `GET /v1/bootstrap`
+advertising `send_any_in_domain: true` to an account Admin key, while the send
+that flag authorises was refused with `403 sender_not_allowed`. The two paths
+disagreed about what an Admin key may do. The advertisement
+(`effectiveMailboxPermissions`, `internal/httpapp/api.go`) computed
+`p.Admin || p.DomainSend[box.ID]`; the enforcement (`domainSendGrantAt`,
+`internal/store/domain_send.go`) reads the grant from the sending key's own
+`client_inbox_bindings` row, and an Admin key never has one — `replaceBindings`
+deletes every row and returns early for an Admin key, so there is nowhere to
+hang the flag. The grant was therefore never true for an Admin key and the send
+was refused in every case, catch-all or not. The product told a client it could
+do something and then refused it, and it did so with a `true` flag and no
+`send_any_domain` to act on, which the `/agent` guide describes as the contract
+for a widened `sender`.
+
+**Decision (2026-10-21, human approved):** The two paths are made to agree, in
+favour of the enforcement's design, and the agreement is in favour of the
+capability: an account Admin key holds the domain-wide sending grant
+implicitly, on exactly the terms a per-key grant has.
+
+- **The catch-all anchor is not weakened.** An Admin key may put any address on
+  a domain in the `From` only from that domain's **enabled catch-all** inbox.
+  That is what makes an arbitrary From replyable, and it applies to the Admin
+  key exactly as it applies to a granted key.
+- **Enforcement.** `domainSendGrantAt` reads the sending key's admin flag
+  together with its binding flag: an Admin key holds the grant, and any other
+  key holds it only where its own binding carries it. The live condition — the
+  inbox is the domain's current, enabled catch-all — is unchanged and still
+  gates both. The flag is read from the key at send time, so demoting an Admin
+  key takes the implicit grant away immediately.
+- **Advertisement.** `GET /v1/bootstrap` reports `send_any_in_domain` only
+  where the send would actually be honoured, and always with `send_any_domain`
+  naming the domain. The inboxes a domain-wide send is honoured from are the
+  account's enabled catch-alls (`ListEnabledCatchAlls`), which is also where a
+  non-admin key's own grant is live. An Admin key is therefore advertised on the
+  catch-all inbox only: another inbox of the same domain, a domain with no
+  catch-all and a disabled catch-all all advertise nothing, and a web session
+  holds no key, so it is never advertised either.
+- **The UI needed no change.** The key dialog already clears the per-inbox
+  "Domain send" control while Account Admin is ticked, on the same
+  understanding, and the Clients & Access panel already shows an Admin key
+  read-only.
+
+**Reason:** D115 already decided that "Account Admin keys get the capability
+for free" and that the flag is meaningful only for non-admin keys; the web UI
+was written on that basis. The gap was between that decision and the
+enforcement, not a decision to make the advertisement authoritative. The
+alternative — dropping the flag for Admin keys — would have matched the
+enforcement as well, but it would have contradicted D115 and the UI, and it
+would have left the account's most capable credential unable to do what the
+product says it can, with no way to grant it. The replyability guarantee is
+untouched: the grant still requires an enabled catch-all, so an arbitrary From
+is always answerable.
+
+**Complexity:** One store query change (`domainSendGrantAt`), one new store read
+(`ListEnabledCatchAlls`), and one bootstrap handler change. No migration, no
+schema change, no new dependency, transport or runtime service. One query
+replaces the per-inbox domain lookups the bootstrap used to make.

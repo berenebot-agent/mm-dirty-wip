@@ -6,6 +6,14 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- An account Admin key now holds the domain-wide sending grant it was already
+  advertised: it may send as any address on a domain, but only from that
+  domain's enabled catch-all inbox. `GET /v1/bootstrap` reports
+  `send_any_in_domain` only where the send is honoured, and always with
+  `send_any_domain` naming the domain.
+
 ### Changed
 
 - The Remote SMTP receiving guide now states what a reverse proxy in front of a
