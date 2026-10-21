@@ -4,11 +4,13 @@
 
 # MailMoose
 
-**Self-hosted email for AI agents, automations, and anything else you build.**
+**Self-hosted email for AI agents and automations. Your inboxes, your infrastructure, your control.**
 
-MailMoose is an open-source, single-container email platform. Create inboxes on your own domain or connect existing mailboxes, with a simple web interface and flexible receiving and sending options.
+MailMoose brings email into one self-hosted platform for AI agents, automations, and applications. Create inboxes on your own domains or connect existing Gmail, Outlook, and IMAP mailboxes, all through a single web interface and API.
 
-Bring your own email providers, connect AI agents or applications, and control exactly what they can access and do. No complicated mail server stack required.
+Give agents and automations scoped access to read, search, draft, and send email, with optional human approval before messages go out.
+
+Deploy in a single Docker container, bring your own email providers, and integrate with Hermes, OpenClaw, webhooks, or the REST API.
 
 [Quickstart](#quickstart) · [Receiving providers](#receive-email-your-way) · [Agent connectors](#connect-your-agent) · [Documentation](#documentation)
 
