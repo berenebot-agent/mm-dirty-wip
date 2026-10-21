@@ -41,6 +41,23 @@ class Element {
   addEventListener(name, fn) { (this.events[name] = this.events[name] || []).push(fn); }
   emit(name, event = {}) { (this.events[name] || []).slice().forEach(fn => fn(event)); }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  // classList backs the dialog's wide/narrow switch; membership lives in the
+  // class attribute so getAttribute('class') stays truthful.
+  get classList() {
+    const self = this;
+    const names = () => (self.attrs['class'] || '').split(/\s+/).filter(Boolean);
+    const write = list => { self.attrs['class'] = list.join(' '); };
+    return {
+      contains: name => names().includes(name),
+      add(name) { if (!this.contains(name)) { write(names().concat(name)); } },
+      remove(name) { write(names().filter(n => n !== name)); },
+      toggle(name, force) {
+        const on = force === undefined ? !this.contains(name) : !!force;
+        if (on) { this.add(name); } else { this.remove(name); }
+        return on;
+      },
+    };
+  }
   setAttribute(name, value) { this.attrs[name] = value; }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
   removeAttribute(name) { delete this.attrs[name]; }
