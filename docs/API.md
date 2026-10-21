@@ -1070,7 +1070,11 @@ accepts `"regenerate_secret": true`. Provider schemas:
   `custom`. Antler requires a valid `contact_email` and resolves the hosted
   receiver set; supplying `receiver_urls` for Antler is a `400`, because the
   receiver set is never caller-controlled. Custom requires one or more HTTPS
-  `receiver_urls` and ignores `contact_email`. `enforcement` is `moderate`
+  `receiver_urls` and ignores `contact_email`. `receiver_urls` is a **string**,
+  not an array: a comma-separated list of up to eight HTTPS base URLs, with no
+  path, userinfo, query or fragment — for example
+  `"receiver_urls": "https://mx1.example.com,https://mx2.example.com"`.
+  `enforcement` is `moderate`
   (default) or `hard`. A save that supplies only `receiver_urls` is treated as
   custom, so legacy configurations are never silently migrated.
 

@@ -823,6 +823,51 @@ func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 	}
 }
 
+// TestDialMXReceivingAPIRejectsReceiverURLsArray proves the receiving API takes
+// receiver_urls as the comma-separated string the API reference documents, and
+// refuses the array form a caller guessing from the field name would send.
+func TestDialMXReceivingAPIRejectsReceiverURLsArray(t *testing.T) {
+	t.Parallel()
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	// The array form is refused with the type error.
+	rr := put(`{"provider":"dialmx","config":{"service":"custom","receiver_urls":["https://receiver.example"]}}`)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "must be a string") {
+		t.Fatalf("array receiver_urls: %d %s", rr.Code, rr.Body.String())
+	}
+	// The string form is accepted and stored as a comma-separated string.
+	rr = put(`{"provider":"dialmx","config":{"service":"custom","receiver_urls":"https://receiver.example"}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("string receiver_urls: %d %s", rr.Code, rr.Body.String())
+	}
+	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := svc.DecryptDomainReceivingConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["receiver_urls"] != "https://receiver.example" {
+		t.Fatalf("stored receiver_urls = %v", values["receiver_urls"])
+	}
+}
+
 // TestDialMXCustomReceivingAPIHasNoAntlerInstructions pins that a custom setup
 // keeps its manual receiver URLs and does not advertise Antler MX records, and
 // that the watcher computes no MX check for it (the MX hostname is the operator's

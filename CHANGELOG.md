@@ -8,6 +8,10 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- The Dial MX `receiver_urls` receiving field is documented as what it is: a
+  comma-separated string of HTTPS base URLs, not an array. The reference named
+  the field without its type, so a caller sending an array got a `400` whose
+  message was the only place the required shape appeared.
 - An account Admin key now holds the domain-wide sending grant it was already
   advertised: it may send as any address on a domain, but only from that
   domain's enabled catch-all inbox. `GET /v1/bootstrap` reports
