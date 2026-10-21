@@ -232,11 +232,25 @@ func TestDirectMXUIUnconfiguredReceiverShowsGuidance(t *testing.T) {
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx")
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
 
-	if strings.Contains(body, "not configured") {
-		t.Fatalf("setup must not show an unconfigured flag:\n%s", body)
+	if !strings.Contains(body, "Not receiving mail.") || !strings.Contains(body, "will not start the SMTP receiver") {
+		t.Fatalf("unconfigured Direct MX must clearly warn that no mail is received:\n%s", body)
 	}
 	if !strings.Contains(body, "system administrator") {
 		t.Fatalf("unconfigured receiver must point at the system administrator:\n%s", body)
+	}
+	// A domain may select Direct MX before the installation receiver exists.
+	// The dashboard must show the missing dependency rather than merely "Direct MX".
+	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, domain.ID, "mx", nil, false); err != nil {
+		t.Fatalf("select Direct MX before receiver setup: %v", err)
+	}
+	page = uiGet(t, h, cookie, "/")
+	if !strings.Contains(page.Body.String(), ">Not receiving</span>") {
+		t.Fatalf("domain list must mark Direct MX as not receiving:\n%s", page.Body.String())
+	}
+	configureMXReceiver(t, svc, app.MXModeIncluded)
+	page = uiGet(t, h, cookie, "/")
+	if strings.Contains(page.Body.String(), ">Not receiving</span>") {
+		t.Fatal("domain must not remain flagged after receiver configuration")
 	}
 }
 
