@@ -6414,8 +6414,18 @@ function generateBearerSecret() {
     // receiverLabel renders the specific Antler reason next to the traffic light,
     // not a generic word: the receiver's own verdict ("not in MX", "key
     // unavailable", "authentication failed") is the most precise thing we know
-    // about that connector. The raw reason stays in the row's tooltip.
+    // about that connector. The raw reason stays in the row's tooltip. The HTTP
+    // status the receiver URL answered with is named too: whatever answered at
+    // that URL — the receiver, or a proxy in front of it — owns that status, and
+    // the core cannot tell the two apart.
     function receiverLabel(status) {
+      var label = receiverLabelText(status);
+      if (status.http_code) { label += ' (HTTP ' + status.http_code + ')'; }
+      return label;
+    }
+    // receiverLabelText is the receiver's verdict on its own, without the HTTP
+    // status the receiver URL answered with.
+    function receiverLabelText(status) {
       if (isReady(status)) { return 'Ready to receive'; }
       switch (status.reason) {
         case 'not_mx': return 'Not in MX';
@@ -6429,6 +6439,9 @@ function generateBearerSecret() {
         // word covers every refused code, because at this layer a 401 and a 404
         // are both a receiver or proxy that is not serving this core.
         case 'session_rejected': return 'Receiver refused the session';
+        // The receiver URL answered with its own error status: the receiver is
+        // up and is expected to recover, so the row stays a retrying session.
+        case 'receiver_error': return 'Receiver reported a server error';
         case 'http2_required': return 'Receiver speaks HTTP/1.1, not HTTP/2';
         case 'mode_mismatch': return 'Wrong receiver mode';
         case 'protocol_mismatch': return 'Receiver protocol mismatch';
