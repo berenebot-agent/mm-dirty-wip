@@ -10,10 +10,11 @@ import (
 
 // DashboardPreferences are personal display preferences, never mailbox policy.
 type DashboardPreferences struct {
-	Groups     map[string]map[string]string `json:"groups"`
-	Collapsed  map[string]map[string]bool   `json:"collapsed"`
-	ShowGroups map[string]bool              `json:"showGroups"`
-	Sort       map[string]DashboardSort     `json:"sort"`
+	Groups         map[string]map[string]string `json:"groups"`
+	Collapsed      map[string]map[string]bool   `json:"collapsed"`
+	ShowGroups     map[string]bool              `json:"showGroups"`
+	ShowConnectors map[string]bool              `json:"showConnectors"`
+	Sort           map[string]DashboardSort     `json:"sort"`
 }
 
 type DashboardSort struct {

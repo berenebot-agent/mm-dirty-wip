@@ -6072,3 +6072,33 @@ case in the Go and the browser renderer, and the operator phrase in
 `cmd/server` takes the code and appends it. No schema, migration, dependency,
 transport or runtime service change; the failure tokens and states are
 unchanged.
+
+## D148 — Connectors return to the dashboard Clients list behind a per-admin toggle
+
+**Requirement:** Client feedback: the dashboard Clients list no longer shows
+relay/webhook connectors (they were removed deliberately; they remain reachable
+via each inbox's Connectors tab), so an administrator cannot see all clients in
+one place. The Clients card should gain a checkbox, beside the existing
+"Groups" one, labelled "Connectors" that restores connectors to the list.
+
+**Why the current design is insufficient:** The Clients list is filled from
+API keys only (`credentialViews(keys, nil, nil)`), so a unit test pins the
+absence of connector rows in the served HTML. Restoring them unconditionally
+would reintroduce exactly the clutter the removal addressed.
+
+**Decision (2026-10-21):** The dashboard always renders connector rows
+(Hermes, OpenClaw, webhook) in the Clients table, tagged `data-connector-row`,
+and hides or shows them client-side based on a new per-admin dashboard
+preference, `showConnectors[clients]`, persisted through the existing
+`/ui/dashboard/preferences` endpoint and validated to allow only the
+`clients` table. The state is absent-equals-shown: the default is checked,
+including for accounts saved before the preference existed. The toggle
+reuses the Groups toggle's button/`aria-pressed` styling and its connector
+rows participate in grouping and sorting like key rows.
+
+**Complexity:** The row template already supported connector kinds (editing,
+deletion and the delivery-log link are unchanged); the change passes through
+`credentialViews(keys, conns, webhooks)`, adds one template attribute, one
+store field, one validation loop, and ~40 lines of JavaScript clone of the
+Groups toggle semantics. No schema, migration, dependency, transport or new
+surface.

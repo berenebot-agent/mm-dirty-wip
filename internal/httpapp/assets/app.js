@@ -1846,6 +1846,7 @@
       groups: { inboxes: Object.create(null), clients: Object.create(null) },
       collapsed: { inboxes: Object.create(null), clients: Object.create(null) },
       showGroups: { inboxes: false, clients: false },
+      showConnectors: { clients: true },
       sort: Object.create(null)
     };
   }
@@ -1873,6 +1874,11 @@
           next.showGroups[table] = saved.showGroups[table] === true;
         }
       });
+      // Absent or null means checked: connectors show by default, including
+      // for instances saved before this preference existed.
+      if (isObject(saved.showConnectors)) {
+        next.showConnectors.clients = saved.showConnectors.clients !== false;
+      }
       if (isObject(saved.sort)) {
         Object.keys(tables).forEach(function (table) {
           var spec = saved.sort[table];
@@ -2030,6 +2036,23 @@
       toggle.appendChild(box);
       toggle.appendChild(label);
       tools.insertBefore(toggle, addButton || null);
+    }
+    if (table === 'clients') {
+      var connectorToggle = tools.querySelector('[data-dashboard-connectors-toggle]');
+      if (!connectorToggle) {
+        connectorToggle = document.createElement('button');
+        connectorToggle.type = 'button';
+        connectorToggle.className = 'secondary btn-sm dashboard-groups-toggle';
+        connectorToggle.setAttribute('data-dashboard-connectors-toggle', table);
+        var connBox = document.createElement('span');
+        connBox.className = 'dashboard-groups-box';
+        connBox.setAttribute('aria-hidden', 'true');
+        var connLabel = document.createElement('span');
+        connLabel.textContent = 'Connectors';
+        connectorToggle.appendChild(connBox);
+        connectorToggle.appendChild(connLabel);
+        tools.insertBefore(connectorToggle, toggle.nextSibling || addButton || null);
+      }
     }
     var collapse = tools.querySelector('[data-dashboard-collapse-all]');
     if (!collapse) {
@@ -2301,6 +2324,10 @@
     if (toggle) {
       toggle.setAttribute('aria-pressed', shown ? 'true' : 'false');
     }
+    var connectorToggle = config.card.querySelector('[data-dashboard-connectors-toggle]');
+    if (connectorToggle) {
+      connectorToggle.setAttribute('aria-pressed', state.showConnectors[table] === false ? 'false' : 'true');
+    }
     if (collapse) {
       collapse.hidden = !shown || !hasNamed;
       var allCollapsed = hasNamed && groups.length > 0 && groups.every(function (group) { return isCollapsed(table, group.name); });
@@ -2308,8 +2335,24 @@
     }
   }
 
+  function isConnectorRow(row) {
+    return row.hasAttribute('data-connector-row');
+  }
+
   function renderGroupedTable(table, rows) {
     var config = tables[table];
+    var parked = [];
+    if (table === 'clients' && state.showConnectors[table] === false) {
+      // Parked rows stay appended (hidden) so rowsFor, which re-reads the
+      // tbody, can find them again when the preference is turned back on.
+      rows = rows.filter(function (row) {
+        if (isConnectorRow(row)) {
+          parked.push(row);
+          return false;
+        }
+        return true;
+      });
+    }
     var groups = groupRows(table, rows);
     var hasNamed = groups.some(function (group) { return group.name !== ''; });
     var showHeaders = state.showGroups[table] !== false && hasNamed;
@@ -2325,6 +2368,10 @@
         updateGroupButton(table, row);
         config.tbody.appendChild(row);
       });
+    });
+    parked.forEach(function (row) {
+      row.hidden = true;
+      config.tbody.appendChild(row);
     });
     updateCardControls(table, groups);
   }
@@ -2455,6 +2502,14 @@
     if (groupsToggle) {
       var showTable = groupsToggle.getAttribute('data-dashboard-groups-toggle');
       state.showGroups[showTable] = state.showGroups[showTable] === false;
+      saveState();
+      refresh();
+      return;
+    }
+    var connectorsToggle = event.target.closest('[data-dashboard-connectors-toggle]');
+    if (connectorsToggle) {
+      var connectorTable = connectorsToggle.getAttribute('data-dashboard-connectors-toggle');
+      state.showConnectors[connectorTable] = state.showConnectors[connectorTable] === false;
       saveState();
       refresh();
       return;
