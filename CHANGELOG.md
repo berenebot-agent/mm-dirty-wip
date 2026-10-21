@@ -30,6 +30,3 @@ Relay; and an OpenClaw connector (early alpha).
   provider credentials.
 
 Behaviour and APIs may change between beta releases.
-
-[Unreleased]: https://github.com/dellarb/mailmoose/compare/v0.1.0-beta.1...main
-[0.1.0-beta.1]: https://github.com/dellarb/mailmoose/releases/tag/v0.1.0-beta.1
