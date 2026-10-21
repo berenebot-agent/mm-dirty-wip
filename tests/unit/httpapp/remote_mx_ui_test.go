@@ -113,6 +113,51 @@ func TestRemoteMXSingleSaveAndRemove(t *testing.T) {
 	}
 }
 
+// A shared Remote MX receiver must not be replaced or lose its bearer key when
+// an administrator saves receiving for a second domain in the same account.
+func TestRemoteMXSharedReceiverAcrossDomains(t *testing.T) {
+	t.Parallel()
+	svc, h, u, first, _ := httpFixture(t)
+	ctx := context.Background()
+	second, err := svc.Store.CreateDomain(ctx, u.AccountID, "other.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{
+		"_csrf": {csrf}, "provider": {"remotemx"}, "rx_revision": {"0"},
+		"rx_url": {"https://mx.example.test"}, "rx_bearer_key": {"shared-secret"},
+		"cfg_remotemx_enforcement": {"hard"},
+	}
+	if rr := uiPost(t, h, cookie, "/ui/domains/"+first.ID+"/receiving", form.Encode()); rr.Code != http.StatusSeeOther {
+		t.Fatalf("first domain save: %d %s", rr.Code, rr.Body.String())
+	}
+	receiver, err := svc.GetAccountMXReceiver(ctx, u.AccountID)
+	if err != nil || receiver.URL != "https://mx.example.test" || !receiver.KeyConfigured {
+		t.Fatalf("initial receiver: %+v, %v", receiver, err)
+	}
+	form.Set("rx_revision", strconv.FormatInt(receiver.Revision, 10))
+	form.Set("rx_bearer_key", "")
+	form.Set("cfg_remotemx_enforcement", "moderate")
+	if rr := uiPost(t, h, cookie, "/ui/domains/"+second.ID+"/receiving", form.Encode()); rr.Code != http.StatusSeeOther {
+		t.Fatalf("second domain save: %d %s", rr.Code, rr.Body.String())
+	}
+	after, err := svc.GetAccountMXReceiver(ctx, u.AccountID)
+	if err != nil || after.Revision != receiver.Revision || !after.KeyConfigured || after.URL != receiver.URL {
+		t.Fatalf("shared receiver unexpectedly rewritten: %+v, %v", after, err)
+	}
+	for _, tc := range []struct{ id, enforcement string }{{first.ID, "hard"}, {second.ID, "moderate"}} {
+		cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, tc.id)
+		if err != nil || cfg.Provider != "remotemx" {
+			t.Fatalf("domain %s lost receiving: %+v, %v", tc.id, cfg, err)
+		}
+		values, err := svc.DecryptDomainReceivingConfig(cfg)
+		if err != nil || values["enforcement"] != tc.enforcement {
+			t.Fatalf("domain %s enforcement: %+v, %v", tc.id, values, err)
+		}
+	}
+}
+
 func TestRemoteMXSingleSaveValidation(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
