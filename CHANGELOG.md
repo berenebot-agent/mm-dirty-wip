@@ -13,6 +13,13 @@ All notable changes to MailMoose are documented here. This project follows
   domain's enabled catch-all inbox. `GET /v1/bootstrap` reports
   `send_any_in_domain` only where the send is honoured, and always with
   `send_any_domain` naming the domain.
+- The dashboard's "Recent messages" list shows each outbound message once,
+  with its current delivery status. The delivery log records every state
+  transition of a send, so one message contributed two or more rows that read
+  as repeated sends; the rows are now collapsed to the message's latest
+  transition, and the row says whether it was sent, failed, is in flight or was
+  interrupted, with the attempt count when the delivery took more than one
+  attempt. The per-attempt history is unchanged on the domain's activity log.
 
 ### Changed
 
