@@ -905,7 +905,8 @@ return the recorded disposition. For receiver choices and setup, see
 
 A domain chooses whether it receives by MX; the **installation** decides how the
 core reaches the receiver every MX domain uses. That installation setting is the
-single `mx_settings` row, edited from the Admin UI or this API:
+single `mx_settings` row, edited from the Admin UI (the Included receiver) or this
+API (both modes):
 
 ```http
 GET    /v1/admin/mx

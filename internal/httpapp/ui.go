@@ -171,18 +171,6 @@ type remoteMXSetupView struct {
 	Error         string
 }
 
-// mxModeLabel renders the installation receiver mode for the Direct MX panel.
-func mxModeLabel(mode string) string {
-	switch mode {
-	case app.MXModeIncluded:
-		return "Included (receiver runs in this deployment)"
-	case app.MXModeRemote:
-		return "Remote (receiver runs separately)"
-	default:
-		return "Not configured"
-	}
-}
-
 // mxStateLabel renders the live receiver state for the Direct MX panel.
 func mxStateLabel(state string) string {
 	switch state {
@@ -564,7 +552,6 @@ func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
 		"dialmxExpiry":         statusExpiry,
 		"dnsLight":             dnsLight,
 		"dkimStatus":           dkimStatusText,
-		"mxModeLabel":          mxModeLabel,
 		"mxStateLabel":         mxStateLabel,
 		"feedbackEmail":        func() string { return feedbackEmail },
 		"feedbackRepo":         func() string { return feedbackRepo },

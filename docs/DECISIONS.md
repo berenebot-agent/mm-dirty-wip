@@ -2129,6 +2129,10 @@ authentication policy and durable delivery semantics.
 > runtime reconciliation remain current. The one-time import of `MX_ENABLE`,
 > `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and the `MX_*` environment described
 > below is removed: the persisted receiver settings are authoritative.
+>
+> **Amended.** The UI edits the Included receiver only; the `remote` mode is
+> configured through the API. The account-level Remote MX receiver (D084) is the
+> UI-supported path for a separately operated receiver.
 
 **Requirement:** The installation-wide MX receiver must be configurable from the
 system-administrator UI/API and survive restarts, instead of being fixed by the
