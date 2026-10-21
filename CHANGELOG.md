@@ -8,6 +8,18 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- A remote-draft handoff whose destination folder does not exist now fails
+  instead of ending up ambiguous. The remote server's refusal (`NO [TRYCREATE]
+  No such folder`) is a definitive answer, but it was classified as a transient
+  fault, so the product retried eight times over about half a minute and then
+  settled the handoff as `ambiguous` — the one publication state an operator
+  cannot act on, for an outcome where nothing had happened at all. The refusal
+  is now terminal: the handoff settles as `failed` with the reason `the
+  connected mailbox has no Drafts folder`, it is not retried, and the local
+  draft is unfrozen so it can be edited or requested again. A server that
+  refuses the operation for a reason of its own (a permission or policy
+  refusal) is treated the same way. The API reference no longer claims such a
+  handoff is refused at request time: it never was.
 - The Receiving panel now names the HTTP status the receiver URL answered the
   session with, e.g. "receiver refused the session (HTTP 405)" or "receiver
   reported a server error (HTTP 502)". A proxy in front of a receiver answers in

@@ -348,7 +348,26 @@ const maxHandoffAppendAttempts = 8
 
 // isPermanentHandoffError reports whether an append error is terminal.
 func isPermanentHandoffError(err error) bool {
-	return errors.Is(err, store.ErrHandoffUnsupported) || errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound)
+	if errors.Is(err, store.ErrHandoffUnsupported) || errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNotFound) {
+		return true
+	}
+	// A definitive remote refusal is terminal too: a destination folder that does
+	// not exist cannot appear by waiting, and a server that refuses the operation
+	// will refuse it again. Treating these as transient is what turned a refusal
+	// into eight pointless retries and then an ambiguous state — the one outcome
+	// an operator cannot act on. The kinds are the transport's own vocabulary:
+	// not_found is "the destination does not exist", forbidden is "refused".
+	// An authentication failure is deliberately not here: a login refusal can be
+	// transient, and after an accepted append it says nothing about whether the
+	// draft landed.
+	var mb *model.MailboxError
+	if errors.As(err, &mb) {
+		switch mb.Kind {
+		case model.ErrKindNotFound, model.ErrKindForbidden:
+			return true
+		}
+	}
+	return false
 }
 
 // publicHandoffError returns a safe description of a handoff failure. It never
@@ -359,6 +378,17 @@ func publicHandoffError(err error) string {
 	}
 	if errors.Is(err, store.ErrHandoffUnsupported) {
 		return "remote draft handoff is not available for this inbox"
+	}
+	// Name the two terminal remote refusals so a settled handoff says what to
+	// fix rather than only that something failed.
+	var mb *model.MailboxError
+	if errors.As(err, &mb) {
+		switch mb.Kind {
+		case model.ErrKindNotFound:
+			return "the connected mailbox has no Drafts folder"
+		case model.ErrKindForbidden:
+			return "the remote server refused the append"
+		}
 	}
 	return "remote draft append failed"
 }
