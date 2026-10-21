@@ -102,16 +102,6 @@ func (s *Server) remoteMessageWithBody(ctx context.Context, p model.Principal, m
 	return out, nil
 }
 
-// remoteThreadResponse is one thread row in a remote thread listing.
-type remoteThreadResponse struct {
-	ID            string    `json:"id"`
-	InboxID       string    `json:"inbox_id"`
-	Subject       string    `json:"subject"`
-	MessageCount  int       `json:"message_count"`
-	UnreadCount   int       `json:"unread_count"`
-	LastMessageAt time.Time `json:"last_message_at"`
-}
-
 // ---- Folders ----
 
 // apiInboxFolders lists an inbox's folders (domain or standalone) in hierarchical
