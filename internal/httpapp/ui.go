@@ -330,7 +330,7 @@ func (s *Server) dialMXStatuses(domain string) []mxdialStatusView {
 	live := s.Service.DialMX.Status(domain)
 	out := make([]mxdialStatusView, 0, len(live))
 	for _, st := range live {
-		v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname}
+		v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname, HTTPCode: st.HTTPCode}
 		if !st.ExpiresAt.IsZero() {
 			t := st.ExpiresAt
 			v.ExpiresAt = &t
@@ -365,6 +365,8 @@ func dialMXStatusLabel(st mxdialStatusView) string {
 	switch st.Reason {
 	case "session_rejected":
 		return "receiver refused the session"
+	case "receiver_error":
+		return "receiver reported a server error"
 	case "http2_required":
 		return "receiver speaks HTTP/1.1, not HTTP/2"
 	case "mode_mismatch":
@@ -2176,7 +2178,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <pre class="dialmx-txt">{{.TXT}}</pre>
 <p class="muted small">Key ID: <code>{{.KeyID}}</code> · Public key: <code>{{.PublicKey}}</code></p>
 {{if .DNS}}<ul class="dialmx-dns">{{range .DNS}}<li><span class="dns-light {{dnsLight .}}" aria-hidden="true"></span> {{if eq .Kind "mx"}}MX{{else}}TXT{{end}} <code>{{.Name}}</code> — {{if eq .State "ok"}}published and matching{{else if eq .State "mismatch"}}{{.Reason}}{{else}}{{.Reason}}{{end}}{{if .Found}} <span class="muted small">(found: {{join .Found ", "}})</span>{{end}}</li>{{end}}</ul>{{end}}
-{{if .Statuses}}<dl class="dialmx-status">{{range .Statuses}}<dt>{{.ReceiverURL}}</dt><dd>{{if dialmxReady .}}<span class="pill">ready</span>{{if .SMTPHostname}} · receiving at <code>{{.SMTPHostname}}</code>{{end}}{{if dialmxExpiry .}} · rekey in {{dialmxExpiry .}}{{end}}{{else}}<span class="pill {{dialmxStatusClass .}}">{{dialmxStatusLabel .}}</span>{{if .Reason}} · {{.Reason}}{{end}}{{end}}</dd>{{end}}</dl>{{else}}<p class="muted small">No live receiver status yet. Save the configuration, then authorization and MX routing are confirmed automatically.</p>{{end}}
+{{if .Statuses}}<dl class="dialmx-status">{{range .Statuses}}<dt>{{.ReceiverURL}}</dt><dd>{{if dialmxReady .}}<span class="pill">ready</span>{{if .SMTPHostname}} · receiving at <code>{{.SMTPHostname}}</code>{{end}}{{if dialmxExpiry .}} · rekey in {{dialmxExpiry .}}{{end}}{{else}}<span class="pill {{dialmxStatusClass .}}">{{dialmxStatusLabel .}}</span>{{if .HTTPCode}} · HTTP {{.HTTPCode}}{{else if .Reason}} · {{.Reason}}{{end}}{{end}}</dd>{{end}}</dl>{{else}}<p class="muted small">No live receiver status yet. Save the configuration, then authorization and MX routing are confirmed automatically.</p>{{end}}
 <p class="copy-note">After regenerating the key, replace this TXT record too. Authorization is re-established within about five minutes.</p>
 </section>{{end}}
 <div class="dialog-actions">{{/* The danger block is drawn for every receiving dialog and hidden while nothing is stored, so the Dial MX wizard can reveal Remove receiving the moment it stores a configuration. */}}<div class="dialog-danger"{{if and (not $d.ReceivingProvider) (not (index $.DialMXSetup $d.ID))}} hidden{{end}}>{{if index $.DomainReceivingRegenerate $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="amber">Regenerate secret</button></form>{{end}}{{with index $.DialMXSetup $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-antler-regenerate data-confirm="Regenerate the receiving key for {{$d.Name}}? This invalidates the current key and can interrupt incoming mail until you replace the authorization TXT record in DNS and an Antler receiver reconnects. Your MX records stay the same."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Regenerate key</button></form>{{end}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/clear" data-confirm="Remove receiving configuration for this domain? It will stop accepting mail until a receive path is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove receiving</button></form></div><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="domain-receiving-form-{{$d.ID}}" data-save-provider{{if not $sel}} disabled{{end}}>Save</button></div>

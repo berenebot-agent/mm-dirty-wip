@@ -1099,7 +1099,11 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   `rejected`/`not_mx`. For an Antler MX setup an unreachable receiver reports no
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
-  connector.
+  connector. `http_code` is the HTTP status the receiver URL answered the
+  session with, when it answered with one: whatever answered at that URL — the
+  receiver, or a proxy in front of it — owns that status, and the core cannot
+  tell the two apart, so the code is returned and nothing is attributed. It is
+  absent when the attempt was never answered.
 - `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
   `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
   (published MX hostnames that are not Antler receivers), `state` (`ok`,

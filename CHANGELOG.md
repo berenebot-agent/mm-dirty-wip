@@ -8,6 +8,15 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- The Receiving panel now names the HTTP status the receiver URL answered the
+  session with, e.g. "receiver refused the session (HTTP 405)" or "receiver
+  reported a server error (HTTP 502)". A proxy in front of a receiver answers in
+  its own right, and the core cannot tell a proxy's answer from the receiver's,
+  so the status is shown and nothing is attributed — but a self-hoster whose
+  proxy answers an error no longer sees a bare "unreachable" or an endless
+  "reconnecting" with nothing to match against the proxy's log. The status is
+  also returned as `http_code` on the receiver status rows and on the account
+  Remote MX status.
 - The Dial MX `receiver_urls` receiving field is documented as what it is: a
   comma-separated string of HTTPS base URLs, not an array. The reference named
   the field without its type, so a caller sending an array got a `400` whose
