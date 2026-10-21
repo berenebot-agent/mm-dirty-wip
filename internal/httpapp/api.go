@@ -145,18 +145,17 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	// Domain names resolve a live domain-wide sending grant to the domain it
-	// applies to, so a client can send `sender` addresses directly.
-	domainNames := make(map[string]string, len(p.DomainSend))
-	for _, b := range boxes {
-		if !p.DomainSend[b.ID] {
-			continue
-		}
-		if d, derr := s.Service.Store.GetDomain(r.Context(), p.AccountID, b.DomainID); derr == nil {
-			domainNames[b.DomainID] = d.Name
-		}
+	// The account's enabled catch-alls are the inboxes a domain-wide send is
+	// honoured from: an account Admin key holds the grant implicitly on each of
+	// them, and any other key holds it only where its own binding carries the
+	// flag. The domain name comes with them, so a client knows which domain the
+	// widened `sender` rule covers.
+	catchAlls, err := s.Service.Store.ListEnabledCatchAlls(r.Context(), p.AccountID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes, domainNames), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
+	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes, catchAlls), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
 }
 
 type mailboxPermissions struct {
@@ -173,14 +172,13 @@ type mailboxPermissions struct {
 	SendAnyDomain   string `json:"send_any_domain,omitempty"`
 }
 
-func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, domainNames map[string]string) map[string]mailboxPermissions {
+func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, catchAlls map[string]string) map[string]mailboxPermissions {
 	out := make(map[string]mailboxPermissions, len(boxes))
 	for _, box := range boxes {
 		role := p.Role(box.ID)
 		if p.Admin {
 			role = "admin"
 		}
-		anyDomain := p.Admin || p.DomainSend[box.ID]
 		perm := mailboxPermissions{
 			Role:       role,
 			CanRead:    p.CanRead(box.ID),
@@ -188,9 +186,14 @@ func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, domainN
 			CanSend:    p.CanOwn(box.ID),
 			CanApprove: p.CanOwn(box.ID),
 		}
-		if anyDomain {
+		// A domain-wide send is advertised only where it would be honoured: the
+		// key holds the grant — explicitly, or implicitly as an account Admin
+		// key — and the inbox is its domain's enabled catch-all. A web session
+		// holds no key, so it never has the grant.
+		granted := p.DomainSend[box.ID] || (p.Admin && p.APIKeyID != "")
+		if domain, ok := catchAlls[box.ID]; ok && granted {
 			perm.SendAnyInDomain = true
-			perm.SendAnyDomain = domainNames[box.DomainID]
+			perm.SendAnyDomain = domain
 		}
 		out[box.ID] = perm
 	}

@@ -1698,8 +1698,9 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	// Only an API key may carry the domain-wide sending grant; a session or an
-	// Admin principal has no key id and keeps the primary/alias rule.
+	// Only an API key may carry the domain-wide sending grant; a session has no
+	// key id and keeps the primary/alias rule. An account Admin key carries the
+	// grant implicitly, on the same terms as any other key.
 	in.SenderKeyID = p.APIKeyID
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err
