@@ -4,6 +4,15 @@ All notable changes to MailMoose are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The Remote SMTP receiving guide now states what a reverse proxy in front of a
+  separate receiver has to do: the session endpoint speaks HTTP/2 only, the
+  request body must be streamed rather than buffered, and a cleartext receiver
+  admits sessions only from a trusted proxy peer.
+
 ## [0.1.0-beta.2] - 2026-10-20
 
 - Release polish to address full github publish workflow.
