@@ -58,6 +58,8 @@ Put the IP allowlist in the proxy: deny by default and allow only the addresses 
 
 Tunnels and local proxies (for example Cloudflare Tunnel, Tailscale, or a sidecar proxy) connect to MailMoose from the tunnel client's address — usually loopback or a Docker network address, not the remote user's address. That is the peer MailMoose sees, so allow the tunnel client's address in the host firewall (bind the port to loopback when the tunnel runs on the host) and restrict who may use the tunnel in the tunnel's own configuration. MailMoose neither sees nor allowlists the remote client's address.
 
+A [separate SMTP receiver](REMOTE_MX.md) is a different path with its own requirements: the session endpoint it serves speaks HTTP/2 only and streams one long-lived request, so a proxy in front of it has to speak HTTP/2 and never buffer the request body. See [Reverse proxies in front of the receiver](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
+
 ### Forwarded headers and `TRUSTED_PROXIES`
 
 Set `TRUSTED_PROXIES` to the exact addresses or CIDRs your proxy connects from — never a wider range than the proxy itself. A catch-all entry such as `0.0.0.0/0` is refused at startup.
