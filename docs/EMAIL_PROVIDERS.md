@@ -12,7 +12,7 @@ Configure receiving under **Domains → Receiving**, sending under **Domains →
 
 Domains can inherit their parent's sending and receiving settings. Provider credentials are encrypted using `APP_ENCRYPTION_KEY`.
 
-For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md).
+For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md) — including the [proxy requirements for the receiver session](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
 
 ## Inbound: Direct MX
 

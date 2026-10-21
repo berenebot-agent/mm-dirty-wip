@@ -147,6 +147,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
 - [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
 - [D143: Passkey controls are hidden where WebAuthn cannot run](#d143-passkey-controls-are-hidden-where-webauthn-cannot-run)
+- [D144: The receiver session endpoint's proxy requirements are documented for operators](#d144--the-receiver-session-endpoints-proxy-requirements-are-documented-for-operators)
 
 ---
 
@@ -5847,3 +5848,48 @@ account page about what the operator can do.
 `pageData` field removed, one availability check and one removal helper added
 to the browser glue, and the unmatched `</section>` in the settings template
 removed. No API, schema, dependency or runtime service change.
+
+## D144 — The receiver session endpoint's proxy requirements are documented for operators
+
+**Context:** A separate SMTP receiver (Dial MX shared mode, Remote MX single
+mode) is reached over a session the core opens itself: a long-lived streaming
+HTTP/2 `POST /mx/v1/session` to the receiver (`internal/mxwire/session.go`).
+The core's transport speaks HTTP/2 only and never downgrades
+(`internal/transport/mxdial/runtime.go`); the receiver answers `426 HTTP/2
+required` to an HTTP/1.1 request and admits a cleartext h2c session only from
+a loopback peer or a `DIALMX_TRUSTED_PROXIES` address
+(`dialmx/receiver/receiver.go`). A proxy that buffers the request body forwards
+nothing, so the receiver logs no session at all and the core reports the
+receiver unreachable when its 5-second response timeout expires — a silent,
+hard-to-diagnose failure. The design already anticipated this: D083 records the
+h2c path for a TLS-terminating proxy and the nginx constraint
+(`proxy_http_version 2` only from nginx 1.29.4). None of it reached the
+operator guide, and `DIALMX_TRUSTED_PROXIES` and `DIALMX_REQUIRE_TLS` appeared
+in no user-facing document and in no shipped Compose file. An independent
+acceptance test (public beta UAT, finding D-5) hit exactly this path: a
+conventional reverse proxy produced "unreachable" with no session attempt in the
+receiver's log, and the tester diagnosed it only by reading the source.
+
+**Decision (2026-10-21):** Document the operator-facing contract rather than
+change any behaviour. A new "Reverse proxies in front of the receiver" section
+in `docs/REMOTE_MX.md` states that the session endpoint speaks HTTP/2 only,
+that a proxy must offer h2 to the core, speak h2 (or h2c) to the receiver,
+stream the request body instead of buffering it, and keep the connection open;
+it gives the layer-4-termination guidance, the `DIALMX_TRUSTED_PROXIES` rule
+for a cleartext receiver (including the note that the shipped Compose file
+does not pass it through), a `curl --http2` check, and a table mapping each
+failure signature to its cause. `docs/EMAIL_PROVIDERS.md` and
+`docs/SELFHOSTING.md` link to it.
+
+**Reason:** The product is already correct and the defect is a documentation
+gap, so the fix belongs in the guide, not in the code. The tester reached the
+working configuration only by reading the source, and the next self-hoster
+must not have to. The alternative the finding also suggests — teaching the
+Receiving panel to name a proxy's own 4xx/5xx — cannot be done reliably: the
+core cannot tell a proxy's refusal from the receiver's, because both arrive as
+an HTTP status on the same request. The receiver's own log is the
+authoritative diagnosis, so the guide points there instead of guessing.
+
+**Complexity:** Documentation only: one new section in `docs/REMOTE_MX.md`, two
+linked pointers, and a changelog entry. No code, API, schema, dependency or
+runtime service change. The optional Receiving-panel improvement stays open.
