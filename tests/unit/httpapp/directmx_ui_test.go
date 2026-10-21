@@ -54,10 +54,9 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	if strings.Contains(body, "Do not use the SMTP greeting hostname") {
 		t.Fatal("Direct MX setup retains redundant MX-target guidance")
 	}
-	// The panel names the MX target from the configured hostname even with no
-	// live runtime, rather than showing nothing.
-	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>mx.test</code>`) {
-		t.Fatalf("Direct MX panel must name the configured MX target:\n%s", body)
+	// The client domain points at MailMoose's URL host, not the mx.test greeting.
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
+		t.Fatalf("Direct MX panel must name the client domain and MailMoose URL host:\n%s", body)
 	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
 		t.Fatal("account admin must see status only, not receiver controls")
@@ -91,6 +90,18 @@ func TestDirectMXPanelFallsBackToReceiverURL(t *testing.T) {
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
 	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
 		t.Fatalf("Direct MX panel must fall back to the public receiver URL host:\n%s", body)
+	}
+}
+
+func TestDirectMXInstructionUsesDedicatedURLNotGreeting(t *testing.T) {
+	t.Parallel()
+	svc, h, u, domain, _ := httpFixture(t)
+	svc.Config.DedicatedReceiverURL = "https://receiving.example.test:8443"
+	configureMXReceiver(t, svc, app.MXModeIncluded)
+	cookie, _ := uiSession(t, svc, u.ID)
+	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>receiving.example.test</code>`) {
+		t.Fatalf("instruction must name the client domain and configured receiving URL hostname:\n%s", body)
 	}
 }
 
