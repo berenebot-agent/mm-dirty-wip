@@ -131,7 +131,17 @@ jobs:
           tags: ${{ steps.mx_meta.outputs.tags }}
           labels: ${{ steps.mx_meta.outputs.labels }}
 
-      - name: Create GitHub release
+      # Idempotent: a re-run of the same tag (or a release created by hand in
+      # the GitHub UI) must not fail the whole job. The images are already
+      # published by this point.
+      - name: Create GitHub release if needed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "MailMoose $GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release already exists; skipping."
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "MailMoose $GITHUB_REF_NAME" \
+              --generate-notes --prerelease
+          fi
