@@ -6,7 +6,28 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Native search pagination is standardized on `before=<next_cursor>` for every
+  inbox kind. The former standalone search `cursor` input is rejected with a
+  migration hint. Clients must treat returned continuations as opaque strings,
+  retain filters, and not treat `before` as a date. No route or message-schema
+  replacement is introduced; explicit openagent.email compatibility stays separate.
+
 ### Fixed
+
+- Domain and connected inbox listings now share message/thread/search handlers,
+  filters and `before=<next_cursor>` pagination. Single-inbox thread/search
+  continuations no longer disappear, standalone search respects `folder`, and
+  local search respects `subject` and `unread`. Provider-native tie ordering is
+  retained so a search continuation cannot skip equal-date results. Partial
+  remote indexes are no longer advertised as complete by account-wide reads.
+- Local attachment downloads now work through `/v1/messages/{id}/attachments/{part}`
+  as well as the inbox-scoped and attachment-ID routes.
+- Agent guidance, OpenAPI, examples and mailbox docs now describe the label
+  catalogue, provider capabilities, authoring outcomes and current Empty Trash
+  behavior. The Python client no longer fails at startup on duplicate `--table`
+  arguments; both example clients show catalogue capabilities when scoped to an inbox.
 
 - A remote-draft handoff whose destination folder does not exist now fails
   instead of ending up ambiguous. The remote server's refusal (`NO [TRYCREATE]

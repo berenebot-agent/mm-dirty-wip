@@ -49,6 +49,28 @@ An agent can discover its permissions and the available operations from:
 
 See [API.md](API.md) for the complete interface.
 
+### Agent first-use checklist
+
+Start with `/v1/bootstrap`: choose an accessible inbox and inspect its effective
+permissions. Direct sending requires `can_send`; an Assistant should inspect
+`/v1/inboxes/{id}/authoring` and use the draft workflow instead. A remote-draft
+handoff places mail in the provider's Drafts folder; it is not a send or approval
+notification.
+
+Domain and connected inboxes share the native mailbox routes and message schema.
+List, thread and search pagination always follows `next_cursor` by sending it as
+`before`, with the same filters. Tokens are opaque, not timestamps. Respect
+`completeness` and per-inbox `errors`; pagination does not prove the whole mailbox
+has been indexed. Fetch message detail for bodies, since listings omit them.
+
+Read `/v1/inboxes/{id}/label-catalog` for label IDs and capabilities. Some labels
+are additive classifications; others are exclusive move destinations. Do not
+infer label behavior, deletion support or authoring mode from the inbox type.
+The [shared contract and capability matrix](API.md#shared-contract-and-provider-capabilities)
+records deliberate provider differences. `/examples/python`, `/examples/bash`
+and `/examples/curl` provide runnable examples; Python uses only the standard
+library, while Bash needs `curl` and `jq`.
+
 ## Hermes Relay
 
 Hermes connects *out* to MailMoose over a WebSocket. No inbound port is required on the Hermes host. Unacknowledged messages are replayed when it reconnects.

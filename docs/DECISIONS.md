@@ -153,6 +153,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D147: The status the receiver URL answered is surfaced in the Receiving panel](#d147--the-status-the-receiver-url-answered-is-surfaced-in-the-receiving-panel)
 - [D148: Connectors return to the dashboard Clients list behind a per-admin toggle](#d148--connectors-return-to-the-dashboard-clients-list-behind-a-per-admin-toggle)
 - [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
+- [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
 
 ---
 
@@ -6151,3 +6152,40 @@ the distinct remote setup in Remote MX.
 
 **Complexity:** UI layout and help text only, plus removal of the duplicate
 Admin form/routes. No runtime, API or schema change.
+
+## D150 — One native mailbox pagination and discovery contract
+
+**Requirement:** Release audit found common path names but divergent handlers:
+single-inbox threads/search lost continuations, standalone search ignored its
+folder, local search ignored subject/read state, and agent prose described the
+retired no-catalogue label model. Ben approved standardizing the public contract
+rather than maintaining multiple provider-specific pagination inputs.
+
+**Decision (2026-10-21, human approved):** Native mailbox lists, threads and search
+use `before=<next_cursor>` for domain and connected inboxes. The old standalone
+search `cursor` parameter is rejected with a migration hint. Inbox-scoped and
+equivalent `?inbox=` reads share handlers. Existing route names, the canonical
+Message schema, mailbox roles, and separate openagent.email projections remain.
+Search may omit q for filter-only reads; advanced FTS5/provider syntax is not
+claimed to be portable.
+
+Message/search merging advances source-native cursors without reordering a
+provider's window by MailMoose IDs: provider search order can break ties
+differently, and reordering then resuming a native cursor loses results. The
+merger chooses among source heads; source progress, not a global-ID cutoff,
+prevents duplicates. Local message/search keysets use received time (creation
+time if unavailable), then ID. Full maximum-size pages may carry a continuation
+that leads to an empty terminal page when store clamping prevents lookahead.
+
+Completeness describes coverage independently of pagination. Completed indexes
+or provider enumerations can be complete; incomplete coverage/source failures
+are partial; indeterminate coverage is unknown. The label catalogue's existing
+capabilities describe additive versus exclusive membership and edit support.
+Authoring settings distinguish approval from remote placement. Provider limits
+remain explicit rather than being hidden behind claims of universal behavior.
+
+**Complexity:** Reuses existing handlers, source cursors and capabilities; removes
+duplicate scoped listing logic. No new endpoint, dependency, service, secret
+handling, or database schema/migration. Regression coverage includes both inbox
+kinds/URL forms, tied dates, maximum page size, filters, completeness, local
+attachment downloads, rendered OpenAPI/agent guidance, and executable clients.
