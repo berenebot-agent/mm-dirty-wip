@@ -457,6 +457,7 @@ var v1Routes = []apiRoute{
 	{"PATCH /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
 	{"DELETE /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
 	{"POST /v1/inboxes/{id}/messages/{messageId}/labels", (*Server).apiUnifiedMessageLabels},
+	{"POST /v1/inboxes/{id}/messages/{messageId}/move", (*Server).apiMoveMessage},
 	{"GET /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteGet},
 	{"PUT /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteSave},
 	{"POST /v1/inboxes/{id}/remote/test", (*Server).apiInboxRemoteTest},

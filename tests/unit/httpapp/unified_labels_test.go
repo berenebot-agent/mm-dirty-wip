@@ -76,6 +76,39 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	}
 }
 
+func TestMoveMessageAPI(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	folder, err := svc.Store.CreateFolder(context.Background(), p, box.ID, store.FolderCreate{Path: "Projects"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := seedInbound(t, svc, box, "move-api", "<move-api@test>", "Move", "body")
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "move test", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(folderID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/move?wait=true", strings.NewReader(`{"folder_id":"`+folderID+`"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if got := request("missing-folder"); got.Code != http.StatusNotFound {
+		t.Fatalf("unknown destination returned %d: %s", got.Code, got.Body.String())
+	}
+	if got := request(folder.ID); got.Code != http.StatusOK {
+		t.Fatalf("move returned %d: %s", got.Code, got.Body.String())
+	}
+	moved, err := svc.Store.GetMessage(context.Background(), p, m.ID)
+	if err != nil || moved.MailboxID != folder.ID {
+		t.Fatalf("message folder = %q, want %q (err %v)", moved.MailboxID, folder.ID, err)
+	}
+}
+
 func TestReaderLabelActionPreservesReader(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)

@@ -213,6 +213,7 @@ GET    /v1/inboxes/{id}/messages        ?folder=&before=&label=&from=&to=&limit=
 GET    /v1/inboxes/{id}/messages/{messageId}
 GET    /v1/inboxes/{id}/messages/{messageId}/content
 GET    /v1/inboxes/{id}/messages/{messageId}/attachments/{part}
+POST   /v1/inboxes/{id}/messages/{messageId}/move   {"folder_id":"..."}
 GET    /v1/inboxes/{id}/threads         ?folder=&limit=
 GET    /v1/inboxes/{id}/threads/{threadId}
 GET    /v1/inboxes/{id}/search          ?q=&folder=&from=&to=&label=&limit=
@@ -232,6 +233,11 @@ one folder; moving it emits `message.folder_changed`. A protected system folder
 cannot be renamed or deleted, and a non-empty folder is refused (nothing is
 silently cascaded). **Labels are not folders**: a label is free-text metadata on
 a message and is independent of the folder tree on both inbox kinds.
+
+Move a message with `POST /v1/inboxes/{id}/messages/{messageId}/move` and
+`{"folder_id":"<folder-id>"}`. The destination must belong to that inbox.
+Like other message actions, it queues by default and accepts `?wait=true` to
+wait for completion; the response contains the resulting message when complete.
 
 ### Standalone (remote) specifics
 
@@ -1365,6 +1371,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes/{id}/messages/{messageId} | Get a message (common) | read |
 | GET | /v1/inboxes/{id}/messages/{messageId}/content | Download a message's raw MIME (common) | read |
 | GET | /v1/inboxes/{id}/messages/{messageId}/attachments/{part} | Download one message attachment (common) | read |
+| POST | /v1/inboxes/{id}/messages/{messageId}/move | Move a message to a folder in the inbox (Assistant/Owner) | assistant |
 | GET | /v1/inboxes/{id}/threads | List an inbox's threads (common envelope) | read |
 | GET | /v1/inboxes/{id}/threads/{threadId} | Get a thread (common) | read |
 | GET | /v1/inboxes/{id}/search | Search an inbox (common envelope) | read |
