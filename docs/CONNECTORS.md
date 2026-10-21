@@ -213,7 +213,7 @@ Deliveries are strictly ordered per connector. The oldest undelivered event is a
 
 A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-MailMoose-Delivery`**, because a retry repeats the same event and delivery ID.
 
-For exact header encoding and the request contract, see [the webhook contract](integrations/BILLBOT_WEBHOOK_CONTRACT.md) and [API.md](API.md).
+For exact header encoding and the request contract, see the shared [contract fixture](../tests/fixtures/mailmoose-webhook-contract.json) and [API.md](API.md).
 
 ## Troubleshooting
 

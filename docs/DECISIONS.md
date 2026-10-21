@@ -2006,10 +2006,10 @@ safe and prevents a crafted relay value from being echoed as authority.
   `last_error` is not set by a skip.
 - No backward-compatibility alias is needed for a capability that has not yet
   shipped.
-- The joint wire contract with the consuming agent (Billbot) is documented in
-  `docs/integrations/BILLBOT_WEBHOOK_CONTRACT.md`, with a byte-identical fixture committed at
-  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. Both
-  are maintained by hand; the generating worker test is
+- The joint wire contract with the consuming agent (Billbot) is pinned by a
+  byte-identical fixture committed at
+  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. The
+  fixture is maintained by hand; the generating worker test is
   `TestWebhookForwardContractFixture`.
 
 ## D067 — Dial MX: an outbound-dialing standalone receiver
@@ -4879,8 +4879,7 @@ fake remote server. No new dependency, table or migration.
 
 **Not fixed here:** the separate "a folder-backed label cannot be moved back out
 through the API" gap (no `POST /v1/messages/{id}/move` route; a folder-label
-`remove` still returns 409) is unchanged and remains tracked in
-`docs/proposals/label-findings-fix-plan.md`.
+`remove` still returns 409) is unchanged.
 
 ## D120 — A move destination may be a folder id or a folder path
 
