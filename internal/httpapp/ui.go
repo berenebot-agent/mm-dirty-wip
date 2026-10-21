@@ -473,7 +473,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, body string, dat
 // extra definitions are appended after the shell's own defines and before the
 // body define wraps the page body.
 func (s *Server) renderExtra(w http.ResponseWriter, r *http.Request, extra, body string, data any) {
-	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "mx-editor"}}` + mxReceiverSection + `{{end}}{{define "account-operators"}}` + accountOperatorsSection + `{{end}}` + extra + `{{define "body"}}` + body + `{{end}}`)
+	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "mx-editor"}}` + mxReceiverSection + `{{end}}{{define "mx-included-fields"}}` + mxIncludedFields + `{{end}}{{define "mx-install-editor"}}` + mxInstallSection + `{{end}}{{define "account-operators"}}` + accountOperatorsSection + `{{end}}` + extra + `{{define "body"}}` + body + `{{end}}`)
 	if err != nil {
 		s.Log.Error("template parse failed", "error", err)
 		http.Error(w, "could not render page", 500)

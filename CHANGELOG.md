@@ -30,10 +30,19 @@ All notable changes to MailMoose are documented here. This project follows
   separate receiver has to do: the session endpoint speaks HTTP/2 only, the
   request body must be streamed rather than buffered, and a cleartext receiver
   admits sessions only from a trusted proxy peer.
-- The guide no longer tells an operator to pick a Remote receiver from an
-  installation setting that the web interface does not offer: an
-  installation-wide remote receiver is configured with `PUT /v1/admin/mx`, and
-  the account's own receiver is configured in the Remote MX panel.
+- The guide now names the route to an installation-wide remote receiver: the
+  **Settings → Admin → MX receiver** card, or `PUT /v1/admin/mx` with a
+  logged-in system administrator's session. The account's own receiver is
+  configured in that account's Remote MX panel.
+
+### Added
+
+- The Admin page has an **MX receiver** card: the installation's shared
+  direct-SMTP receiver can now be added in either mode — the receiver bundled
+  with the deployment, or one the operator runs themselves (URL and bearer key).
+  The mode was reachable only through `PUT /v1/admin/mx`, while the Compose
+  files and the environment example already told operators to set it in the web
+  interface.
 
 ## [0.1.0-beta.2] - 2026-10-20
 
