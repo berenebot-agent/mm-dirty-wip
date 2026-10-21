@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -540,7 +541,11 @@ func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 		rt.mu.Unlock()
 		rt.setStatus(stateActive, "", st.SMTPHostname, "")
 	case mxdial.StatusUnreachable, mxdial.StatusRejected, mxdial.StatusUnavailable:
-		rt.setStatus(stateUnavailable, receiverDetail(st.Reason), "", "")
+		detail := receiverDetail(st.Reason, st.HTTPCode)
+		if detail == "" {
+			detail = "receiver unreachable"
+		}
+		rt.setStatus(stateUnavailable, detail, "", "")
 	default:
 		reason := st.Reason
 		if reason == "" {
@@ -551,29 +556,40 @@ func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 }
 
 // receiverDetail renders an operator-facing reason for a receiver the core could
-// not use, from the dialer's stable failure token.
-func receiverDetail(reason string) string {
+// not use, from the dialer's stable failure token. A code is the HTTP status the
+// receiver URL answered with: whatever answered at that URL — the receiver, or a
+// proxy in front of it — owns that status, and the core cannot tell the two
+// apart, so the code is named and nothing is attributed. An unknown token
+// returns "", so a caller keeps its own fallback.
+func receiverDetail(reason string, code int) string {
+	var detail string
 	switch reason {
 	case mxdial.ReasonDNSFailure:
-		return "receiver hostname does not resolve"
+		detail = "receiver hostname does not resolve"
 	case mxdial.ReasonTLSCertificate:
-		return "receiver TLS certificate could not be verified"
+		detail = "receiver TLS certificate could not be verified"
 	case mxdial.ReasonHTTP2Required:
-		return "receiver answered HTTP/1.1 where HTTP/2 is required"
+		detail = "receiver answered HTTP/1.1 where HTTP/2 is required"
 	case mxdial.ReasonIdleTimeout:
-		return "receiver session timed out repeatedly"
+		detail = "receiver session timed out repeatedly"
 	case mxdial.ReasonRejected:
-		return "receiver refused the session"
+		detail = "receiver refused the session"
 	case mxdial.ReasonReceiverError:
-		return "receiver reported a server error"
+		detail = "receiver reported a server error"
 	case mxdial.ReasonModeMismatch:
-		return "receiver answered the wrong session mode"
+		detail = "receiver answered the wrong session mode"
 	case mxdial.ReasonProtocolMismatch:
-		return "receiver protocol mismatch"
+		detail = "receiver protocol mismatch"
 	case mxdial.ReasonDestinationNotAllowed:
-		return "receiver destination is not allowed"
+		detail = "receiver destination is not allowed"
 	}
-	return "receiver unreachable"
+	if code > 0 {
+		if detail == "" {
+			detail = "receiver URL answered with an error status"
+		}
+		return detail + fmt.Sprintf(" (HTTP %d)", code)
+	}
+	return detail
 }
 
 func (rt *mxRuntime) markPending(pending bool) {

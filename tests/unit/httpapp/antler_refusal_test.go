@@ -95,4 +95,9 @@ func TestDialMXRefusedReceiverIsReportedRejected(t *testing.T) {
 	if row["reason"] != mxdial.ReasonRejected {
 		t.Fatalf("reason = %v, want %q", row["reason"], mxdial.ReasonRejected)
 	}
+	// The status the receiver URL answered with is reported, so an operator (or a
+	// caller) can name an endpoint's own 4xx/5xx instead of a bare "unreachable".
+	if row["http_code"] != float64(http.StatusNotFound) {
+		t.Fatalf("http_code = %v, want %d", row["http_code"], http.StatusNotFound)
+	}
 }

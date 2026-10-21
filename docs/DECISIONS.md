@@ -6023,3 +6023,52 @@ and a dozen lines of browser glue that show the selected mode's fields. No
 schema, migration, dependency, transport or runtime service change; the API
 contract is unchanged, and the form and the API go through the same service
 validation.
+
+## D147 — The status the receiver URL answered is surfaced in the Receiving panel
+
+**Context:** The public beta UAT (finding D-5) found that a receiver's session
+endpoint needs HTTP/2 and a non-buffering proxy, and D144 put that contract in
+`docs/REMOTE_MX.md`. D144 also declined the second half of the same finding —
+teaching the Receiving panel to name a proxy's own 4xx/5xx — because the core
+cannot tell a proxy's refusal from the receiver's: both arrive as an HTTP
+status on the same request. It recorded that half as "not done and stays
+open". What that reasoning rules out is the *attribution*, not the *number*.
+The status is a fact about the request the core made, and it is the one piece
+of the failure an operator can act on and the core can be sure of: it separates
+"the endpoint answered and declined" from "nothing answered at all" (a proxy
+that buffered the request body, D144's case), and it is the number that appears
+in the proxy's own log. Today that number is dropped on the floor: the dialer
+reduces a non-200 session response to a failure token
+(`internal/transport/mxdial/runtime.go`), so a proxy answering `502` leaves the
+row reading "reconnecting" and the account Remote MX panel reading
+"receiver_error", indefinitely, with nothing to match against a log.
+
+**Decision (2026-10-21):** The dialer keeps the HTTP status the receiver URL
+answered the session `POST` with (`mxdial.Status.HTTPCode`, carried by the
+session that owns the attempt), and every surface that reports a receiver's
+state names it: the domain Receiving panel (the per-receiver status rows, both
+server-rendered and in the browser), the account Remote MX panel, the
+installation Direct MX card, and the API (`status[].http_code`, and `http_code`
+on the account MX status). The status is never attributed: the wording is
+neutral ("receiver refused the session (HTTP 405)"), because the core cannot say
+whose status it is. A receiver's own 5xx is named too, and its label names the
+cause ("receiver reported a server error") rather than "reconnecting".
+
+**Reason:** D144's caution is kept by the wording, not by withholding the
+number. The status is reported as a fact about the request; the proxy's and the
+receiver's own logs remain the authoritative diagnosis, and the guide still
+points there. Leaving the status out would leave the finding half-closed: a
+self-hoster whose proxy answers an error sees an endless "reconnecting" and no
+way to find the matching proxy log line. An attempt that was never answered
+carries no status, and the panel still reads "unreachable" for it — that case
+is the guide's, and D144's table already names it. The dialer's own vocabulary
+is unchanged: a 4xx stays a settled refusal and a 5xx stays a retrying receiver
+error, so no state, reason or retry behaviour moves.
+
+**Complexity:** Local to the dialer, the HTTP layer and the operator prose. One
+field on the dialer's status and on the session that owns the attempt, one
+field on the API's receiver status view, one on the account MX status, a label
+case in the Go and the browser renderer, and the operator phrase in
+`cmd/server` takes the code and appends it. No schema, migration, dependency,
+transport or runtime service change; the failure tokens and states are
+unchanged.
