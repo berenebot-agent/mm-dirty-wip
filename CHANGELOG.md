@@ -62,19 +62,14 @@ All notable changes to MailMoose are documented here. This project follows
   separate receiver has to do: the session endpoint speaks HTTP/2 only, the
   request body must be streamed rather than buffered, and a cleartext receiver
   admits sessions only from a trusted proxy peer.
-- The guide now names the route to an installation-wide remote receiver: the
-  **Settings → Admin → MX receiver** card, or `PUT /v1/admin/mx` with a
-  logged-in system administrator's session. The account's own receiver is
-  configured in that account's Remote MX panel.
-
-### Added
-
-- The Admin page has an **MX receiver** card: the installation's shared
-  direct-SMTP receiver can now be added in either mode — the receiver bundled
-  with the deployment, or one the operator runs themselves (URL and bearer key).
-  The mode was reachable only through `PUT /v1/admin/mx`, while the Compose
-  files and the environment example already told operators to set it in the web
-  interface.
+- Direct MX and Remote MX setup now live in their respective domain Receiving
+  panels. Direct MX shows its shared-receiver notice before enforcement and
+  receiver tuning; Remote MX describes the outbound receiver connection and
+  links to its setup guide. The Direct MX dialog widens while that provider is
+  selected.
+- Direct MX no longer tells operators to publish an SPF record just to receive
+  mail. SPF verification checks the incoming sender's domain; the receiving
+  domain needs an MX record pointing to the receiver.
 
 ## [0.1.0-beta.2] - 2026-10-20
 

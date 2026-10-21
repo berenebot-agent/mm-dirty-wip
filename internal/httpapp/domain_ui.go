@@ -1267,16 +1267,9 @@ func domainReceivingSteps(provider string) []string {
 			"Choose moderate or hard receiver authentication enforcement, then save.",
 		}
 	case "mx":
-		return []string{
-			"Point this domain's MX record at the receiver's advertised SMTP hostname; the Direct MX receiver panel below names it. Do not use the SMTP greeting hostname.",
-			"Publish an SPF record for the domain; DKIM and DMARC are computed at the receiver.",
-			"Choose an enforcement mode below (moderate is the default), then save.",
-		}
+		return nil
 	case "remotemx":
-		return []string{
-			"MailMoose connects outbound to your account's receiver using its URL and bearer key below.",
-			"Point this domain's MX record at your receiver's SMTP hostname. No webhook, DNS proof, or per-domain key is needed.",
-		}
+		return nil
 	default:
 		return []string{"Copy this webhook URL into the provider's receiving settings, then fill in the fields below and save."}
 	}
