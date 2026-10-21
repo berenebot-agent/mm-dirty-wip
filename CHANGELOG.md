@@ -8,6 +8,30 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- The domain Receiving dialog now keeps the two SMTP receivers apart. The
+  bundled receiver's tuning — SMTP greeting hostname, limits, verification,
+  network timeouts and STARTTLS — is shown only while Direct MX is selected, so
+  it can no longer read as settings for a Remote MX receiver. The Remote MX
+  panel carries the account receiver's URL and bearer key, and states that the
+  receiver's own SMTP hostname, limits and verification are configured on the
+  receiver. Its account-level actions read "Save remote receiver" and "Remove
+  remote receiver", distinct from the domain's own Save and Remove receiving.
+- A Remote MX domain can now be given a per-domain authentication enforcement
+  policy (moderate or hard) like a Direct MX domain, instead of always grading
+  the receiver's evidence at moderate. The default is unchanged.
+
+### Fixed
+
+- Saving the Remote MX receiver, or failing its validation, now returns to the
+  domain Receiving dialog it was submitted from. Previously the redirect landed
+  on the dashboard, which closed the dialog and hid the validation error
+  entirely.
+- The domain Receiving dialog no longer offers a Remote MX domain the shared
+  Direct MX receiver's settings.
+- The Direct MX panel now names both sides of the instruction — the domain whose
+  MX records to publish and the receiver hostname to point them at — instead of
+  "point this domain's MX record at" a hostname.
+
 - The provider guide and the self-hosting guide now say plainly that a Direct MX
   domain receives no mail until the installation's receiver is configured, and
   that selecting the provider in the dashboard does not configure the receiver.

@@ -863,7 +863,7 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 		return s.saveDialMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
 	}
 	if provider == RemoteMXProvider {
-		return s.saveRemoteMXReceivingConfig(ctx, accountID, domainID, provider, existing, exists, regenerate)
+		return s.saveRemoteMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
 	}
 	fields, err := inboundConfigFields(provider)
 	if err != nil {
@@ -983,10 +983,11 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 
 // saveRemoteMXReceivingConfig selects the account-owned Remote MX receiver for a
 // domain. The receiver itself is configured once per account under
-// /v1/admin/account/mx; a domain only references it by selecting the provider, so
-// the stored config is empty. It requires the account to have a receiver
-// configured (otherwise the domain would silently accept nothing).
-func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
+// /v1/admin/account/mx; a domain references it by selecting the provider, plus
+// the core-side spam policy the receiver's auth evidence is graded with. It
+// requires the account to have a receiver configured (otherwise the domain would
+// silently accept nothing).
+func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, cfg map[string]any, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
 	if regenerate {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("Remote MX has no per-domain secret to regenerate")
 	}
@@ -1003,7 +1004,25 @@ func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, do
 	if receiver.ReceiverURL == "" {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("configure this account's Remote MX receiver before selecting it for a domain")
 	}
-	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), map[string]any{})
+	fields, err := inboundConfigFields(provider)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	sameProvider := exists && strings.EqualFold(existing.Provider, provider)
+	var old map[string]any
+	if sameProvider {
+		if old, err = s.DecryptDomainReceivingConfig(existing); err != nil {
+			return store.DomainReceivingConfig{}, nil, err
+		}
+	}
+	merged, err := validateConfig(fields, cfg, old, sameProvider)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}

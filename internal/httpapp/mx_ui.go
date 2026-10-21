@@ -111,6 +111,7 @@ const mxReceiverSection = `<div class="mx-editor">
 {{if .MXForm.Error}}<div class="error">{{.MXForm.Error}}</div>{{end}}
 <input type="hidden" name="revision" value="{{.MXForm.Revision}}">
 <input type="hidden" name="mode" value="included">
+<p class="muted small">These settings apply to the bundled receiver that every Direct MX domain shares. A Remote MX receiver is configured on that receiver instead.</p>
 <div><label>SMTP greeting hostname (optional)</label><input name="hostname" value="{{.MXForm.Hostname}}" placeholder="mail.example.com">
 <p class="muted small">Defaults to the external receiving URL hostname, or the public URL hostname. You can change it.</p>
 <details{{if .MXForm.Error}} open{{end}}><summary>Limits</summary>

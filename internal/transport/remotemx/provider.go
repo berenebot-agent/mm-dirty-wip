@@ -15,9 +15,9 @@ const Provider = "remotemx"
 
 // Transport is the inbound provider adapter for Remote MX. It has no webhook
 // face: the core dials the account's receiver outbound, so Receive is never a
-// valid dispatch target and no ConfigFields are offered (the receiver is
-// configured once per account through /v1/admin/account/mx and selected per
-// domain by choosing this provider).
+// valid dispatch target. The receiver itself is configured once per account
+// through /v1/admin/account/mx; the only per-domain value is the core-side spam
+// policy applied to the receiver's auth evidence.
 type Transport struct{}
 
 func init() { transport.RegisterInbound(Transport{}) }
@@ -33,7 +33,17 @@ func (Transport) Description() string {
 // It makes the distinction from the installation Direct MX receiver explicit.
 func (Transport) SelectLabel() string { return "Remote MailMoose MX (your own receiver)" }
 
-func (Transport) ConfigFields() []transport.ConfigField { return nil }
+func (Transport) ConfigFields() []transport.ConfigField {
+	// The receiver computes SPF/DKIM/DMARC evidence on its own host; the core
+	// only decides what an unauthenticated message becomes, so the enforcement
+	// policy is the one receiving setting that applies per domain here.
+	return []transport.ConfigField{
+		{Name: "enforcement", Label: "Receiver authentication enforcement", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
+			{Value: "moderate", Label: "Moderate (Spam on definitive DMARC failure, or SPF and DKIM both failed)"},
+			{Value: "hard", Label: "Hard (Spam on any one of SPF, DKIM or definitive DMARC failure)"},
+		}},
+	}
+}
 
 var ErrWebhookUnsupported = errors.New("remotemx provider does not accept webhook dispatch")
 
