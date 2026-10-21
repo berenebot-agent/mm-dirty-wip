@@ -421,8 +421,8 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 }
 
 type MessageFilter struct {
-	InboxID, ThreadID, From, To, Direction string
-	Unread, HasAttachment                  *bool
+	InboxID, ThreadID, From, To, Direction, Subject string
+	Unread, HasAttachment                           *bool
 	// Labels, when non-empty, restricts results to messages carrying every
 	// listed label (AND). Matching is case-insensitive.
 	Labels []string
@@ -506,6 +506,10 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 		like := "%" + normalizeAddress(f.To) + "%"
 		args = append(args, like, like)
 	}
+	if f.Subject != "" {
+		q += ` AND instr(lower(m.subject),lower(?)) > 0`
+		args = append(args, strings.TrimSpace(f.Subject))
+	}
 	if f.Unread != nil {
 		q += ` AND m.is_read=?`
 		args = append(args, boolInt(!*f.Unread))
@@ -526,10 +530,10 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 	}
 	if f.Before != "" {
 		var beforeCreated string
-		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		err := s.read.QueryRowContext(ctx, `SELECT COALESCE(received_at,created_at) FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
 		if err == nil {
-			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
-			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+			q += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
+			args = append(args, beforeCreated, beforeCreated, f.Before)
 		} else if err != sql.ErrNoRows {
 			return "", nil, err
 		}
@@ -548,7 +552,8 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
+	// shortcut: effective-date sorting has no dedicated index; add one if measured large-mailbox latency warrants a migration.
+	q += ` ORDER BY COALESCE(m.received_at,m.created_at) DESC, m.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -1612,7 +1617,7 @@ func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxI
 func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q string, f MessageFilter) ([]model.Message, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
-		return []model.Message{}, nil
+		return s.ListMessages(ctx, p, f)
 	}
 	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
 	match, err := ftsQuery(q)
@@ -1655,6 +1660,14 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		like := "%" + normalizeAddress(f.To) + "%"
 		args = append(args, like, like)
 	}
+	if f.Subject != "" {
+		sqlq += ` AND instr(lower(m.subject),lower(?)) > 0`
+		args = append(args, strings.TrimSpace(f.Subject))
+	}
+	if f.Unread != nil {
+		sqlq += ` AND m.is_read=?`
+		args = append(args, boolInt(!*f.Unread))
+	}
 	if f.HasAttachment != nil {
 		if *f.HasAttachment {
 			sqlq += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
@@ -1671,10 +1684,10 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	}
 	if f.Before != "" {
 		var beforeCreated string
-		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		err := s.read.QueryRowContext(ctx, `SELECT COALESCE(received_at,created_at) FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
 		if err == nil {
-			sqlq += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
-			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+			sqlq += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
+			args = append(args, beforeCreated, beforeCreated, f.Before)
 		} else if err != sql.ErrNoRows {
 			return nil, err
 		}
@@ -1683,7 +1696,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	sqlq += ` ORDER BY m.created_at DESC LIMIT ?`
+	sqlq += ` ORDER BY COALESCE(m.received_at,m.created_at) DESC, m.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, sqlq, args...)
 	if err != nil {

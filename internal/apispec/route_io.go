@@ -46,11 +46,11 @@ var (
 	qWait        = p("wait", "boolean", false, "Block until delivery or action completes instead of returning as soon as queued (up to 30 seconds).")
 	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
 	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
-	qQ           = p("q", "string", true, "FTS5 query string.")
+	qQ           = p("q", "string", false, "Search text. Omit for a filter-only search. Local mail uses FTS5; connected inboxes use provider search. Advanced syntax is not portable.")
 	qFolder      = p("folder", "string", false, "Scope to one folder (a folder path for a standalone inbox, a folder id for a domain inbox).")
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
-	qContentType = p("content_type", "string", false, "IANA media type to advertise for a remote attachment download.")
+	qContentType = p("content_type", "string", false, "Remote attachment media-type hint; downloads are served as application/octet-stream with attachment disposition and nosniff.")
 	qLabelID     = p("label_id", "array", false, "Repeatable unified label id from the label catalogue: tag:<Name> for additive labels, or folder:<id> for a folder-backed label (single-inbox scope required account-wide).")
 )
 
@@ -75,13 +75,13 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/inboxes/{id}/folders":                                {Request: "FolderCreate", Response: "Folder"},
 	"PATCH /v1/inboxes/{id}/folders/{folderId}":                    {Request: "FolderRename", Response: "Folder"},
 	"DELETE /v1/inboxes/{id}/folders/{folderId}":                   {},
-	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qLabelID, qFrom, qTo, qLimit}},
+	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qLabelID, qFrom, qTo, qUnread, qHasAtt, qSpam, qInclSpam, p("trashed", "boolean", false, "Only messages in Trash."), qLimit}},
 	"GET /v1/inboxes/{id}/messages/{messageId}":                    {Response: "Message"},
 	"GET /v1/inboxes/{id}/messages/{messageId}/content":            {},
 	"GET /v1/inboxes/{id}/messages/{messageId}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
-	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qLimit}},
+	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qBefore, qLimit}},
 	"GET /v1/inboxes/{id}/threads/{threadId}":                      {Response: "ThreadDetail"},
-	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qLabel, qLabelID, qLimit}},
+	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qSubject, qUnread, qHasAtt, qLabel, qLabelID, qBefore, qLimit}},
 	"GET /v1/inboxes/{id}/labels":                                  {Response: "LabelList"},
 	"GET /v1/inboxes/{id}/label-catalog":                           {Response: "MailboxLabelCatalog"},
 	"POST /v1/inboxes/{id}/label-catalog":                          {Request: "MailboxLabelCreate", Response: "MailboxLabel"},
@@ -107,7 +107,7 @@ var routeIOByKey = map[string]routeIO{
 
 	// Messages.
 	"GET /v1/messages": {Response: "MessageEnvelope", Query: []Param{
-		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qLabelID, qSpam, qInclSpam, qBefore, qLimit, qAddress, qFolder,
+		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qLabelID, qSpam, qInclSpam, p("trashed", "boolean", false, "Only messages in Trash."), qBefore, qLimit, qAddress, qFolder,
 	}},
 	"GET /v1/messages/wait": {Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
@@ -139,7 +139,7 @@ var routeIOByKey = map[string]routeIO{
 
 	// Search.
 	"GET /v1/search": {Response: "MessageEnvelope", Query: []Param{
-		qQ, qInbox, qLabel, qFrom, qTo, qSubject, qUnread, qHasAtt, qBefore, qLimit, qFolder,
+		qQ, qInbox, qLabel, qLabelID, qFrom, qTo, qSubject, qUnread, qHasAtt, qBefore, qLimit, qFolder,
 	}},
 
 	// Labels.

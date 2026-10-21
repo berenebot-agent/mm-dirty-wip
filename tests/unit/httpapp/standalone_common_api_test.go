@@ -373,6 +373,9 @@ func (f *fakeIMAP) Search(_ context.Context, folder string, q imap.SearchQuery) 
 		if q.Subject != "" && !strings.Contains(strings.ToLower(m.subject), strings.ToLower(q.Subject)) {
 			continue
 		}
+		if q.From != "" && !strings.Contains(strings.ToLower(m.from.Address), strings.ToLower(q.From)) {
+			continue
+		}
 		if q.BeforeUID > 0 && m.uid >= q.BeforeUID {
 			continue
 		}

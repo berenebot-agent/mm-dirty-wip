@@ -76,7 +76,7 @@ curl -sS -H "Authorization: Bearer $KEY" \
   -o quote.pdf "$BASE/v1/attachments/$ATT"
 
 # ---------------------------------------------------------------------------
-# 4. Full-text search (SQLite FTS5)
+# 4. Search (local FTS5 or connected provider search; advanced syntax differs)
 # ---------------------------------------------------------------------------
 
 curl -sS -H "Authorization: Bearer $KEY" \
@@ -143,7 +143,8 @@ curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/j
 curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"read":true}' "$BASE/v1/messages/$MSG" | jq .
 
-# Replace the label set (`[]` clears every label).
+# Legacy additive-name replacement (`[]` clears tags, not folder membership).
+# Prefer the provider-aware catalogue and atomic add/remove operation below.
 curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"labels":["Invoices","Unpaid"]}' "$BASE/v1/messages/$MSG" | jq .
 
@@ -284,7 +285,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
 # 15. Common mailbox surface — folders and messages (domain or standalone)
 # ---------------------------------------------------------------------------
 # These endpoints dispatch on the inbox kind, so the same calls read a managed
-# domain inbox (local store) and a standalone inbox (live IMAP). Every listing
+# domain inbox (local store) and a connected inbox (IMAP/Gmail/Outlook/One). Every listing
 # returns the shared envelope {items, next_cursor, completeness, errors}.
 # ===========================================================================
 
@@ -309,7 +310,10 @@ curl -sS -H "Authorization: Bearer $KEY" \
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/messages/$MSG/content" -o message.eml
 
-# Download one MIME attachment (a numeric part path, e.g. 1.2 for a nested part).
+# Download a connected MIME attachment (dotted part path, e.g. 1.2).
+# Local downloads instead use a flat numeric attachment index, or the attachment
+# ID at /v1/attachments/{id}. Connected attachment metadata lists are empty;
+# discover MIME part paths from the raw content, not by guessing.
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/messages/$MSG/attachments/1.2?filename=report.pdf" -o report.pdf
 
@@ -318,13 +322,15 @@ curl -sS -H "Authorization: Bearer $KEY" \
 # ---------------------------------------------------------------------------
 # The non-secret remote description is readable by anyone who can read the
 # inbox; the password fields are only ever reported present/absent, never
-# returned. Configure/test/refresh require Owner.
+# returned. Configure/test require Owner; refresh requires Assistant or Owner.
 # ===========================================================================
 
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/remote" | jq '{host, port, security, configured, imap_password_set, missing_roles}'
 
-# Save the connector. A blank secret keeps the stored one. security defaults to
+# Save the connector. A blank secret keeps the stored one only for an unchanged
+# host, effective port, username and security; changed endpoints need passwords.
+# SMTP never inherits the stored IMAP password. security defaults to
 # tls; starttls and plain are explicit choices (plain may be refused by policy).
 curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"host":"imap.example.com","port":993,"username":"agent@example.com","security":"tls","namespace":"INBOX","imap_password":"app-password"}' \
@@ -367,10 +373,24 @@ curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/js
   -d '{"sent_copy_enabled":true,"sent_copy_folder":""}' \
   "$BASE/v1/inboxes/$INBOX/remote" | jq '{sent_copy_enabled, sent_copy_folder}'
 
-# Permanent remote purge (Owner): the message must already be in the mapped
-# Trash-role folder. Trash first, then purge.
-curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG"
-curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG/purge"
+# Permanent purge (Assistant/Owner): wait for Trash before submitting purge.
+# Google/One permanent deletion is unsupported. Without wait=true, mutations
+# return 202 with an action and Location; poll it rather than assuming completion.
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG?wait=true"
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG/purge?wait=true"
+
+# The same pagination convention works for inbox messages, threads and search.
+# CURSOR is the previous response's next_cursor; retain the same filters.
+curl -sS -G -H "Authorization: Bearer $KEY" \
+  --data-urlencode 'q=invoice' --data-urlencode "before=$CURSOR" \
+  --data-urlencode 'limit=50' "$BASE/v1/inboxes/$INBOX/search"
+
+# Labels: inspect capabilities even if items is empty. An exclusive folder-backed
+# label is a move destination, not an additive tag. Use returned IDs verbatim.
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/inboxes/$INBOX/label-catalog"
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"label_id":"tag:Invoices","operation":"add"}' \
+  "$BASE/v1/inboxes/$INBOX/messages/$MSG/labels?wait=true"
 
 # ===========================================================================
 # 18. Assistant authoring: mode and RemoteDraft handoff history

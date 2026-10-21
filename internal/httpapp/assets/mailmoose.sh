@@ -278,7 +278,7 @@ commands:
   search           GET  /v1/search?q=               full-text search
   threads          GET  /v1/threads                 list threads
   thread           GET  /v1/threads/{id}            thread detail (+ --messages)
-  labels           GET  /v1/labels                  distinct labels in use
+   labels           GET  /v1/inboxes/{id}/label-catalog  capabilities (without --inbox: legacy names)
   folders          GET  /v1/inboxes/{id}/folders    list an inbox's folders (common)
   folder-add       POST /v1/inboxes/{id}/folders    create a folder (--inbox, PATH [NAME])
   folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
@@ -713,6 +713,7 @@ cmd_list() {
 	reject_extra
 	QUERY=""
 	if [ -n "$INBOX" ]; then addq inbox "$INBOX"; fi
+	if [ -n "$FOLDER" ]; then addq folder "$FOLDER"; fi
 	add_multi label ${LABEL_PARTS[@]+"${LABEL_PARTS[@]}"}
 	if [ -n "$FROM_Q" ]; then addq from "$FROM_Q"; fi
 	if [ "${#TO_PARTS[@]}" -gt 0 ]; then addq to "${TO_PARTS[0]}"; fi
@@ -738,9 +739,6 @@ cmd_search() {
 	fi
 	if [ -z "$query" ]; then
 		query="$Q"
-	fi
-	if [ -z "$query" ]; then
-		die_usage "search: missing QUERY (positional or --q)"
 	fi
 	reject_extra
 	QUERY=""
@@ -783,7 +781,11 @@ cmd_thread() {
 
 cmd_labels() {
 	reject_extra
-	api GET "/v1/labels" "" "" "$TABLE_LABELS"
+	if [ -n "$INBOX" ]; then
+		api GET "/v1/inboxes/$INBOX/label-catalog" "" "" "$TABLE_LABELS"
+	else
+		api GET "/v1/labels" "" "" "$TABLE_LABELS"
+	fi
 }
 
 # cmd_folders lists an inbox's folders (common to domain and standalone inboxes).

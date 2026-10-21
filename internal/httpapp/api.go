@@ -675,7 +675,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
+	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), Direction: r.URL.Query().Get("direction"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
 	if trashed != nil && *trashed {
 		f.Trashed = true
 		f.IncludeSpam = true
@@ -726,10 +726,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	completeness := model.CompletenessComplete
-	if len(failures) > 0 {
-		completeness = model.CompletenessPartial
-	}
+	completeness := s.listingCompleteness(r.Context(), p, f.InboxID, failures)
 	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, completeness, failures))
 }
 
@@ -812,19 +809,9 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			// A local-only filter maps to the matching remote role folder so it is
 			// honored rather than ignored: trashed -> Trash, spam -> Spam,
 			// direction=outbound -> Sent.
-			scopeFolder := folder
-			if f.Trashed {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleTrash); ok {
-					scopeFolder = rf.Path
-				}
-			} else if f.SpamOnly {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSpam); ok {
-					scopeFolder = rf.Path
-				}
-			} else if f.Direction == "outbound" {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSent); ok {
-					scopeFolder = rf.Path
-				}
+			scopeFolder, present := s.remoteFilterFolder(ctx, p.AccountID, mb.inbox.ID, folder, f)
+			if !present {
+				return []model.Message{}, "", nil, nil
 			}
 			// Apply the remaining common filters in-memory: the remote list
 			// cannot express from/to/unread/has_attachment/label, so they are
@@ -845,7 +832,7 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			more := false
 			exhausted := false
 			for page := 0; page < remoteFilterScanMaxPages; page++ {
-				rawLimit := limit + 1
+				rawLimit := pageLookahead(limit)
 				if rawLimit < remoteFilterScanPage {
 					rawLimit = remoteFilterScanPage
 				}
@@ -1045,7 +1032,12 @@ func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 	// A remote message's parts are not cached (only its header is), so the
 	// attachment list is empty and the parts are downloaded structurally from
 	// /v1/messages/{id}/attachments/{part}.
-	if _, _, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
+	_, _, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
+	if rerr != nil {
+		mapMailboxError(w, rerr)
+		return
+	}
+	if remote {
 		writeJSON(w, 200, []model.Attachment{})
 		return
 	}
@@ -1097,7 +1089,30 @@ func (s *Server) apiMessageAttachmentPart(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid part")
 		return
 	}
-	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
+	if rerr != nil {
+		mapMailboxError(w, rerr)
+		return
+	}
+	if !remote {
+		atts, err := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		part, err := strconv.Atoi(r.PathValue("part"))
+		if err == nil {
+			for _, a := range atts {
+				if a.PartIndex == part {
+					s.streamLocalAttachment(w, r, m, a)
+					return
+				}
+			}
+		}
+		writeError(w, 404, "attachment not found")
+		return
+	}
+	if remote {
 		part := parsePartPath(r.PathValue("part"))
 		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, id, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
 		if ferr != nil {
@@ -1167,35 +1182,43 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 			mapMailboxError(w, err)
 			return
 		}
-		writeJSON(w, 200, newEnvelope(items, cursor, model.CompletenessComplete, failures))
+		writeJSON(w, 200, newEnvelope(items, cursor, s.listingCompleteness(r.Context(), p, "", failures), failures))
 		return
 	}
-	// Scoped to one inbox: a standalone inbox reads its remote thread index.
+	// Both URL forms use the same single-inbox keyset and projection.
 	mb, err := s.resolveMailbox(r.Context(), p, inbox)
 	if err != nil {
 		mapMailboxError(w, err)
 		return
 	}
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	items := []model.Thread{}
+	completeness := model.CompletenessComplete
 	if mb.routed {
 		s.demandDetection(r.Context(), []mailboxBackend{mb})
-		threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, "")
+		threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), pageLookahead(limit), before)
 		if rerr != nil {
 			mapMailboxError(w, rerr)
 			return
 		}
-		items := make([]model.Thread, 0, len(threads))
 		for _, t := range threads {
 			items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
 		}
-		writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
-		return
+		completeness = s.remoteIndexCompleteness(r.Context(), p.AccountID, inbox)
+	} else {
+		var lerr error
+		items, lerr = s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, inbox, pageLookahead(limit), before, strings.TrimSpace(r.URL.Query().Get("folder")))
+		if lerr != nil {
+			mapStoreError(w, lerr)
+			return
+		}
 	}
-	items, lerr := s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, inbox, limit, "", strings.TrimSpace(r.URL.Query().Get("folder")))
-	if lerr != nil {
-		mapStoreError(w, lerr)
-		return
+	cursor := ""
+	if len(items) > limit || (limit == limits.PageSizeMaxList && len(items) == limit) {
+		items = items[:limit]
+		cursor = items[len(items)-1].ID
 	}
-	writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
+	writeJSON(w, 200, newEnvelope(items, cursor, completeness, nil))
 }
 func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -1273,74 +1296,11 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid cursor")
 		return
 	}
-	// Scoped to a domain inbox: local FTS5 only.
-	if inbox != "" {
-		mb, merr := s.resolveMailbox(r.Context(), p, inbox)
-		if merr != nil {
-			mapMailboxError(w, merr)
-			return
-		}
-		if !mb.routed {
-			f := store.MessageFilter{
-				InboxID:       inbox,
-				From:          from,
-				To:            to,
-				Unread:        unread,
-				HasAttachment: hasAttachment,
-				Labels:        labels.Names,
-				Before:        cur.sourceCursor("local"),
-				Limit:         limit + 1,
-			}
-			if folder != "" {
-				f.FolderScoped = true
-				f.MailboxID = folder
-			}
-			if labels.Scope != "" {
-				f.FolderScoped = true
-				f.MailboxID = labels.Scope
-			}
-			items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, f)
-			if lerr != nil {
-				mapStoreError(w, lerr)
-				return
-			}
-			cursor := ""
-			if limit > 0 && len(items) > limit {
-				items = items[:limit]
-				if len(items) > 0 {
-					cursor = items[len(items)-1].ID
-				}
-			}
-			writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessComplete, nil))
-			return
-		}
-		s.demandDetection(r.Context(), []mailboxBackend{mb})
-		scope := folder
-		if labels.Scope != "" {
-			scope = labels.Scope
-		}
-		res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, app.RemoteSearchQuery{
-			FolderPath: scope, From: from, To: to, Subject: subject, Text: q, Unread: unread, Limit: limit,
-		})
-		if rerr != nil {
-			mapMailboxError(w, rerr)
-			return
-		}
-		var items []model.Message
-		for _, v := range res.Items {
-			if hasAttachment != nil && v.HasAttach != *hasAttachment {
-				continue
-			}
-			items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-		}
-		if len(labels.Names) > 0 {
-			items = filterByLabelNames(items, labels.Names)
-		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", res.Completeness, nil))
+	if r.URL.Query().Has("cursor") {
+		writeError(w, 400, "use before with the returned next_cursor, not cursor")
 		return
 	}
-	// Account-wide merged search.
-	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, q, folder, from, to, subject, labels, unread, hasAttachment, cur, limit)
+	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, inbox, q, folder, from, to, subject, labels, unread, hasAttachment, cur, limit)
 	if err != nil {
 		mapMailboxError(w, err)
 		return

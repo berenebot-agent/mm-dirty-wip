@@ -746,6 +746,7 @@ def cmd_inboxes(client, args):
 def cmd_list(client, args):
     params = {
         "inbox": client.inbox,
+        "folder": args.folder,
         "label": split_values(args.label),
         "from": args.from_,
         "to": args.to,
@@ -801,7 +802,8 @@ def cmd_thread(client, args):
 
 
 def cmd_labels(client, args):
-    response = client.request("GET", "/v1/labels")
+    path = "/v1/inboxes/%s/label-catalog" % client.inbox if client.inbox else "/v1/labels"
+    response = client.request("GET", path)
     emit(response.data, args.table, label_columns())
     return EXIT_OK
 
@@ -1302,7 +1304,7 @@ def build_parser():
         "--label",
         action="append",
         metavar="LABEL",
-        help="only messages carrying this label; repeatable or comma-separated "
+        help="label name or catalogue ID; repeatable or comma-separated "
         "(messages must carry all listed labels)",
     )
     p.add_argument("--from", dest="from_", metavar="ADDR", help="filter by sender address")
@@ -1311,7 +1313,8 @@ def build_parser():
     p.add_argument(
         "--has-attachment", action="store_true", help="only messages with attachments"
     )
-    p.add_argument("--before", metavar="ID", help="keyset pagination: older than this id")
+    p.add_argument("--before", metavar="CURSOR", help="opaque next_cursor from the previous page")
+    p.add_argument("--folder", metavar="FOLDER", help="scope to a folder")
     add_limit(p)
 
     p = command("get", "GET /v1/messages/{id} - one message.", cmd_get)
@@ -1319,16 +1322,16 @@ def build_parser():
 
     p = command(
         "search",
-        "GET /v1/search?q= - FTS5 full-text search.",
+        "GET /v1/search - local or provider search with common pagination.",
         cmd_search,
     )
-    p.add_argument("query", metavar="QUERY", help="search text")
+    p.add_argument("query", metavar="QUERY", nargs="?", help="search text; omit for filter-only search")
     add_inbox(p)
     p.add_argument(
         "--label",
         action="append",
         metavar="LABEL",
-        help="filter by label; repeatable or comma-separated",
+        help="filter by label name or catalogue ID; repeatable or comma-separated",
     )
     p.add_argument("--from", dest="from_", metavar="ADDR", help="filter by sender address")
     p.add_argument("--to", metavar="ADDR", help="filter by recipient address")
@@ -1359,7 +1362,8 @@ def build_parser():
         help="list the thread's messages instead of the thread summary",
     )
 
-    command("labels", "GET /v1/labels - distinct labels currently in use.", cmd_labels)
+    p = command("labels", "With --inbox: provider-aware label catalogue and capabilities; otherwise legacy flat names.", cmd_labels)
+    add_inbox(p)
 
     # Common mailbox surface: folders and the standalone remote connector. These
     # endpoints dispatch on the inbox kind, so they work for a domain inbox and a
@@ -1398,15 +1402,13 @@ def build_parser():
         "GET /v1/inboxes/{id}/remote - show a standalone inbox's remote config (secret-free).",
         cmd_remote,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     p = command(
         "remote-test",
         "POST /v1/inboxes/{id}/remote/test - test a standalone inbox's remote connector.",
         cmd_remote_test,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", required=True, help="standalone inbox id")
+    add_inbox(p)
     p.add_argument("--host", metavar="HOST", help="override the IMAP host to test")
     p.add_argument("--username", metavar="USER", help="override the IMAP username")
     p.add_argument(
@@ -1421,9 +1423,8 @@ def build_parser():
         "POST /v1/inboxes/{id}/remote/roles/{role} - map or create a special folder role.",
         cmd_remote_role,
     )
-    add_table(p)
     p.add_argument("role", metavar="ROLE", help="inbox, sent, drafts, trash or spam")
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     p.add_argument("--folder-id", dest="folder_id", metavar="ID", help="map this existing folder to the role")
     p.add_argument("--create", action="store_true", help="create the conventional folder when none is mapped")
     p.add_argument("--path", metavar="NAME", help="explicit conventional folder name to create")
@@ -1433,8 +1434,7 @@ def build_parser():
         "GET /v1/inboxes/{id}/handoffs - RemoteDraft handoff history.",
         cmd_handoffs,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     add_limit(p)
 
     p = command(
@@ -1442,8 +1442,7 @@ def build_parser():
         "GET/PUT /v1/inboxes/{id}/authoring - assistant authoring settings.",
         cmd_authoring,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="inbox id")
+    add_inbox(p)
     p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft (standalone inboxes only)")
     p.add_argument("--notify", metavar="ADDR", help="notification address override")
 
