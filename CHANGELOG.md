@@ -27,6 +27,11 @@ All notable changes to MailMoose are documented here. This project follows
   The provider list offers Direct MX before the receiver exists, so a domain
   that reads as set up may not be receiving yet.
 
+- The dashboard now shows when a Direct MX domain is not receiving mail. Such a
+  domain is flagged "Not receiving" in the domain list, and the Direct MX setup
+  panel says that saving the receiving provider does not start the bundled SMTP
+  receiver. The flag clears once the receiver is configured.
+
 - Native search pagination is standardized on `before=<next_cursor>` for every
   inbox kind. The former standalone search `cursor` input is rejected with a
   migration hint. Clients must treat returned continuations as opaque strings,
