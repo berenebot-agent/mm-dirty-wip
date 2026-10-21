@@ -35,7 +35,7 @@ func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
 		s.accountMXUIError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/?notice=Remote+MX+receiver+saved", http.StatusSeeOther)
+	s.accountMXRedirect(w, r, "Remote MX receiver saved", "")
 }
 
 // uiAccountMXClear removes the account's Remote MX receiver. It is refused while
@@ -54,18 +54,44 @@ func (s *Server) uiAccountMXClear(w http.ResponseWriter, r *http.Request) {
 		s.accountMXUIError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/?notice=Remote+MX+receiver+cleared", http.StatusSeeOther)
+	s.accountMXRedirect(w, r, "Remote MX receiver cleared", "")
 }
 
-// accountMXUIError maps a Remote MX save/clear failure back to the dashboard with
-// a user-safe query message. The bearer key and private CA are never echoed.
+// accountMXRedirect returns to the domain receiving dialog the account-level
+// editor was opened from, so a save, clear or validation error lands back on the
+// form instead of closing it. The domain is only honoured when it belongs to the
+// caller's account; otherwise the dashboard is the destination.
+func (s *Server) accountMXRedirect(w http.ResponseWriter, r *http.Request, notice, errMsg string) {
+	values := url.Values{}
+	if id := strings.TrimSpace(r.Form.Get("rx_domain")); id != "" {
+		if _, err := s.Service.Store.GetDomain(r.Context(), principal(r).AccountID, id); err == nil {
+			values.Set("domain", id)
+			values.Set("kind", "receiving")
+			values.Set("provider", "remotemx")
+		}
+	}
+	if notice != "" {
+		values.Set("notice", notice)
+	}
+	if errMsg != "" {
+		values.Set("rx_error", errMsg)
+	}
+	dest := "/"
+	if len(values) > 0 {
+		dest += "?" + values.Encode()
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// accountMXUIError maps a Remote MX save/clear failure back to the originating
+// domain dialog (or the dashboard) with a user-safe query message. The bearer key
+// and private CA are never echoed.
 func (s *Server) accountMXUIError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrAccountMXInvalidInput):
-		dest := "/?" + url.Values{"rx_error": {accountMXUserMessage(err)}, "rx_form": {"1"}}.Encode()
-		http.Redirect(w, r, dest, http.StatusSeeOther)
+		s.accountMXRedirect(w, r, "", accountMXUserMessage(err))
 	case errors.Is(err, store.ErrConflict):
-		http.Redirect(w, r, "/?"+url.Values{"rx_error": {"The Remote MX configuration changed in another session. Reload and try again."}, "rx_form": {"1"}}.Encode(), http.StatusSeeOther)
+		s.accountMXRedirect(w, r, "", "The Remote MX configuration changed in another session. Reload and try again.")
 	case errors.Is(err, store.ErrForbidden):
 		http.Error(w, "admin required", 403)
 	default:
