@@ -23,6 +23,13 @@ All notable changes to MailMoose are documented here. This project follows
 - `GET /v1/messages` now honours the `folder` filter for a domain inbox, the
   same way the inbox-scoped route does. The filter was accepted and ignored, so
   the whole inbox came back instead of the folder's messages.
+- Inbound mail refused because the account or the inbox storage quota is full
+  now leaves a trace in the product. The refusal appears in the domain's
+  receiving log (`GET /v1/admin/domains/{id}/receiving/deliveries`) and on the
+  dashboard as a `blocked` row with the reason `storage quota exceeded`, so an
+  operator can see mail being turned away by a full mailbox instead of finding
+  it only in the container log. The refusal itself is unchanged: the sender
+  still retries, and the mail is still delivered once there is room.
 
 ### Changed
 

@@ -1154,9 +1154,11 @@ attempt id). History is scoped by domain, not by the current config, so removing
 or replacing a provider does not hide past attempts.
 
 `GET .../receiving/deliveries` returns the receiving side of the same domain
-log: delivered inbound mail (`kind` `received`), inbound mail rejected by an
-inbox's allowed-senders rule (`kind` `blocked`), and consumed approval control
-mail (`kind` `approval`), newest first (`limit`, default `100`, max `200`;
+log: delivered inbound mail (`kind` `received`), inbound mail that was not
+stored (`kind` `blocked`) — rejected by an inbox's allowed-senders rule, or
+refused because the account or the inbox storage quota is full (reason
+`storage quota exceeded`) — and consumed approval control mail (`kind`
+`approval`), newest first (`limit`, default `100`, max `200`;
 `before` is a timestamp keyset cursor on `created_at`). Each row carries the
 kind, timestamp, inbox, provider, `source`, from/to, subject and size. Blocked
 rows add the reason; approval rows set `subject` to the reviewed draft subject

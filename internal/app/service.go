@@ -584,6 +584,9 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, EnvelopeFrom: msg.EnvelopeFrom, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
 	if err != nil {
 		_ = os.Remove(final)
+		if errors.Is(err, store.ErrQuota) {
+			s.recordQuotaRefusal(ctx, provider, msg, inbox, parsed)
+		}
 		return model.Message{}, false, err
 	}
 	if dup {
@@ -593,6 +596,39 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", msg.Source)
 	s.Hub.Publish(ev)
 	return m, false, nil
+}
+
+// quotaRefusalReason is the reason recorded for inbound mail refused because
+// the account or the inbox storage quota is full.
+const quotaRefusalReason = "storage quota exceeded"
+
+// recordQuotaRefusal records a durable, metadata-only trace of inbound mail
+// refused because the account or the inbox storage quota is full. The refusal
+// itself still fails the delivery, so the sender retries and the mail lands
+// once there is room; this only makes the refusal visible in the receiving log
+// instead of leaving it in the container log alone.
+//
+// It deliberately writes no MX receipt: a receipt is the deduplication key, and
+// one for a refused message would make the sender's retry look like a
+// duplicate delivery, so the mail would be acknowledged and never stored.
+func (s *Service) recordQuotaRefusal(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed) {
+	received := parsed.Date
+	if received.IsZero() {
+		received = time.Now().UTC()
+	}
+	bm, _, err := s.Store.CommitBlockedInbound(ctx, store.BlockedRecord{
+		AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
+		Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
+		From: model.Address{Name: parsed.From.Name, Address: parsed.From.Address}, To: parsed.To,
+		Subject: parsed.Subject, Reason: quotaRefusalReason, SizeBytes: msg.Size, ReceivedAt: received,
+	})
+	if err != nil {
+		s.Log.Error("inbound refusal not recorded", "provider", msg.Source, "reason", quotaRefusalReason, "error", err)
+		return
+	}
+	// Logged on every attempt, like the blocked path: a sender that keeps
+	// retrying must not look silent.
+	s.Log.Warn("inbound refused", "message_id", bm.ID, "from", bm.From.Address, "to", bm.To, "provider", msg.Source, "reason", quotaRefusalReason)
 }
 
 // copyFile copies src to dst with 0600 permissions, used to give each
