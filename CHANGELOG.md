@@ -12,6 +12,10 @@ All notable changes to MailMoose are documented here. This project follows
   separate receiver has to do: the session endpoint speaks HTTP/2 only, the
   request body must be streamed rather than buffered, and a cleartext receiver
   admits sessions only from a trusted proxy peer.
+- The guide no longer tells an operator to pick a Remote receiver from an
+  installation setting that the web interface does not offer: an
+  installation-wide remote receiver is configured with `PUT /v1/admin/mx`, and
+  the account's own receiver is configured in the Remote MX panel.
 
 ## [0.1.0-beta.2] - 2026-10-20
 

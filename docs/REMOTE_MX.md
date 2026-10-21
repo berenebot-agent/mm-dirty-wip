@@ -10,7 +10,7 @@ For the receiver included with MailMoose, see [Direct MX](EMAIL_PROVIDERS.md#inb
 | --- | --- |
 | **Dial MX** | One public receiver you run for multiple independent domains or installations |
 | **Remote MX** | A private receiver dedicated to one MailMoose account |
-| **Direct MX with remote receiver** | One receiver for your whole MailMoose installation, managed by the system administrator |
+| **Direct MX with remote receiver** | One receiver for your whole MailMoose installation, managed by the system administrator (API only) |
 
 All three need an SMTP hostname reachable on **port 25**. Your MailMoose core opens a connection **outbound** to the receiver; it does not need an incoming SMTP port. The receiver passes mail to the core, which stores it in `/data`.
 
@@ -56,7 +56,9 @@ In MailMoose, configure the receiver's session URL and key under the account's *
 
 ## Direct MX with a separate receiver
 
-For an installation-wide receiver, configure the same `single` mode and key above. As system administrator, select **Remote** in the installation's **Direct MX** settings, then select **Direct MX** on each receiving domain.
+For an installation-wide receiver, configure the same `single` mode and key above, then set the installation receiver to remote with the API: `PUT /v1/admin/mx` with `{"mode":"remote","url":"https://mx.example.com","bearer_key":"<the key above>"}`, sent from a logged-in system-administrator session (a bearer API key cannot configure it). Select **Direct MX** on each receiving domain.
+
+The web interface configures the **Included** receiver only. A receiver that serves a single account is configured in that account's **Remote MX** panel instead, as described above.
 
 ## Reverse proxies in front of the receiver
 
