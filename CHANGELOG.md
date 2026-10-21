@@ -35,6 +35,9 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- Direct MX's DNS instruction now points the client domain at the hostname in
+  MailMoose's configured receiving URL (or public URL), not the separately
+  configurable SMTP greeting hostname.
 - Remote MX setup now saves the account connection, domain selection and spam
   policy in one submission. Validation errors reopen Receiving with non-secret
   inputs retained; a blank bearer key retains the saved credential. Unchanged
