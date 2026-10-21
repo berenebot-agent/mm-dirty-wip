@@ -6206,13 +6206,13 @@ function generateBearerSecret() {
     }
     var value = sel.value;
     dlg.classList.toggle('domain-dialog--wide', value === 'mx' || value === 'remotemx');
-    var mxPanel = dlg.querySelector('[data-mx-panel]');
-    if (mxPanel) {
-      mxPanel.hidden = value !== 'mx';
-      mxPanel.querySelectorAll('input,select,textarea').forEach(function (input) {
+    var mxPanels = dlg.querySelectorAll('[data-mx-panel]');
+    mxPanels.forEach(function (panel) {
+      panel.hidden = value !== 'mx';
+      panel.querySelectorAll('input,select,textarea').forEach(function (input) {
         input.disabled = value !== 'mx';
       });
-    }
+    });
     // The Remote MX panel carries its own account-level form (a separate
     // endpoint), so it is only shown/hidden with the provider choice; its inputs
     // stay enabled so an account admin can configure the receiver from here.

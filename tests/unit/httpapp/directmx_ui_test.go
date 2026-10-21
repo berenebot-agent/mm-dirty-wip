@@ -40,8 +40,8 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	}
 	// The status panel is present and reflects the configured receiver. Without a
 	// live runtime the state is not "active", so the honest warning must show.
-	if !strings.Contains(body, "Shared receiver") || !strings.Contains(body, "Point this domain's MX record at <code>mx.test</code>") {
-		t.Fatalf("admin receiving dialog missing Direct MX setup and shared-settings notice:\n%s", body)
+	if !strings.Contains(body, "Shared receiver") {
+		t.Fatalf("admin receiving dialog missing the Direct MX shared-settings notice:\n%s", body)
 	}
 	if strings.Contains(uiGet(t, h, cookie, "/admin").Body.String(), "id=\"mx-settings\"") {
 		t.Fatal("Direct MX settings must not also appear on the Admin page")
@@ -56,7 +56,7 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	}
 	// The panel names the MX target from the configured hostname even with no
 	// live runtime, rather than showing nothing.
-	if !strings.Contains(body, `Point this domain's MX record at <code>mx.test</code>`) {
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>mx.test</code>`) {
 		t.Fatalf("Direct MX panel must name the configured MX target:\n%s", body)
 	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
@@ -89,7 +89,7 @@ func TestDirectMXPanelFallsBackToReceiverURL(t *testing.T) {
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx")
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
-	if !strings.Contains(body, `Point this domain's MX record at <code>example.test</code>`) {
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
 		t.Fatalf("Direct MX panel must fall back to the public receiver URL host:\n%s", body)
 	}
 }

@@ -2116,7 +2116,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainReceivingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{if .SelectLabel}}{{.SelectLabel}}{{else}}{{.ProviderLabel}}{{end}}</option>{{end}}</select>
 <p class="muted provider-hint"{{if $sel}} hidden{{end}}>Choose a provider to configure receiving.</p>
 {{if $.MXSetup}}{{$m := $.MXSetup}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>
-{{if $m.TargetHost}}<p class="muted small">Point this domain's MX record at <code>{{$m.TargetHost}}</code>.</p>{{end}}
+{{if $m.TargetHost}}<p class="muted small">Point the MX records for <code>{{$d.Name}}</code> at <code>{{$m.TargetHost}}</code>.</p>{{end}}
 <div class="banner warn"><b>Shared receiver</b> · all Direct MX domains use these receiver settings.</div>
 {{if and (not $m.Configured) (not $.Principal.SystemAdmin)}}<p class="muted small">A system administrator must configure the receiver before this domain can receive mail.</p>{{end}}
 </section>{{end}}
@@ -2129,16 +2129,17 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{if not .HasOverridable}}{{if .KeepSecrets}}<p class="muted small">Saving updates this domain's receiving configuration. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted small">Saving replaces this domain's receiving configuration. Required secrets must be entered.</p>{{end}}{{end}}
 </div>
 {{end}}{{end}}
-{{if $.MXSetup}}{{$m := $.MXSetup}}{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}{{template "mx-editor" .}}{{end}}{{end}}{{end}}
+{{if $.MXSetup}}{{$m := $.MXSetup}}{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>{{template "mx-editor" .}}</section>{{end}}{{end}}{{end}}
 </form>
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
 <p class="muted small">Set up a receiver you run separately. MailMoose connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mailmoose/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
-<p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No per-domain DNS proof or key is needed.</p>
+<p class="muted small">The receiver's SMTP hostname, limits, verification and TLS are configured on the receiver itself, not here. Point the MX records for <code>{{$d.Name}}</code> at that hostname; no per-domain DNS proof or key is needed.</p>
 {{if $.Principal.Admin}}<div class="remote-mx-editor">
 {{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
 <form method="post" action="/ui/account/mx" class="cfg-form" autocomplete="off" style="margin-top:8px">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <input type="hidden" name="rx_revision" value="{{$r.Revision}}">
+<input type="hidden" name="rx_domain" value="{{$d.ID}}">
 <label>Receiver URL</label>
 <input name="rx_url" placeholder="https://mx.example.com" value="{{$r.URL}}">
 <p class="muted small">Use the session URL of your standalone receiver.</p>
@@ -2152,9 +2153,9 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <textarea name="rx_ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{$r.CA}}</textarea>
 <p class="muted small">Only needed when the receiver's TLS certificate is signed by a CA this server does not already trust. This certificate verifies TLS; the bearer key authenticates the connection.</p>
 </details>
-<div class="dialog-actions"><button class="secondary" type="submit">Save receiver</button></div>
+<div class="dialog-actions"><button class="secondary" type="submit">Save remote receiver</button></div>
 </form>
-{{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><button class="secondary danger" type="submit">Remove receiver</button></form>{{end}}
+{{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><input type="hidden" name="rx_domain" value="{{$d.ID}}"><button class="secondary danger" type="submit">Remove remote receiver</button></form>{{end}}
 </div>{{end}}
 </section>{{end}}
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
