@@ -8,6 +8,12 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- The provider guide and the self-hosting guide now say plainly that a Direct MX
+  domain receives no mail until the installation's receiver is configured, and
+  that selecting the provider in the dashboard does not configure the receiver.
+  The provider list offers Direct MX before the receiver exists, so a domain
+  that reads as set up may not be receiving yet.
+
 - Native search pagination is standardized on `before=<next_cursor>` for every
   inbox kind. The former standalone search `cursor` input is rejected with a
   migration hint. Clients must treat returned continuations as opaque strings,
