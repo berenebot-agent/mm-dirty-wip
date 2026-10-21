@@ -20,7 +20,7 @@ assert.match(compose, /Upgrading an existing Included MX installation\? Retain t
 const release = fs.readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8');
 assert.match(release, /gh release view "\$GITHUB_REF_NAME"/);
 assert.match(release, /gh release create "\$GITHUB_REF_NAME"/);
-// A release that cannot be created must not report a successful publish as a
-// failed run, so the step is isolated from the job's conclusion.
-assert.match(release, /name: Create GitHub release if needed[\s\S]*?continue-on-error: true/);
+// A genuine GitHub Release creation failure must fail the workflow,
+// not be hidden by continue-on-error.
+assert.doesNotMatch(release, /name: Create GitHub release if needed[\s\S]*?continue-on-error: true/);
 console.log('Release gates and opt-in SMTP mapping: PASS');
