@@ -581,7 +581,7 @@ func (s *Server) apiInboxThreads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !mb.routed {
-		items, lerr := s.Service.Store.ListThreads(r.Context(), p, mb.inbox.ID, limit)
+		items, lerr := s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, mb.inbox.ID, limit, "", strings.TrimSpace(r.URL.Query().Get("folder")))
 		if lerr != nil {
 			mapStoreError(w, lerr)
 			return
@@ -667,6 +667,10 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 			Labels:  labels.Names,
 			Before:  strings.TrimSpace(r.URL.Query().Get("before")),
 			Limit:   limit,
+		}
+		if folder := strings.TrimSpace(r.URL.Query().Get("folder")); folder != "" && labels.Scope == "" {
+			f.FolderScoped = true
+			f.MailboxID = folder
 		}
 		if labels.Scope != "" {
 			f.FolderScoped = true

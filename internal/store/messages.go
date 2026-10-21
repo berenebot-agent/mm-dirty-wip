@@ -1353,11 +1353,23 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 // (last_message_at, id) ordering tuple, so a merged account-wide listing can
 // resume one source without losing a thread that sorts below a global key.
 func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID string) ([]model.Thread, error) {
+	return s.ListThreadsInFolderBefore(ctx, p, inboxID, limit, beforeID, "")
+}
+
+// ListThreadsInFolderBefore restricts thread counts and activity to messages in
+// folderID when one is supplied.
+func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID, folderID string) ([]model.Thread, error) {
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
-	args := []any{p.AccountID}
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL`
+	var args []any
+	if folderID != "" {
+		q += ` AND m.mailbox_id=?`
+		args = append(args, folderID)
+	}
+	q += ` WHERE t.account_id=?`
+	args = append(args, p.AccountID)
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
 		args = append(args, inboxID)
@@ -1374,11 +1386,17 @@ func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxI
 	q += ` GROUP BY t.id HAVING count(m.id) > 0`
 	if strings.TrimSpace(beforeID) != "" {
 		var last sql.NullString
-		if cerr := s.read.QueryRowContext(ctx, `SELECT MAX(created_at) FROM messages WHERE thread_id=?`, beforeID).Scan(&last); cerr != nil {
+		cursorQuery := `SELECT MAX(created_at) FROM messages WHERE thread_id=?`
+		cursorArgs := []any{beforeID}
+		if folderID != "" {
+			cursorQuery += ` AND mailbox_id=?`
+			cursorArgs = append(cursorArgs, folderID)
+		}
+		if cerr := s.read.QueryRowContext(ctx, cursorQuery, cursorArgs...).Scan(&last); cerr != nil {
 			return nil, cerr
 		}
 		cur := last.String
-		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		q += ` AND (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
 		args = append(args, cur, cur, beforeID)
 	}
 	q += ` ORDER BY MAX(m.created_at) DESC, t.id DESC`

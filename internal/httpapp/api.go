@@ -1190,7 +1190,7 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
 		return
 	}
-	items, lerr := s.Service.Store.ListThreads(r.Context(), p, inbox, limit)
+	items, lerr := s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, inbox, limit, "", strings.TrimSpace(r.URL.Query().Get("folder")))
 	if lerr != nil {
 		mapStoreError(w, lerr)
 		return
@@ -1290,6 +1290,10 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 				Labels:        labels.Names,
 				Before:        cur.sourceCursor("local"),
 				Limit:         limit + 1,
+			}
+			if folder != "" {
+				f.FolderScoped = true
+				f.MailboxID = folder
 			}
 			if labels.Scope != "" {
 				f.FolderScoped = true
