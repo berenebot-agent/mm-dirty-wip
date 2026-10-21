@@ -6205,6 +6205,7 @@ function generateBearerSecret() {
       return;
     }
     var value = sel.value;
+    dlg.classList.toggle('domain-dialog--wide', value === 'mx' || value === 'remotemx');
     var mxPanel = dlg.querySelector('[data-mx-panel]');
     if (mxPanel) {
       mxPanel.hidden = value !== 'mx';
@@ -7686,28 +7687,6 @@ function generateBearerSecret() {
     feedbackDialog.querySelectorAll('[data-close-dialog]').forEach(function (b) {
       b.addEventListener('click', function () { feedbackDialog.close(); });
     });
-  }
-
-  /* The installation MX receiver is added in one of two ways: the receiver
-     bundled with this deployment, or one the operator runs themselves. Only
-     the selected way's fields are shown, and the other block is disabled, so
-     the operator never edits fields the save ignores. Without JavaScript both
-     blocks are submitted and the server keeps the selected one, so the form
-     still works. */
-  var mxModeForm = document.querySelector('[data-mx-mode-form]');
-  if (mxModeForm) {
-    var applyMXMode = function () {
-      var selected = mxModeForm.querySelector('input[name=mode]:checked');
-      mxModeForm.querySelectorAll('[data-mx-mode]').forEach(function (block) {
-        var on = !!selected && block.getAttribute('data-mx-mode') === selected.value;
-        block.hidden = !on;
-        block.querySelectorAll('input,select,textarea').forEach(function (input) {
-          input.disabled = !on;
-        });
-      });
-    };
-    mxModeForm.addEventListener('change', applyMXMode);
-    applyMXMode();
   }
 
   /* The Settings modal is rendered on /account and /admin and auto-opens so

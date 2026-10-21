@@ -103,24 +103,25 @@ type mxReceiverEditorView struct {
 	DomainID            string
 	CSRF                string
 	MXForm              mxFormView
-	MXStatus            app.MXReceiverStatus
 	MXIncludedSupported bool
 }
 
-// mxIncludedFields is the Included receiver's editable surface. It is shared
-// by the per-domain Direct MX editor and the installation-wide receiver form,
-// so the two can never drift. It reads only .MXForm, which both views carry.
-const mxIncludedFields = `<div><label>SMTP greeting hostname (optional)</label><input name="hostname" value="{{.MXForm.Hostname}}" placeholder="mail.example.com">
+const mxReceiverSection = `<div class="mx-editor">
+{{if not .MXIncludedSupported}}<div class="error">The Included receiver is unavailable in this deployment: the container must start as root to launch the isolated receiver child.</div>{{end}}
+{{if .MXForm.Error}}<div class="error">{{.MXForm.Error}}</div>{{end}}
+<input type="hidden" name="revision" value="{{.MXForm.Revision}}">
+<input type="hidden" name="mode" value="included">
+<div><label>SMTP greeting hostname (optional)</label><input name="hostname" value="{{.MXForm.Hostname}}" placeholder="mail.example.com">
 <p class="muted small">Defaults to the external receiving URL hostname, or the public URL hostname. You can change it.</p>
 <details{{if .MXForm.Error}} open{{end}}><summary>Limits</summary>
 <div class="row"><div style="flex:1"><label>Max message bytes</label><input name="max_message_bytes" type="number" min="0" step="1" value="{{.MXForm.MaxMessageBytes}}" placeholder="31457280"></div><div style="flex:1"><label>Max staging bytes</label><input name="max_staging_bytes" type="number" min="0" step="1" value="{{.MXForm.MaxStagingBytes}}" placeholder="268435456"></div></div>
 <div class="row"><div style="flex:1"><label>Max recipients</label><input name="max_recipients" type="number" min="0" step="1" value="{{.MXForm.MaxRecipients}}" placeholder="100"></div><div style="flex:1"><label>Max connections</label><input name="max_connections" type="number" min="0" step="1" value="{{.MXForm.MaxConnections}}" placeholder="256"></div></div>
 <p class="muted small">Leave a limit blank or 0 to use the receiver default (shown as the placeholder). Values apply to the Included receiver.</p>
 </details><details{{if .MXForm.Error}} open{{end}}><summary>Verification</summary>
-<label class="inherit-option"><input type="checkbox" name="verify_spf" value="true"{{if .MXForm.VerifySPF}} checked{{end}}> <span>Verify SPF</span></label>
+<label class="inherit-option"><input type="checkbox" name="verify_spf" value="true"{{if .MXForm.VerifySPF}} checked{{end}}> <span>Check the sender's SPF record</span></label>
 <label class="inherit-option"><input type="checkbox" name="verify_dkim" value="true"{{if .MXForm.VerifyDKIM}} checked{{end}}> <span>Verify DKIM</span></label>
 <label class="inherit-option"><input type="checkbox" name="verify_dmarc" value="true"{{if .MXForm.VerifyDMARC}} checked{{end}}> <span>Verify DMARC</span></label>
-<p class="muted small">Authentication evidence is computed at the included receiver. Verification defaults on; clearing a box saves it off. An unauthenticated message is delivered as Spam, never rejected.</p>
+<p class="muted small">These checks evaluate incoming senders; they do not require publishing an SPF record for this receiving domain. Verification defaults on; clearing a box saves it off. An unauthenticated message is delivered as Spam, never rejected.</p>
 </details><details{{if .MXForm.Error}} open{{end}}><summary>Network &amp; timeouts</summary>
 <label>DNS resolver (optional, host:port)</label><input name="dns_resolver" value="{{.MXForm.DNSResolver}}" placeholder="system resolver">
 <div class="row"><div style="flex:1"><label>DNS timeout (s)</label><input name="dns_timeout_seconds" type="number" min="0" step="1" value="{{.MXForm.DNSTimeoutSeconds}}" placeholder="10"></div><div style="flex:1"><label>Read timeout (s)</label><input name="read_timeout_seconds" type="number" min="0" step="1" value="{{.MXForm.ReadTimeoutSeconds}}" placeholder="60"></div></div>
@@ -131,178 +132,6 @@ const mxIncludedFields = `<div><label>SMTP greeting hostname (optional)</label><
 <label>Certificate (PEM, public)</label><textarea name="smtp_tls_cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----">{{.MXForm.SMTPTLSCert}}</textarea>
 <label>Private key (PEM)</label><textarea name="smtp_tls_key" rows="4" autocomplete="off" placeholder="{{if .MXForm.SMTPTLSKeyConfigured}}Leave blank to keep the stored private key{{else}}-----BEGIN PRIVATE KEY-----{{end}}"></textarea>
 <p class="muted small">The private key is never shown again. A blank field keeps the stored key.</p></details></div>`
-
-// mxReceiverSection is the per-domain Direct MX receiver editor. It edits the
-// installation-wide shared receiver, but only its Included mode: a domain
-// never chooses where the shared receiver lives.
-const mxReceiverSection = `<div class="mx-editor">
-<p class="muted small">Shared receiver · changes apply to all Direct MX domains.</p>
-{{if not .MXIncludedSupported}}<div class="error">The Included receiver is unavailable in this deployment: the container must start as root to launch the isolated receiver child.</div>{{end}}
-{{if .MXForm.Error}}<div class="error">{{.MXForm.Error}}</div>{{end}}
-<input type="hidden" name="revision" value="{{.MXForm.Revision}}">
-<input type="hidden" name="mode" value="included">
-<p class="muted small"><b>Included receiver</b> · runs inside this deployment with automatically generated credentials.</p>
-{{if eq .MXStatus.Mode "remote"}}<p class="muted small">Saving switches the shared receiver from Remote to Included.</p>{{end}}
-{{template "mx-included-fields" .}}
-<p class="muted small">Receiver settings are stored in the database and managed here; they are authoritative and legacy MX environment variables are no longer read at startup.</p>
-</div>`
-
-// mxInstallSection is the installation-wide receiver form on the Admin page.
-// It is where the shared receiver is added: the one bundled with this
-// deployment, or one the operator runs themselves. The choice is not a
-// per-domain setting — every Direct MX domain points at this one receiver —
-// so it lives with the other installation settings.
-//
-// The two field sets are rendered together and the selected mode decides which
-// one is saved, exactly as the API decides it: the server reads only the
-// fields of the submitted mode. The blocks carry data-mx-mode so the client
-// can show the selected one and disable the other.
-const mxInstallSection = `<div class="mx-editor" data-mx-mode-form>
-{{if not .MXIncludedSupported}}<div class="error">The Included receiver is unavailable in this deployment: the container must start as root to launch the isolated receiver child. Choose <b>Remote</b> and run the receiver in its own container or on another host.</div>{{end}}
-{{if .MXForm.Error}}<div class="error">{{.MXForm.Error}}</div>{{end}}
-{{if .MXStatus.Configured}}<p>Current: <span class="pill">{{if eq .MXStatus.Mode "included"}}Included{{else if eq .MXStatus.Mode "remote"}}Remote{{else}}{{.MXStatus.Mode}}{{end}}</span> <span class="pill{{if eq .MXStatus.State "active"}} ok{{else}} amber{{end}}">{{.MXStatus.State}}</span>{{if .MXStatus.SMTPAddr}} <span class="muted small">SMTP listener: <code>{{.MXStatus.SMTPAddr}}</code> · session: <code>{{.MXStatus.SessionAddr}}</code></span>{{end}}{{if .MXStatus.Detail}} <span class="muted small">{{.MXStatus.Detail}}</span>{{end}}</p>
-{{else}}<p class="muted">No receiver configured. Domains set to Direct MX will reject mail until one is configured.</p>{{end}}
-<form method="post" action="/ui/admin/mx" autocomplete="off">
-<input type="hidden" name="_csrf" value="{{.CSRF}}">
-<input type="hidden" name="revision" value="{{.MXForm.Revision}}">
-<fieldset style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:4px 0 10px"><legend class="muted">Receiver</legend>
-<label style="display:flex;align-items:flex-start;gap:8px{{if not .MXIncludedSupported}};opacity:.55{{end}}"><input type="radio" name="mode" value="included"{{if not .MXIncludedSupported}} disabled{{end}}{{if eq .MXForm.Mode "included"}} checked{{end}} style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span><b>Included</b> <span class="muted small">— the receiver runs inside this deployment, with automatically generated credentials. Publish port 25 to reach it.</span></span></label>
-<label style="display:flex;align-items:flex-start;gap:8px"><input type="radio" name="mode" value="remote"{{if eq .MXForm.Mode "remote"}} checked{{end}} style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span><b>Remote</b> <span class="muted small">— the receiver runs separately, in its own container or on another host. You supply its URL and bearer key.</span></span></label>
-</fieldset>
-<div data-mx-mode="included"{{if ne .MXForm.Mode "included"}} hidden{{end}}>
-{{template "mx-included-fields" .}}
-</div>
-<div data-mx-mode="remote"{{if ne .MXForm.Mode "remote"}} hidden{{end}}>
-<label>Receiver URL</label><input name="url" value="{{.MXForm.URL}}" placeholder="https://mx.example.com">
-<p class="muted small">The URL MailMoose connects to outbound. Use the origin of your standalone receiver, running with <code>DIALMX_MODE=single</code>.</p>
-<label>Bearer key{{if .MXForm.KeyConfigured}} <span class="muted small">(leave blank to keep the stored key)</span>{{end}}</label>
-<input name="bearer_key" type="password" autocomplete="new-password" placeholder="{{if .MXForm.KeyConfigured}}unchanged{{else}}the receiver's DIALMX_CORE_KEY{{end}}">
-<p class="muted small">This must match <code>DIALMX_CORE_KEY</code> on the receiver. The saved key is never displayed.</p>
-<label>Private CA certificate bundle (PEM, optional)</label>
-<textarea name="ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{.MXForm.CA}}</textarea>
-<p class="muted small">Only needed when the receiver's TLS certificate is signed by a CA this server does not already trust. This certificate verifies TLS; the bearer key authenticates the connection.</p>
-</div>
-<div class="dialog-actions"><button type="submit">Save receiver</button></div>
-</form>
-{{if .MXStatus.Configured}}<form method="post" action="/ui/admin/mx/clear" data-confirm="Clear the MX receiver? Domains set to Direct MX will stop accepting mail."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="revision" value="{{.MXForm.Revision}}"><button class="secondary danger" type="submit">Clear receiver</button></form>{{end}}
-<p class="muted small">Receiver settings are stored in the database and managed here; they are authoritative and legacy MX environment variables are no longer read at startup.</p>
-</div>`
-
-// ---------------------------------------------------------------------------
-// Installation receiver (Admin page). The shared receiver is added here: the
-// one bundled with this deployment, or one the operator runs themselves. The
-// choice is installation-wide, not per domain: every Direct MX domain points
-// at this one receiver, so only a system administrator may change it.
-// ---------------------------------------------------------------------------
-
-// uiInstallMXSave saves the installation-wide MX receiver from the Admin page.
-// It validates through the same service path the API uses, so the form and the
-// API cannot diverge.
-func (s *Server) uiInstallMXSave(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.SystemAdmin {
-		http.Error(w, "system administrator required", 403)
-		return
-	}
-	rev, _ := strconv.ParseInt(strings.TrimSpace(r.Form.Get("revision")), 10, 64)
-	mode := strings.ToLower(strings.TrimSpace(r.Form.Get("mode")))
-	if mode != app.MXModeIncluded && mode != app.MXModeRemote {
-		http.Error(w, "choose the Included or the Remote receiver", http.StatusBadRequest)
-		return
-	}
-	in := app.MXReceiverInput{Mode: mode, Revision: rev}
-	// The selected mode decides which fields are read, exactly as the API
-	// decides it, so a value left in the other block can never fail the save.
-	switch mode {
-	case app.MXModeIncluded:
-		in = mxIncludedInput(r, in)
-	case app.MXModeRemote:
-		in.URL = strings.TrimSpace(r.Form.Get("url"))
-		in.BearerKey = strings.TrimSpace(r.Form.Get("bearer_key"))
-		in.CA = strings.TrimSpace(r.Form.Get("ca"))
-	}
-	if _, err := s.Service.SaveMXReceiverSettings(r.Context(), p, in); err != nil {
-		s.installMXError(w, r, err, mode)
-		return
-	}
-	http.Redirect(w, r, "/admin?notice=MX+receiver+saved", http.StatusSeeOther)
-}
-
-// uiInstallMXClear removes the configured installation receiver. The revision
-// travels in the form, so the clear is CAS-protected like the save.
-func (s *Server) uiInstallMXClear(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.SystemAdmin {
-		http.Error(w, "system administrator required", 403)
-		return
-	}
-	rev, _ := strconv.ParseInt(strings.TrimSpace(r.Form.Get("revision")), 10, 64)
-	if err := s.Service.ClearMXReceiverSettings(r.Context(), p, rev); err != nil {
-		switch {
-		case errors.Is(err, store.ErrConflict):
-			http.Redirect(w, r, "/admin?"+url.Values{"mx_error": {"The MX receiver configuration changed in another session. Reload and try again."}}.Encode(), http.StatusSeeOther)
-		case errors.Is(err, store.ErrForbidden):
-			http.Error(w, "system administrator required", 403)
-		default:
-			s.Log.Error("MX receiver clear failed", "error", err)
-			http.Error(w, "could not clear the MX receiver", 500)
-		}
-		return
-	}
-	http.Redirect(w, r, "/admin?notice=MX+receiver+cleared", http.StatusSeeOther)
-}
-
-// installMXError maps an installation receiver save failure back to the Admin
-// page. A validation fault is carried as a user-bound flash holding the
-// non-secret submitted values, so the form is repopulated with the operator's
-// input and the chosen mode; the bearer key and the private STARTTLS key are
-// deliberately excluded.
-func (s *Server) installMXError(w http.ResponseWriter, r *http.Request, err error, mode string) {
-	p := principal(r)
-	switch {
-	case errors.Is(err, app.ErrMXInvalidInput):
-		f := mxFormFlash{UserID: p.UserID, Error: mxUserMessage(err), Values: mxInstallSubmittedValues(r, mode)}
-		if mode == app.MXModeIncluded {
-			f.Checked = mxSubmittedChecks(r)
-		}
-		dest := "/admin"
-		if tok := s.putFlash(w, r, f, mxFlashSize(f)); tok != "" {
-			dest += "?" + url.Values{"_flash": {tok}}.Encode()
-		} else {
-			dest += "?" + url.Values{"mx_error": {f.Error}}.Encode()
-		}
-		http.Redirect(w, r, dest, http.StatusSeeOther)
-	case errors.Is(err, store.ErrConflict):
-		http.Redirect(w, r, "/admin?"+url.Values{"mx_error": {"The MX receiver configuration changed in another session. Reload and try again."}}.Encode(), http.StatusSeeOther)
-	case errors.Is(err, store.ErrForbidden):
-		http.Error(w, "system administrator required", 403)
-	default:
-		s.Log.Error("MX receiver save failed", "error", err)
-		http.Error(w, "could not save the MX receiver", 500)
-	}
-}
-
-// mxInstallSubmittedValues collects the non-secret form values of a failed
-// installation save: the chosen mode plus the fields of that mode only, so a
-// failed Remote save cannot blank the Included fields in the re-rendered form.
-// The bearer key and the private STARTTLS key are never collected.
-func mxInstallSubmittedValues(r *http.Request, mode string) map[string]string {
-	values := map[string]string{"mode": mode}
-	if mode == app.MXModeRemote {
-		for _, name := range []string{"url", "ca"} {
-			values[name] = strings.TrimSpace(r.Form.Get(name))
-		}
-		return values
-	}
-	for _, name := range []string{
-		"hostname", "max_message_bytes", "max_staging_bytes", "max_recipients", "max_connections",
-		"dns_resolver", "dns_timeout_seconds", "read_timeout_seconds", "write_timeout_seconds", "data_timeout_seconds",
-		"smtp_tls_cert",
-	} {
-		values[name] = strings.TrimSpace(r.Form.Get(name))
-	}
-	return values
-}
 
 // uiAdminMXSave handles the domain MX form submission. It validates through the
 // same service path the API uses, so the form and the API cannot diverge.

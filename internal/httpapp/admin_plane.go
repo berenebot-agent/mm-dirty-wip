@@ -132,8 +132,7 @@ const adminPlaneBody = settingsShellOpen + `{{if .Notice}}<div class="ok notice"
 <section class="card"><div class="card-head"><h2>Accounts</h2><button type="button" id="add-account">Create invitation</button></div><p class="muted">Each account has its own Admin, domains and mailboxes. Invite a new person to create a separate account.</p>
 {{if .Accounts}}<div class="table-wrap"><table class="dense"><thead><tr><th>Account</th><th>Admin</th><th>Status</th><th>Quota</th><th></th></tr></thead><tbody>{{range .Accounts}}<tr><td>{{.Name}}</td><td>{{if .AdminEmail}}{{.AdminEmail}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .AdminEmail}}<span class="pill">Active</span>{{else if .InviteID}}<span class="pill amber">Invitation pending</span> <span class="muted">· expires {{mailDate .InviteExpiresAt}}</span>{{else}}<span class="muted">No admin</span>{{end}}</td><td>{{if .StorageQuotaBytes}}{{filesize .StorageUsedBytes}} of {{filesize .StorageQuotaBytes}}{{else}}{{filesize .StorageUsedBytes}} of unlimited{{end}}</td><td class="actions">{{if and (not .AdminEmail) .InviteID}}<form method="post" action="/ui/admin/invites/{{.InviteID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer on your account page first"{{end}}>Send</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form>{{end}}<button type="button" class="secondary btn-sm edit-quota" data-id="{{.ID}}" data-name="{{.Name}}" data-quota="{{.StorageQuotaBytes}}" data-used="{{.StorageUsedBytes}}">Edit quota</button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No accounts yet.</p>{{end}}</section>
 <dialog id="account-invite-dialog"><form method="post" action="/ui/admin/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2>Invite a new account</h2><p class="muted">Creates a separate account whose Admin sets their own password from a link. The invitation is sent from your own account's mailer.</p><label>Email</label><input type="email" name="email" required><label>Account name (optional)</label><input name="account_name"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Create invitation</button></div></form></dialog>
-<dialog id="quota-dialog"><form method="post" id="quota-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="quota-title">Edit storage quota</h2><p class="muted">The account's storage limit. Enter 0 to make it unlimited.</p><label>Quota</label><div class="row"><input id="quota-value" name="quota_value" type="number" min="0" step="any" required style="flex:1;margin:4px 0"><select id="quota-unit" name="quota_unit" style="flex:0 0 96px;margin:4px 0"><option value="b">B</option><option value="kb">KB</option><option value="mb" selected>MB</option><option value="gb">GB</option><option value="tb">TB</option></select></div><p class="muted small" id="quota-used"></p><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Save</button></div></form></dialog>
-<section class="card" id="mx-settings"><h2>MX receiver</h2><p class="muted">The installation-wide direct-SMTP receiver. Every domain that selects <b>Direct MX</b> points its MX record at this one receiver, and it serves every account on this instance.</p>{{template "mx-install-editor" .}}</section>` + settingsShellClose
+<dialog id="quota-dialog"><form method="post" id="quota-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="quota-title">Edit storage quota</h2><p class="muted">The account's storage limit. Enter 0 to make it unlimited.</p><label>Quota</label><div class="row"><input id="quota-value" name="quota_value" type="number" min="0" step="any" required style="flex:1;margin:4px 0"><select id="quota-unit" name="quota_unit" style="flex:0 0 96px;margin:4px 0"><option value="b">B</option><option value="kb">KB</option><option value="mb" selected>MB</option><option value="gb">GB</option><option value="tb">TB</option></select></div><p class="muted small" id="quota-used"></p><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Save</button></div></form></dialog>` + settingsShellClose
 
 func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -148,37 +147,7 @@ func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	}
 	mailer, _ := s.Service.Store.AccountMailerInboxID(ctx, p.AccountID)
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
-	// The installation MX receiver: the redacted settings, overlaid with a
-	// failed submission carried as a user-bound flash holding only the
-	// non-secret values, so the form is repopulated and the private key is
-	// never re-rendered. The flash's empty domain scope is the installation
-	// scope, so it can never be consumed by a domain editor.
-	mxForm := mxFormView{}
-	if settings, err := s.Service.GetMXReceiverSettings(ctx); err == nil {
-		mxForm = newMXFormView(settings)
-	} else {
-		s.Log.Error("cannot read MX receiver settings", "error", err)
-	}
-	mxStatus, err := s.Service.MXReceiverStatus(ctx)
-	if err != nil {
-		s.Log.Error("cannot read MX receiver status", "error", err)
-	}
-	// An unconfigured installation still needs a selected mode, so the form
-	// offers the bundled receiver when this deployment can run it and the
-	// remote one when it cannot.
-	if mxForm.Mode == "" {
-		if mxStatus.IncludedSupported {
-			mxForm.Mode = app.MXModeIncluded
-		} else {
-			mxForm.Mode = app.MXModeRemote
-		}
-	}
-	if f, ok := s.takeMXFormFlash(r, r.URL.Query().Get("_flash"), p.UserID, ""); ok {
-		applyMXFlash(&mxForm, f)
-	} else {
-		mxForm.Error = r.URL.Query().Get("mx_error")
-	}
-	s.render(w, r, adminPlaneBody, pageData{Title: "Admin", Tab: "admin", SettingsTab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice"), MXForm: mxForm, MXStatus: mxStatus, MXIncludedSupported: mxStatus.IncludedSupported})
+	s.render(w, r, adminPlaneBody, pageData{Title: "Admin", Tab: "admin", SettingsTab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice")})
 }
 
 // createInvite handles the shared invite creation. accountID is the target

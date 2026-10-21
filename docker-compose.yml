@@ -2,13 +2,11 @@
 # toolchain). For a pull-and-run quickstart using the prebuilt
 # ghcr.io/dellarb/mailmoose image, see the README.
 #
-# Direct SMTP (MX) ingress is configured in the UI, not with environment
-# variables: sign in as the system administrator and set Admin -> MX receiver to
-# Included (this deployment runs the receiver on :2525) or Remote (a separate
-# receiver). Host port 25 is commented out by default: uncomment the :25 mapping
-# only when this deployment is an Included MX receiver reached from the public
-# internet. Leave it commented if you receive mail only through a webhook
-# provider (Mailgun, Cloudflare Email Routing, Resend).
+# Direct MX is configured from each domain's Receiving settings. It delivers
+# directly to the receiver bundled with this deployment on :2525. Host port 25
+# is commented out by default: uncomment the mapping only when Direct MX must
+# receive public SMTP. Leave it commented if you use Remote MX or webhook
+# providers (Mailgun, Cloudflare Email Routing, Resend).
 #
 # Project name pinned explicitly. Without this, Compose derives it from the
 # directory basename, so a checkout whose parent directory is also named
@@ -39,8 +37,8 @@ services:
       # mapping cannot depend on the container's address, which changes on
       # every recreate.
       - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
-      # :25 = direct SMTP when using this as an Included MX receiver (the edge
-      # listens on :2525 inside the container). Uncomment for Included MX.
+      # :25 = direct SMTP when using Direct MX (the edge listens on :2525
+      # inside the container). Uncomment to receive public SMTP directly.
       # Upgrading an existing Included MX installation? Retain this mapping;
       # removing it stops incoming SMTP mail even if Included remains enabled.
       # - "0.0.0.0:25:2525"

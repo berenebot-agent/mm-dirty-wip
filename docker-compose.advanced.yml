@@ -10,8 +10,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    # MX receiver is configured in Admin -> MX receiver (Included or Remote),
-    # not with environment variables.
+    # Direct MX is configured in each domain's Receiving settings and uses the
+    # bundled receiver; Remote MX is configured separately per account.
     volumes:
       - ./data:/data
     ports:
@@ -20,7 +20,7 @@ services:
       # Keep commented when DEDICATED_RECEIVER_ENABLE=false to free the host port.
       # - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
       # :25 = direct SMTP when using this as an Included MX receiver. Uncomment
-      # to publish it (and set Admin -> MX receiver to Included).
+      # to publish it (and select Direct MX in the domain's Receiving settings).
       # - "0.0.0.0:25:2525"
     # The image starts as root so the in-process privilege drop can chown a
     # fresh root-owned ./data and shed to the runtime user before the database
