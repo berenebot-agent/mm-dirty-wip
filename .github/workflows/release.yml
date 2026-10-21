@@ -133,8 +133,11 @@ jobs:
 
       # Idempotent: a re-run of the same tag (or a release created by hand in
       # the GitHub UI) must not fail the whole job. The images are already
-      # published by this point.
+      # published by this point, so a release that cannot be created is
+      # reported in the step log but does not turn a successful publish into a
+      # failed run.
       - name: Create GitHub release if needed
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -143,5 +146,5 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --title "MailMoose $GITHUB_REF_NAME" \
-              --generate-notes --prerelease
+              --generate-notes
           fi
