@@ -2130,16 +2130,13 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 </div>
 {{end}}{{end}}
 {{if $.MXSetup}}{{$m := $.MXSetup}}{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>{{template "mx-editor" .}}</section>{{end}}{{end}}{{end}}
-</form>
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
 <p class="muted small">Set up a receiver you run separately. MailMoose connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mailmoose/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
 <p class="muted small">The receiver's SMTP hostname, limits, verification and TLS are configured on the receiver itself, not here. Point the MX records for <code>{{$d.Name}}</code> at that hostname; no per-domain DNS proof or key is needed.</p>
 {{if $.Principal.Admin}}<div class="remote-mx-editor">
+<p class="muted small">The receiver connection is shared by this account's Remote MX domains. Save updates the connection and this domain's receiving settings together.</p>
 {{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
-<form method="post" action="/ui/account/mx" class="cfg-form" autocomplete="off" style="margin-top:8px">
-<input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <input type="hidden" name="rx_revision" value="{{$r.Revision}}">
-<input type="hidden" name="rx_domain" value="{{$d.ID}}">
 <label>Receiver URL</label>
 <input name="rx_url" placeholder="https://mx.example.com" value="{{$r.URL}}">
 <p class="muted small">Use the session URL of your standalone receiver.</p>
@@ -2153,11 +2150,9 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 <textarea name="rx_ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{$r.CA}}</textarea>
 <p class="muted small">Only needed when the receiver's TLS certificate is signed by a CA this server does not already trust. This certificate verifies TLS; the bearer key authenticates the connection.</p>
 </details>
-<div class="dialog-actions"><button class="secondary" type="submit">Save remote receiver</button></div>
-</form>
-{{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><input type="hidden" name="rx_domain" value="{{$d.ID}}"><button class="secondary danger" type="submit">Remove remote receiver</button></form>{{end}}
 </div>{{end}}
 </section>{{end}}
+</form>
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
 <h3 class="section-head">{{if eq .Service "antler"}}Antler MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
 {{if .ContactEmail}}<p class="muted small">Contact email: <code>{{.ContactEmail}}</code></p>{{end}}
@@ -2614,6 +2609,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 									}
 								}
 							} else if tf.Kind == "receiving" {
+								if tf.Provider == "remotemx" && remoteMXSetup != nil && tf.Values != nil {
+									remoteMXSetup.URL = tf.Values["rx_url"]
+									remoteMXSetup.CA = tf.Values["rx_ca"]
+									remoteMXSetup.AllowPrivate = tf.Values["rx_allow_private"] == "1"
+								}
 								for _, e := range receivingEditors[tf.DomainID] {
 									if e.Provider == tf.Provider {
 										e.Error = tf.Error

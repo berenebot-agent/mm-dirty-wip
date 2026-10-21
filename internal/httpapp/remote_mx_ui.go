@@ -15,10 +15,17 @@ import (
 // validates through the same service path the API uses, so the form and the API
 // cannot diverge. Only an account Admin may change it.
 func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
+	if !s.saveRemoteMXForm(w, r) {
+		return
+	}
+	s.accountMXRedirect(w, r, "Remote MX receiver saved", "")
+}
+
+func (s *Server) saveRemoteMXForm(w http.ResponseWriter, r *http.Request) bool {
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
-		return
+		return false
 	}
 	if s.Service.RemoteMXRuntime != nil {
 		defer s.Service.RemoteMXRuntime.WakeRemoteMX()
@@ -31,11 +38,19 @@ func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
 		AllowPrivate: r.Form.Get("rx_allow_private") == "1" || strings.EqualFold(r.Form.Get("rx_allow_private"), "true"),
 		Revision:     rev,
 	}
+	current, err := s.Service.GetAccountMXReceiver(r.Context(), p.AccountID)
+	if err != nil {
+		s.accountMXUIError(w, r, err)
+		return false
+	}
+	if current.URL != "" && current.Revision == rev && current.URL == strings.TrimRight(strings.TrimSpace(in.URL), "/") && strings.TrimSpace(in.BearerKey) == "" && current.CA == strings.TrimSpace(in.CA) && current.AllowPrivate == in.AllowPrivate {
+		return true
+	}
 	if _, err := s.Service.SaveAccountMXReceiver(r.Context(), p, in); err != nil {
 		s.accountMXUIError(w, r, err)
-		return
+		return false
 	}
-	s.accountMXRedirect(w, r, "Remote MX receiver saved", "")
+	return true
 }
 
 // uiAccountMXClear removes the account's Remote MX receiver. It is refused while
@@ -63,7 +78,11 @@ func (s *Server) uiAccountMXClear(w http.ResponseWriter, r *http.Request) {
 // caller's account; otherwise the dashboard is the destination.
 func (s *Server) accountMXRedirect(w http.ResponseWriter, r *http.Request, notice, errMsg string) {
 	values := url.Values{}
-	if id := strings.TrimSpace(r.Form.Get("rx_domain")); id != "" {
+	id := r.PathValue("id")
+	if id == "" {
+		id = strings.TrimSpace(r.Form.Get("rx_domain"))
+	}
+	if id != "" {
 		if _, err := s.Service.Store.GetDomain(r.Context(), principal(r).AccountID, id); err == nil {
 			values.Set("domain", id)
 			values.Set("kind", "receiving")
@@ -89,8 +108,16 @@ func (s *Server) accountMXRedirect(w http.ResponseWriter, r *http.Request, notic
 func (s *Server) accountMXUIError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrAccountMXInvalidInput):
+		if id := r.PathValue("id"); id != "" {
+			s.domainEditorError(w, r, id, "receiving", "remotemx", accountMXUserMessage(err))
+			return
+		}
 		s.accountMXRedirect(w, r, "", accountMXUserMessage(err))
 	case errors.Is(err, store.ErrConflict):
+		if id := r.PathValue("id"); id != "" {
+			s.domainEditorError(w, r, id, "receiving", "remotemx", "The Remote MX configuration changed in another session. Reload and try again.")
+			return
+		}
 		s.accountMXRedirect(w, r, "", "The Remote MX configuration changed in another session. Reload and try again.")
 	case errors.Is(err, store.ErrForbidden):
 		http.Error(w, "admin required", 403)

@@ -14,23 +14,12 @@ All notable changes to MailMoose are documented here. This project follows
   it can no longer read as settings for a Remote MX receiver. The Remote MX
   panel carries the account receiver's URL and bearer key, and states that the
   receiver's own SMTP hostname, limits and verification are configured on the
-  receiver. Its account-level actions read "Save remote receiver" and "Remove
-  remote receiver", distinct from the domain's own Save and Remove receiving.
+  receiver. Remote MX uses the same single Save and Remove receiving controls
+  as other providers: Save applies the receiver connection and domain settings;
+  Remove receiving removes only this domain's selection, keeping shared settings.
 - A Remote MX domain can now be given a per-domain authentication enforcement
   policy (moderate or hard) like a Direct MX domain, instead of always grading
   the receiver's evidence at moderate. The default is unchanged.
-
-### Fixed
-
-- Saving the Remote MX receiver, or failing its validation, now returns to the
-  domain Receiving dialog it was submitted from. Previously the redirect landed
-  on the dashboard, which closed the dialog and hid the validation error
-  entirely.
-- The domain Receiving dialog no longer offers a Remote MX domain the shared
-  Direct MX receiver's settings.
-- The Direct MX panel now names both sides of the instruction — the domain whose
-  MX records to publish and the receiver hostname to point them at — instead of
-  "point this domain's MX record at" a hostname.
 
 - The provider guide and the self-hosting guide now say plainly that a Direct MX
   domain receives no mail until the installation's receiver is configured, and
@@ -45,6 +34,15 @@ All notable changes to MailMoose are documented here. This project follows
   replacement is introduced; explicit openagent.email compatibility stays separate.
 
 ### Fixed
+
+- Remote MX setup now saves the account connection, domain selection and spam
+  policy in one submission. Validation errors reopen Receiving with non-secret
+  inputs retained; a blank bearer key retains the saved credential. Unchanged
+  connection settings are not rewritten when saving a domain's spam policy.
+- The domain Receiving dialog no longer offers a Remote MX domain the shared
+  Direct MX receiver's settings.
+- The Direct MX panel now names both sides of the instruction — the domain whose
+  MX records to publish and the receiver hostname to point them at.
 
 - Domain and connected inbox listings now share message/thread/search handlers,
   filters and `before=<next_cursor>` pagination. Single-inbox thread/search

@@ -243,6 +243,9 @@ for t in "${SELECTED[@]}"; do
                 node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
+                node tests/receiver-settings-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
                 node tests/copy-controls-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
