@@ -74,6 +74,12 @@ func (s *Server) uiDashboardPreferences(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	for table := range preferences.ShowConnectors {
+		if table != "clients" {
+			writeError(w, http.StatusBadRequest, "invalid connector table")
+			return
+		}
+	}
 	if err := s.Service.Store.SetDashboardPreferences(r.Context(), p, preferences); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
 		return
