@@ -610,8 +610,22 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if provider == "remotemx" {
+		if v, _ := cfg["enforcement"].(string); v != "" && v != "moderate" && v != "hard" {
+			s.domainEditorError(w, r, d.ID, "receiving", provider, "Choose moderate or hard authentication enforcement")
+			return
+		}
+		if !s.saveRemoteMXForm(w, r) {
+			return
+		}
+	}
 	saved, generated, err := s.Service.SaveDomainReceivingConfig(ctx, p.AccountID, d.ID, provider, cfg, false)
 	if err != nil {
+		if provider == "remotemx" {
+			// The shared connection and domain selection have separate CAS writes.
+			s.domainEditorError(w, r, d.ID, "receiving", provider, "The receiver connection is saved, but this domain's receiving settings could not be saved. Reload and try again.")
+			return
+		}
 		s.domainSaveError(w, r, d.ID, "receiving", provider, err)
 		return
 	}
@@ -858,6 +872,11 @@ func submittedEditorValues(kind, provider string, r *http.Request) map[string]st
 		fields = t.ConfigFields()
 	}
 	values := map[string]string{}
+	if kind == "receiving" && provider == "remotemx" {
+		for _, name := range []string{"rx_url", "rx_ca", "rx_allow_private"} {
+			values[name] = r.Form.Get(name)
+		}
+	}
 	for _, f := range fields {
 		if f.Secret || f.Generated {
 			continue
