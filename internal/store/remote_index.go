@@ -1286,6 +1286,73 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 	return out, rows.Err()
 }
 
+// ListRemoteThreadsFiltered aggregates only messages matching catalogue labels.
+// Provider folder paths/IDs are already resolved by the API; no external folder
+// identifiers escape in the public request. Multiple Gmail memberships intersect.
+func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxID string, folderPaths, labelNames []string, limit int, beforeKey string) ([]RemoteThread, error) {
+	google := s.IsGoogle(ctx, accountID, inboxID)
+	microsoft := !google && s.IsMicrosoft(ctx, accountID, inboxID)
+	where := ` FROM inbox_remote_messages m WHERE m.account_id=? AND m.inbox_id=? AND m.thread_key<>''`
+	args := []any{accountID, inboxID}
+	for _, path := range folderPaths {
+		if google {
+			if path == "ARCHIVE" {
+				where += ` AND NOT EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id=? AND g.message_id=m.id AND g.label_id IN ('INBOX','TRASH','SPAM'))`
+				args = append(args, inboxID)
+			} else {
+				where += ` AND EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id=? AND g.message_id=m.id AND g.label_id=?)`
+				args = append(args, inboxID, path)
+			}
+		} else if microsoft {
+			where += ` AND EXISTS (SELECT 1 FROM microsoft_message_ids x WHERE x.inbox_id=? AND x.message_id=m.id AND x.folder_id=?)`
+			args = append(args, inboxID, path)
+		} else {
+			where += ` AND m.folder_path=?`
+			args = append(args, path)
+		}
+	}
+	for _, name := range labelNames {
+		where += ` AND EXISTS (SELECT 1 FROM inbox_remote_labels l WHERE l.account_id=? AND l.inbox_id=? AND l.remote_message_id=m.id AND l.label=?)`
+		args = append(args, accountID, inboxID, name)
+	}
+	query := `SELECT m.thread_key,m.inbox_id,MAX(COALESCE(m.subject,'')),COUNT(*),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(COALESCE(m.received_at,''))`+where+` GROUP BY m.thread_key,m.inbox_id`
+	if strings.TrimSpace(beforeKey) != "" {
+		var latest sql.NullString
+		cursorArgs := append(append([]any{}, args...), beforeKey)
+		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))`+where+` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
+			return nil, err
+		}
+		if !latest.Valid {
+			return []RemoteThread{}, nil
+		}
+		query += ` HAVING (MAX(COALESCE(m.received_at,'')) < ? OR (MAX(COALESCE(m.received_at,'')) = ? AND m.thread_key < ?))`
+		args = append(args, latest.String, latest.String, beforeKey)
+	}
+	query += ` ORDER BY MAX(COALESCE(m.received_at,'')) DESC,m.thread_key DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.read.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RemoteThread{}
+	for rows.Next() {
+		var th RemoteThread
+		var latest string
+		if err := rows.Scan(&th.Key, &th.InboxID, &th.Subject, &th.MessageCount, &th.UnreadCount, &latest); err != nil {
+			return nil, err
+		}
+		if latest != "" {
+			th.LatestAt = &latest
+		}
+		out = append(out, th)
+	}
+	return out, rows.Err()
+}
+
 // ListRemoteThreadMessages returns the cached messages of a thread, oldest first,
 // scoped to the account and inbox.
 func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID, threadKey string) ([]RemoteMessage, error) {
