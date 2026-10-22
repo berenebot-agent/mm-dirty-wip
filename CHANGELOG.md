@@ -8,6 +8,15 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- Restored the label-first mailbox contract: the catalogue exposes supported
+  system classifications, `label_ids` includes canonical Inbox/Sent/Spam/Trash
+  membership, and `label_id` resolves catalogue IDs across domain, Gmail,
+  Outlook and IMAP list/search routes. Capabilities describe supported apply/remove
+  operations; system actions use the label API, while Gmail and native additive
+  labels retain multiple membership. The reader shares membership resolution.
+  Existing folder filters/endpoints and `/move` remain compatible (D131 amendment;
+  API change explicitly approved).
+
 - The domain Receiving dialog now keeps the two SMTP receivers apart. The
   bundled receiver's tuning — SMTP greeting hostname, limits, verification,
   network timeouts and STARTTLS — is shown only while Direct MX is selected, so
@@ -40,6 +49,13 @@ All notable changes to MailMoose are documented here. This project follows
   migration hint. Clients must treat returned continuations as opaque strings,
   retain filters, and not treat `before` as a date. No route or message-schema
   replacement is introduced; explicit openagent.email compatibility stays separate.
+
+- Inbox membership is now the same whether a folder is named explicitly or left
+  implicit. Asking for the Inbox folder returns the messages that belong to it
+  by default placement as well as those moved into it, across message search,
+  threads, the local Inbox listing, its counts and its bulk actions. Outbound,
+  spam and trashed mail stay out of the Inbox. An account-wide Inbox filter
+  still does not reach another inbox's mail.
 
 ### Fixed
 

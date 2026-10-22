@@ -201,6 +201,17 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 		// Resolve label membership when executing the queued action, not when
 		// accepting it. Concurrent adds must not overwrite one another.
 		if in.Kind == "label" {
+			if in.Destination != "" {
+				if !w.remote.IsGoogle(ctx, p.AccountID, box.ID) {
+					return store.ErrConflict
+				}
+				if in.LabelOp == "add" {
+					_, err = w.remote.moveGoogle(ctx, p, box.ID, a.MessageID, in.Destination)
+				} else {
+					_, err = w.remote.modifyGoogle(ctx, p, box.ID, a.MessageID, nil, []string{in.Destination})
+				}
+				return err
+			}
 			if in.LabelOp == "add" {
 				_, err = w.remote.AddRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
 			} else {
@@ -297,6 +308,9 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	case "move":
 		_, ev, e := w.svc.Store.MoveMessageToFolder(ctx, p, a.MessageID, in.Destination)
 		return publish(ev, e)
+	case "classify":
+		_, ev, e := w.svc.Store.ClassifyMessage(ctx, p, a.MessageID, in.Destination)
+		return publish(ev, e)
 	case "purge":
 		path, _, ev, e := w.svc.Store.PurgeMessage(ctx, p, a.MessageID)
 		if e != nil {
@@ -361,6 +375,11 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 	}
 	switch in.Kind {
 	case "label":
+		if in.Destination != "" {
+			if err == nil || !s.Store.IsGoogle(ctx, p.AccountID, inboxID) || (in.Destination != "INBOX" && in.Destination != "SPAM" && in.Destination != "TRASH") {
+				return store.MessageAction{}, store.ErrConflict
+			}
+		}
 		if in.LabelOp != "add" && in.LabelOp != "remove" {
 			return store.MessageAction{}, store.ErrConflict
 		}
@@ -376,6 +395,17 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 			return store.MessageAction{}, store.ErrConflict
 		}
 	case "delete", "restore", "purge":
+	case "classify":
+		if err != nil {
+			return store.MessageAction{}, store.ErrConflict
+		}
+		folder, ferr := s.Store.GetFolderByID(ctx, p.AccountID, inboxID, in.Destination)
+		if ferr != nil {
+			return store.MessageAction{}, ferr
+		}
+		if folder.Role != model.FolderRoleInbox && folder.Role != model.FolderRoleSpam && folder.Role != model.FolderRoleTrash && folder.Role != model.FolderRoleArchive {
+			return store.MessageAction{}, store.ErrConflict
+		}
 	case "move":
 		if in.Destination == "" {
 			return store.MessageAction{}, store.ErrNotFound

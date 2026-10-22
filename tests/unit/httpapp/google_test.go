@@ -8,26 +8,41 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	t.Parallel()
-	svc, _, u, _, _, _ := standaloneFixture(t)
+	st, dir := testdb.OpenDir(t)
+	svc, err := app.New(config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901"}, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	box, e := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "google@example.net"})
 	if e != nil {
 		t.Fatal(e)
 	}
-	labels := []string{"INBOX", "UNREAD", "Label_1"}
+	labels := []string{"INBOX", "SENT", "UNREAD", "Label_1"}
 	history := "10"
+	var mu sync.Mutex
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		if r.Header.Get("Authorization") != "Bearer access" {
 			t.Errorf("missing bearer")
 			w.WriteHeader(401)
@@ -90,7 +105,8 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	}
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
-	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
+	h := settledActionFixture(t, svc, rm, srv.Handler(), u.AccountID)
+	catalog := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
 	if catalog.Code != http.StatusOK || strings.Count(catalog.Body.String(), `"name":"Projects"`) != 1 ||
 		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
 		t.Fatalf("Gmail label should be additive and deduplicated: %d %s", catalog.Code, catalog.Body.String())
@@ -105,7 +121,7 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		"/v1/search?inbox=" + box.ID + "&q=Hello&folder=NoSuchFolder",
 		"/v1/inboxes/" + box.ID + "/messages?folder=NoSuchFolder",
 	} {
-		rr := apiGet(t, srv.Handler(), path, key)
+		rr := apiGet(t, h, path, key)
 		var env struct {
 			Items []json.RawMessage `json:"items"`
 		}
@@ -113,12 +129,78 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 			t.Fatalf("unknown Google folder %s: %d %s", path, rr.Code, rr.Body.String())
 		}
 	}
-	valid := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/search?q=Hello&folder=INBOX", key)
+	valid := apiGet(t, h, "/v1/inboxes/"+box.ID+"/search?q=Hello&folder=INBOX", key)
 	var validEnv struct {
 		Items []json.RawMessage `json:"items"`
 	}
 	if valid.Code != http.StatusOK || json.Unmarshal(valid.Body.Bytes(), &validEnv) != nil || len(validEnv.Items) != 1 {
 		t.Fatalf("valid Google folder search must still reach provider: %d %s", valid.Code, valid.Body.String())
+	}
+	var systemCatalog struct {
+		Items []struct {
+			ID, Role, Membership string
+			CanAdd               bool `json:"can_add"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(catalog.Body.Bytes(), &systemCatalog); err != nil {
+		t.Fatal(err)
+	}
+	systemIDs := map[string]string{}
+	for _, label := range systemCatalog.Items {
+		if label.Role != "" {
+			systemIDs[label.Role] = label.ID
+			if label.Membership != "multiple" {
+				t.Fatalf("Gmail membership must remain multiple: %+v", label)
+			}
+		}
+	}
+	for _, role := range []string{"inbox", "sent", "spam", "trash", "archive"} {
+		if systemIDs[role] == "" {
+			t.Fatalf("missing Gmail %s label", role)
+		}
+	}
+	assertMembership := func(role string) {
+		t.Helper()
+		for _, path := range []string{
+			"/v1/inboxes/" + box.ID + "/messages?",
+			"/v1/messages?inbox=" + box.ID + "&",
+			"/v1/inboxes/" + box.ID + "/search?",
+			"/v1/search?inbox=" + box.ID + "&",
+		} {
+			w := apiGet(t, h, path+"label_id="+url.QueryEscape(systemIDs[role])+"&label_id="+url.QueryEscape(systemIDs["sent"])+"&label_id=tag:Projects", key)
+			var page struct {
+				Items []struct {
+					ID       string
+					LabelIDs []string `json:"label_ids"`
+				} `json:"items"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != id {
+				t.Fatalf("%s %s: %d %s", role, path, w.Code, w.Body.String())
+			}
+			for _, want := range []string{systemIDs[role], systemIDs["sent"], "tag:Projects"} {
+				if !stringSliceContains(page.Items[0].LabelIDs, want) {
+					t.Fatalf("missing %s: %v", want, page.Items[0].LabelIDs)
+				}
+			}
+		}
+	}
+	assertMembership("inbox")
+	for _, step := range []struct{ role, op, result string }{
+		{"inbox", "remove", "archive"},
+		{"inbox", "add", "inbox"},
+		{"spam", "add", "spam"},
+		{"trash", "add", "trash"},
+		{"inbox", "add", "inbox"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+id+"/labels?wait=true", strings.NewReader(`{"label_id":"`+systemIDs[step.role]+`","operation":"`+step.op+`"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("Gmail label %s %s: %d %s", step.role, step.op, w.Code, w.Body.String())
+		}
+		assertMembership(step.result)
 	}
 	if _, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "ARCHIVE"); e != nil {
 		t.Fatal(e)

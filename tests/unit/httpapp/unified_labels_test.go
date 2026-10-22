@@ -62,21 +62,20 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	if got.Code != http.StatusConflict {
 		t.Fatalf("remove folder %d: %s", got.Code, got.Body.String())
 	}
-	// The refusal must name the route that does the moving.
-	if body := got.Body.String(); !strings.Contains(body, "/messages/{messageId}/move") {
-		t.Fatalf("the conflict must name the move route: %s", body)
+	if body := got.Body.String(); !strings.Contains(body, "replacement label") {
+		t.Fatalf("the conflict must explain replacement membership: %s", body)
 	}
-	// A system folder is not a label: the answer points at the move route too.
+	// System classification uses the same label action as custom labels.
 	inboxFolder, err := svc.Store.GetSystemFolder(context.Background(), p.AccountID, box.ID, model.FolderRoleInbox)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got = request(http.MethodPost, path, `{"label_id":"folder:`+inboxFolder.ID+`","operation":"add"}`)
-	if got.Code != http.StatusNotFound {
+	if got.Code != http.StatusOK {
 		t.Fatalf("system folder %d: %s", got.Code, got.Body.String())
 	}
-	if body := got.Body.String(); !strings.Contains(body, "/messages/{messageId}/move") {
-		t.Fatalf("a system folder must name the move route: %s", body)
+	if body := got.Body.String(); !strings.Contains(body, "folder:"+inboxFolder.ID) || !strings.Contains(body, "tag:Invoices") {
+		t.Fatalf("Inbox classification must preserve additive labels: %s", body)
 	}
 	got = request(http.MethodPost, path, `{"label_id":"folder:not_this_inbox","operation":"add"}`)
 	if got.Code != http.StatusNotFound {

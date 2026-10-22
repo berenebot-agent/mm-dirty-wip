@@ -459,8 +459,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 		localFilter.MailboxID = folder
 	}
 	if labels.Scope != "" {
-		localFilter.FolderScoped = true
-		localFilter.MailboxID = labels.Scope
+		localFilter.FolderScoped = false
+		localFilter.MailboxID = ""
+		labels.applyLocal(&localFilter)
 	}
 	entries := make([]mergedItem, 0, limit+1)
 	local, lerr := s.Service.Store.SearchMessagesFiltered(ctx, p, q, localFilter)
@@ -563,11 +564,22 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 			} else if res.Completeness != model.CompletenessComplete && completeness == model.CompletenessComplete {
 				completeness = model.CompletenessUnknown
 			}
+			var identity inboxIdentity
+			if len(labels.MembershipIDs) > 0 {
+				pageMessages := make([]model.Message, 0, len(res.Items))
+				for _, v := range res.Items {
+					pageMessages = append(pageMessages, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+				}
+				identity = s.labelIdentity(ctx, p, mb.inbox, pageMessages)
+			}
 			for _, v := range res.Items {
 				if hasAttachment != nil && v.HasAttach != *hasAttachment {
 					continue
 				}
 				m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
+				if !labels.matchesMembership(m, identity) {
+					continue
+				}
 				if len(labels.Names) > 0 && len(filterByLabelNames([]model.Message{m}, labels.Names)) == 0 {
 					continue
 				}

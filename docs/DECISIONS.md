@@ -4948,6 +4948,31 @@ store-level regression test. No new dependency, table or migration.
 
 **Date:** 2026-10-13. **Approved by:** Ben.
 
+**Amendment — 2026-10-22, API change explicitly approved by Ben:** The public
+contract is label-first. The catalogue includes supported system classifications
+(Inbox, Sent, Spam, Trash, Archive and provider Drafts), and `label_ids` is the
+authoritative membership array, including implicit local Inbox membership and
+all indexed Gmail system memberships. Local drafts/outbox jobs retain their
+separate APIs rather than becoming Message memberships. The earlier wording
+below about a universally single folder-addressed membership is superseded:
+catalogue `membership`, not the ID prefix or `kind`, determines exclusivity.
+IMAP labels and Outlook folder classifications remain exclusive; native tags,
+Gmail labels and Outlook categories retain additive membership. Existing IDs
+remain stable. A generic agent discovers IDs and uses `label_id` uniformly on
+inbox/account list and search routes; repeated filters AND together, and multiple
+Gmail system memberships can be intersected. Inbox-scoping requirements for
+account-wide folder-addressed IDs remain unchanged.
+
+Per-label `can_add` and optional system `role` augment the existing capabilities.
+Supported system actions use the label endpoint; Sent/Drafts remain read-only,
+and system labels cannot be renamed or deleted. Applying an exclusive label
+moves the message; removal without replacement is rejected. Local system
+classification changes placement and Spam/Trash visibility transactionally;
+Gmail uses provider transitions without replacing unrelated labels. The web UI
+uses the API's membership resolution. Legacy `labels`, `folder=`, folder endpoints
+and `/move` stay available, with folder-only compatibility behaviour preserved.
+No dependency, service, schema migration or runtime component is added.
+
 **Requirement:** The unified Labels system shipped a provider-aware catalogue,
 but the read contract still exposed only additive names. A folder-backed label
 was invisible to API clients (they had to interpret `folder_path` themselves),

@@ -98,6 +98,31 @@ func (s *Store) GoogleMessage(ctx context.Context, account, inbox, id string) (p
 	labels = decodeStrings(raw)
 	return
 }
+
+// GoogleMemberships loads a bounded response page's memberships in one query.
+func (s *Store) GoogleMemberships(ctx context.Context, account, inbox string, ids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := []any{account, inbox}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT g.message_id,g.labels_json FROM google_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND g.inbox_id=? AND g.message_id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		out[id] = decodeStrings(raw)
+	}
+	return out, rows.Err()
+}
 func (s *Store) GoogleLocalID(ctx context.Context, account, inbox, provider string) (string, error) {
 	var id string
 	e := s.read.QueryRowContext(ctx, `SELECT g.message_id FROM google_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND g.inbox_id=? AND g.provider_id=?`, account, inbox, provider).Scan(&id)

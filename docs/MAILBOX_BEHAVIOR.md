@@ -80,9 +80,12 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   seeded system or operator-created) or `remote` (mirrored from the provider).
   `IsSystem` marks a protected seeded folder; `RoleLocked` marks an explicit
   operator role mapping that a reconcile must never re-infer. Folders are
-  **not** aliases: managed aliases belong to inboxes. The public label catalogue
-  distinguishes additive tags from exclusive folder-backed move destinations;
-  provider capability descriptors, not the word "label", determine the action.
+  **not** aliases: managed aliases belong to inboxes. Folders remain a backend
+  detail: the public label catalogue includes system classifications and describes
+  each label's membership and supported actions. `label_ids` is the authoritative
+  projection, including multiple Gmail system memberships; `label_id` resolves
+  catalogue IDs uniformly. Capability descriptors, not ID prefixes or backing
+  folders, determine whether applying a label is additive or a move (D131).
 - `RemoteLocator{FolderPath, UIDValidity, UID, MessageID}` — the remote routing
   address. `Empty()` reports a local record. A locator is valid only while its
   `UIDValidity` still matches the folder.

@@ -702,18 +702,18 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	// A label_id that names a folder-backed destination is resolved through the
 	// scoped inbox's catalogue so the account-wide route behaves exactly like the
 	// inbox-scoped one.
-	if labels, problem := s.accountLabelFilter(r.Context(), p, f.InboxID, r.URL.Query()); problem != "" {
+	labels, problem := s.accountLabelFilter(r.Context(), p, f.InboxID, r.URL.Query())
+	if problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
 		return
 	} else {
 		f.Labels = labels.Names
 		if labels.Scope != "" {
 			folder = labels.Scope
-			f.FolderScoped = true
-			f.MailboxID = labels.Scope
+			labels.applyLocal(&f)
 		}
 	}
-	items, cursor, failures, err := s.listMessagesUnified(r.Context(), p, f, folder, before, limit)
+	items, cursor, failures, err := s.listMessagesUnified(r.Context(), p, f, labels, folder, before, limit)
 	if err != nil {
 		mapMailboxError(w, err)
 		return
@@ -797,7 +797,7 @@ func SetRemoteScanLimitsForTest(page, maxPages int) func() {
 	return func() { remoteFilterScanPage, remoteFilterScanMaxPages = oldPage, oldMax }
 }
 
-func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f store.MessageFilter, folder, before string, limit int) ([]model.Message, string, []model.InboxFailure, error) {
+func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f store.MessageFilter, labels labelFilter, folder, before string, limit int) ([]model.Message, string, []model.InboxFailure, error) {
 	// A single-inbox scope routes wholly to that inbox's backend.
 	if f.InboxID != "" {
 		mb, err := s.resolveMailbox(ctx, p, f.InboxID)
@@ -843,9 +843,17 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 					// never a misleading empty 200 or a 404.
 					return nil, "", nil, rerr
 				}
+				var identity inboxIdentity
+				if len(labels.MembershipIDs) > 0 {
+					pageMessages := make([]model.Message, 0, len(res.Items))
+					for _, v := range res.Items {
+						pageMessages = append(pageMessages, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+					}
+					identity = s.labelIdentity(ctx, p, mb.inbox, pageMessages)
+				}
 				for _, v := range res.Items {
 					m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-					if !matchMessageFilter(m, applyFilter) {
+					if !matchMessageFilter(m, applyFilter) || !labels.matchesMembership(m, identity) {
 						continue
 					}
 					out = append(out, m)
@@ -889,7 +897,7 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 		// route: for a domain inbox the value is a folder id, so the query is
 		// scoped to that folder instead of returning every folder's messages. An
 		// already-resolved label scope wins, so it is never overwritten.
-		if folder != "" && !f.FolderScoped {
+		if folder != "" && !f.FolderScoped && labels.FolderID == "" {
 			f.FolderScoped = true
 			f.MailboxID = folder
 		}

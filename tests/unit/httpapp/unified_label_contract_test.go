@@ -52,11 +52,15 @@ func TestUnifiedLabelMembershipOnMessages(t *testing.T) {
 			t.Fatalf("unexpected label id %q in %v", id, got.LabelIDs)
 		}
 	}
-	// label_ids is always present, even with no membership.
+	// Fresh mail has canonical Inbox membership even before it is explicitly filed.
 	plain := seedInbound(t, svc, box, "label-ids-empty", "<label-ids-empty@test>", "Empty", "body")
 	empty := apiGet(t, h, "/v1/messages/"+plain.ID, key)
-	if !strings.Contains(empty.Body.String(), `"label_ids":[]`) {
-		t.Fatalf("label_ids must be present and empty: %s", empty.Body.String())
+	inbox, err := svc.Store.GetSystemFolder(ctx, p.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(empty.Body.String(), `"label_ids":["folder:`+inbox.ID+`"]`) {
+		t.Fatalf("label_ids must include Inbox: %s", empty.Body.String())
 	}
 }
 

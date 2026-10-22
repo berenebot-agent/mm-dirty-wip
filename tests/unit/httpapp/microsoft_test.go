@@ -81,6 +81,12 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 			w.Write([]byte(`{"id":"inbox-id","displayName":"Posteingang"}`))
 		case strings.HasSuffix(r.URL.Path, "/mailFolders/archive"):
 			w.Write([]byte(`{"id":"archive-id","displayName":"Archiv"}`))
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			value := []any{}
+			if strings.Contains(r.URL.Path, "/"+folder+"/") {
+				value = append(value, message)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"value": value})
 		default:
 			w.WriteHeader(404)
 		}
@@ -138,6 +144,40 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"name":"Projects"`) ||
 		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
 		t.Fatalf("Graph categories should be additive labels: %d %s", catalog.Code, catalog.Body.String())
+	}
+	var labels struct {
+		Items []struct{ ID, Role, Membership string } `json:"items"`
+	}
+	if err := json.Unmarshal(catalog.Body.Bytes(), &labels); err != nil {
+		t.Fatal(err)
+	}
+	var inboxLabel string
+	for _, label := range labels.Items {
+		if label.Role == "inbox" {
+			inboxLabel = label.ID
+			if label.Membership != "exclusive" {
+				t.Fatalf("Outlook folder must stay exclusive: %+v", label)
+			}
+		}
+	}
+	if inboxLabel == "" {
+		t.Fatal("missing Outlook Inbox classification")
+	}
+	key := adminKey(t, svc, u)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/messages?", "/v1/messages?inbox=" + box.ID + "&",
+		"/v1/inboxes/" + box.ID + "/search?", "/v1/search?inbox=" + box.ID + "&",
+	} {
+		w := apiGet(t, srv.Handler(), path+"label_id="+url.QueryEscape(inboxLabel)+"&label_id=tag:Projects", key)
+		var page struct {
+			Items []struct {
+				ID       string
+				LabelIDs []string `json:"label_ids"`
+			} `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != id || !stringSliceContains(page.Items[0].LabelIDs, inboxLabel) || !stringSliceContains(page.Items[0].LabelIDs, "tag:Projects") {
+			t.Fatalf("Outlook label filter %s: %d %s", path, w.Code, w.Body.String())
+		}
 	}
 	v, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "archive-id")
 	if e != nil || v.ID != id || v.FolderPath != "archive-id" {
