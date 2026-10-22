@@ -541,16 +541,21 @@ func (s *Store) DeleteFolder(ctx context.Context, p model.Principal, inboxID, fo
 // returns the current message and no event. It returns a message.folder_changed
 // event carrying the old and new folder ids.
 func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string) (model.Message, *model.Event, error) {
-	return s.moveMessageToFolder(ctx, p, messageID, destFolderID, false)
+	m, events, err := s.moveMessageToFolder(ctx, p, messageID, destFolderID, false)
+	if err != nil || len(events) == 0 {
+		return m, nil, err
+	}
+	return m, &events[0], nil
 }
 
-// ClassifyMessage applies a system classification and its visibility state atomically.
-// The compatibility folder-move API retains its original folder-only behaviour.
-func (s *Store) ClassifyMessage(ctx context.Context, p model.Principal, messageID, destFolderID string) (model.Message, *model.Event, error) {
-	return s.moveMessageToFolder(ctx, p, messageID, destFolderID, true)
+// ClassifyMessage applies an exclusive system classification atomically and returns
+// every durable event so the worker can publish both placement and lifecycle changes.
+func (s *Store) ClassifyMessage(ctx context.Context, p model.Principal, messageID, destFolderID string) ([]model.Event, error) {
+	_, events, err := s.moveMessageToFolder(ctx, p, messageID, destFolderID, true)
+	return events, err
 }
 
-func (s *Store) moveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string, classify bool) (model.Message, *model.Event, error) {
+func (s *Store) moveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string, classify bool) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -622,13 +627,46 @@ func (s *Store) moveMessageToFolder(ctx context.Context, p model.Principal, mess
 	if err != nil {
 		return model.Message{}, nil, err
 	}
+	events := []model.Event{ev}
+	if classify {
+		record := func(eventType string, detail map[string]any) error {
+			lifecycle, e := insertEventTx(ctx, tx, p.AccountID, m.InboxID, eventType, messageID, detail)
+			if e != nil {
+				return e
+			}
+			events = append(events, lifecycle)
+			return nil
+		}
+		if spam != m.Spam {
+			if err := record(model.EventMessageSpamChanged, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+				"old": m.Spam, "new": spam, "is_spam": spam,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
+		if m.DeletedAt == nil && deleted != nil {
+			if err := record(model.EventMessageTrashed, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
+		if m.DeletedAt != nil && deleted == nil {
+			if err := record(model.EventMessageRestored, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return model.Message{}, nil, err
 	}
 	m.MailboxID = dest
 	m.FolderPath = destPath
 	m.Spam, m.DeletedAt = spam, deleted
-	return m, &ev, nil
+	return m, events, nil
 }
 
 // SetFolderRemoteMetadata replaces the opaque adapter metadata of a folder. It is
