@@ -1319,7 +1319,7 @@ func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxI
 	if strings.TrimSpace(beforeKey) != "" {
 		var latest sql.NullString
 		cursorArgs := append(append([]any{}, args...), beforeKey)
-		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))` + where + ` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
+		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))`+where+` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
 			return nil, err
 		}
 		if !latest.Valid {
