@@ -34,7 +34,8 @@ var (
 	qLimit       = p("limit", "integer", false, "Maximum items to return; the store clamps to the advertised page-size ceiling.")
 	qBefore      = p("before", "string", false, "Opaque keyset cursor; return items older than this.")
 	qInbox       = p("inbox", "string", false, "Scope results to one inbox id.")
-	qLabel       = p("label", "array", false, "Repeatable; a message must carry every listed label.")
+	qLabel       = p("label", "array", false, "Repeatable additive label name; a message must carry every listed label. Unsupported for an IMAP inbox, which has no canonical labels.")
+	qLabelID     = p("label_id", "array", false, "Additive label filter: repeat ids verbatim from the label catalogue (tag:Name). Repeated ids AND together. A folder is not a label: scope a folder with folder= instead. Unsupported for an IMAP inbox, which has no canonical labels.")
 	qFrom        = p("from", "string", false, "Match the RFC5322 From address.")
 	qTo          = p("to", "string", false, "Match a recipient address.")
 	qUnread      = p("unread", "boolean", false, "Filter by read state.")
@@ -47,11 +48,10 @@ var (
 	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
 	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
 	qQ           = p("q", "string", false, "Search text. Omit for a filter-only search. Local mail uses FTS5; connected inboxes use provider search. Advanced syntax is not portable.")
-	qFolder      = p("folder", "string", false, "Scope to one folder (a folder path for a standalone inbox, a folder id for a domain inbox).")
+	qFolder      = p("folder", "string", false, "Scope to one canonical folder ID returned by the inbox Folders API. Only messages whose projected folder_id matches are returned. Legacy standalone folder paths remain accepted; prefer stable MailMoose IDs.")
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
 	qContentType = p("content_type", "string", false, "Remote attachment media-type hint; downloads are served as application/octet-stream with attachment disposition and nosniff.")
-	qLabelID     = p("label_id", "array", false, "Primary membership filter: repeat IDs verbatim from the label catalogue, including system classifications. Repeated IDs AND together; only one exclusive label is allowed, while multiple Gmail memberships can be intersected. folder:<id> requires a single-inbox scope account-wide. No provider-specific identifiers are required.")
 )
 
 // queuedAction is the async-default success payload shared by mutations that

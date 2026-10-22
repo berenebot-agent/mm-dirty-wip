@@ -315,9 +315,14 @@ an unverified app does not remove that limit and can block access instead.
 
 ### Mailbox behaviour
 
-Gmail system labels supply Inbox, Sent, Drafts, Spam and Trash views. Archive
-removes the Inbox label; a message can appear in multiple user-label views.
-Search runs against Gmail, and new mail is detected by polling rather than push
+Gmail system labels supply the Trash, Spam, Drafts, Inbox and Sent folders —
+the five system destinations a Gmail inbox exposes, and no virtual folder. A
+message can sit under several Gmail labels at once, so MailMoose reports one
+canonical folder per message — the first of Trash, Spam, Drafts, Inbox, Sent
+that it carries — and lists the rest as additive labels. A message that
+carries none of them is archived and reports no canonical folder. Archive
+removes the Inbox label and keeps Sent, so an archived message still reports
+the Sent folder. Search runs against Gmail, and new mail is detected by polling rather than push
 notifications. Bodies and attachments are fetched on demand rather than stored as
 a full-message archive. Permanent deletion is not available from this connector.
 
@@ -339,7 +344,22 @@ Self-hosters can register a Microsoft Entra public-client application and set
 `common` for work/school and personal accounts, or a tenant ID/domain to restrict
 the app to one organisation. Add the `http://localhost` mobile/desktop redirect
 URI; no client secret is used. Required delegated permissions are
-`User.Read`, `Mail.ReadWrite`, `Mail.Send`, and `offline_access`.
+`User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, and
+`offline_access`.
+
+`MailboxSettings.ReadWrite` is what lets MailMoose create an Outlook **master
+category** — the native equivalent of a label — through
+`POST /users/{mailbox}/outlook/masterCategories`. Without it MailMoose cannot
+create a category in the mailbox, and the categories it already knows about
+stay readable and usable on messages. The permission is only used for category
+creation: renaming and deleting a category remain unsupported.
+
+> **Existing connections must be reconnected once.** A mailbox connected
+> before this permission was added does not carry the grant, and Microsoft
+> will not add it to an existing token. Reconnect the inbox from its settings
+> (or connect it again) to grant `MailboxSettings.ReadWrite`. A reconnect that
+> does not carry the new permission is refused with
+> `Microsoft mailbox permissions were not granted`.
 
 For shared mailboxes, enable `Mail.ReadWrite.Shared`, `Mail.Send.Shared`, and
 `User.ReadBasic.All` in the app registration. Your organisation may require
@@ -365,7 +385,10 @@ that inbox's settings if Microsoft access expires or is revoked.
 
 MailMoose presents Outlook folders and categories in the standalone inbox. Normal
 Inbox and Archive folders are supported; Microsoft's separate Online Archive
-mailbox is not. Outlook keeps its Sent Items copy. Some send or reply outcomes
+mailbox is not. Outlook keeps its Sent Items copy. A message's location is its
+Outlook folder; its categories are additive labels that can be created but not
+renamed or deleted through the API — creating one needs the
+`MailboxSettings.ReadWrite` permission described above. Some send or reply outcomes
 can be uncertain; do not repeat a send unless the inbox confirms it failed.
 
 Personal Outlook.com and Microsoft 365 inboxes can receive near-real-time change
@@ -417,3 +440,7 @@ outbound server, the inbox can still receive and read mail but cannot send from
 the connected account. Use the provider's documented server names and ports;
 MailMoose does not guess them. Connection credentials are encrypted with
 `APP_ENCRYPTION_KEY`.
+
+An IMAP mailbox has folders, not labels: a message's location is its IMAP
+folder, and MailMoose does not expose IMAP mail with canonical labels. Tag a
+message by moving it into a folder.

@@ -54,6 +54,13 @@ func Open(dataDir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	// A domain mailbox organises mail with labels: its custom folders become
+	// additive labels, keeping the filed mail's organisation. The conversion is
+	// idempotent, so it costs one indexed lookup when there is nothing to do.
+	if err := s.migrateDomainFoldersToLabels(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
 	// Retire raw files queued by committed operations, never inside a transaction
 	// whose rollback could leave a live row pointing at a missing file.
 	_ = s.SweepPendingFileCleanup(context.Background())

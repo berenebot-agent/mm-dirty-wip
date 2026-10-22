@@ -112,7 +112,7 @@ commands:
   thread           GET  /v1/threads/{id}           thread detail (+ --messages)
   labels           GET  /v1/labels                 distinct labels in use
   folders          GET  /v1/inboxes/{id}/folders   list an inbox's folders (common)
-  folder-add       POST /v1/inboxes/{id}/folders   create a folder
+  folder-add       POST /v1/inboxes/{id}/folders   create a folder (Outlook/IMAP only)
   folder-rename    PATCH /v1/inboxes/{id}/folders/{folderId}
   folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
   remote           GET  /v1/inboxes/{id}/remote    standalone inbox remote config
@@ -802,6 +802,7 @@ def cmd_thread(client, args):
 
 
 def cmd_labels(client, args):
+    """List an inbox's additive labels (tag:Name); an IMAP inbox has none."""
     path = "/v1/inboxes/%s/label-catalog" % client.inbox if client.inbox else "/v1/labels"
     response = client.request("GET", path)
     emit(response.data, args.table, label_columns())
@@ -809,7 +810,8 @@ def cmd_labels(client, args):
 
 
 def cmd_folders(client, args):
-    """List an inbox's folders (common for domain and standalone inboxes)."""
+    """List an inbox's folders: system folders for domain and Gmail inboxes,
+    system and custom folders for Outlook and IMAP inboxes."""
     inbox = args.inbox or client.inbox
     if not inbox:
         raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")

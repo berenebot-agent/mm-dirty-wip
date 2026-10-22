@@ -891,13 +891,9 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 	args := []any{accountID, inboxID}
 	if strings.TrimSpace(f.FolderPath) != "" {
 		if s.IsGoogle(ctx, accountID, inboxID) {
-			if f.FolderPath == "ARCHIVE" {
-				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
-				args = append(args, inboxID)
-			} else {
-				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
-				args = append(args, inboxID, f.FolderPath)
-			}
+			clause, cargs := googleFolderScopeSQL(inboxID, "id", f.FolderPath)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
 			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
 			args = append(args, inboxID, f.FolderPath)
@@ -1232,13 +1228,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 	args := []any{accountID, inboxID}
 	if strings.TrimSpace(folderPath) != "" {
 		if s.IsGoogle(ctx, accountID, inboxID) {
-			if folderPath == "ARCHIVE" {
-				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
-				args = append(args, inboxID)
-			} else {
-				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
-				args = append(args, inboxID, folderPath)
-			}
+			clause, cargs := googleFolderScopeSQL(inboxID, "id", folderPath)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
 			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
 			args = append(args, inboxID, folderPath)
@@ -1296,13 +1288,9 @@ func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxI
 	args := []any{accountID, inboxID}
 	for _, path := range folderPaths {
 		if google {
-			if path == "ARCHIVE" {
-				where += ` AND NOT EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id=? AND g.message_id=m.id AND g.label_id IN ('INBOX','TRASH','SPAM'))`
-				args = append(args, inboxID)
-			} else {
-				where += ` AND EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id=? AND g.message_id=m.id AND g.label_id=?)`
-				args = append(args, inboxID, path)
-			}
+			clause, cargs := googleFolderScopeSQL(inboxID, "m.id", path)
+			where += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if microsoft {
 			where += ` AND EXISTS (SELECT 1 FROM microsoft_message_ids x WHERE x.inbox_id=? AND x.message_id=m.id AND x.folder_id=?)`
 			args = append(args, inboxID, path)
@@ -1378,15 +1366,61 @@ func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID
 
 // CountRemoteFolderMessages returns the per-folder message and unread counts of the
 // cached remote index, so a folder listing can show counts without a live status
-// round-trip.
+// round-trip. A Gmail message counts in exactly one system folder view (the
+// single-folder precedence); its user labels are additive labels rather than
+// locations, so they are not folder counts.
 func (s *Store) CountRemoteFolderMessages(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
-	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
+	out := map[string][2]int{}
 	if s.IsGoogle(ctx, accountID, inboxID) {
-		query = `SELECT g.label_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.label_id`
-	} else if s.IsMicrosoft(ctx, accountID, inboxID) {
+		views, err := s.googleFolderViewCounts(ctx, accountID, inboxID)
+		if err != nil {
+			return nil, err
+		}
+		for path, count := range views {
+			out[path] = count
+		}
+		return out, nil
+	}
+	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
+	if s.IsMicrosoft(ctx, accountID, inboxID) {
 		query = `SELECT g.folder_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.folder_id`
 	}
 	rows, err := s.read.QueryContext(ctx, query, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var total, unread int
+		if err = rows.Scan(&path, &total, &unread); err != nil {
+			return nil, err
+		}
+		out[path] = [2]int{total, unread}
+	}
+	return out, rows.Err()
+}
+
+// googleFolderViewCounts counts the cached Gmail messages per system folder
+// view. A message counts in exactly one view: the first system label it
+// carries in the precedence order. A message with no system label counts in no
+// view: there is no derived Archive folder.
+func (s *Store) googleFolderViewCounts(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
+	view := `CASE
+				WHEN MAX(CASE WHEN g.label_id='TRASH' THEN 1 ELSE 0 END)=1 THEN 'TRASH'
+				WHEN MAX(CASE WHEN g.label_id='SPAM' THEN 1 ELSE 0 END)=1 THEN 'SPAM'
+				WHEN MAX(CASE WHEN g.label_id='DRAFT' THEN 1 ELSE 0 END)=1 THEN 'DRAFT'
+				WHEN MAX(CASE WHEN g.label_id='INBOX' THEN 1 ELSE 0 END)=1 THEN 'INBOX'
+				WHEN MAX(CASE WHEN g.label_id='SENT' THEN 1 ELSE 0 END)=1 THEN 'SENT'
+				ELSE '' END`
+	q := `SELECT view, count(*), sum(CASE WHEN unread=0 THEN 1 ELSE 0 END) FROM (
+		SELECT m.id, ` + view + ` AS view, MAX(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) AS unread
+		FROM inbox_remote_messages m
+		LEFT JOIN google_label_memberships g ON g.inbox_id=? AND g.message_id=m.id AND g.label_id IN (` + googleLabelList(GoogleFolderPrecedence) + `)
+		WHERE m.account_id=? AND m.inbox_id=?
+		GROUP BY m.id
+	) WHERE view<>'' GROUP BY view`
+	rows, err := s.read.QueryContext(ctx, q, inboxID, accountID, inboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -1488,8 +1522,11 @@ func (s *Store) RemoteInboxUnreadCounts(ctx context.Context, p model.Principal) 
 		q := `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0`
 		args := []any{p.AccountID, inboxID}
 		if s.IsGoogle(ctx, p.AccountID, inboxID) {
-			q = `SELECT count(*) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.label_id=?`
-			args = append(args, inboxID, root)
+			// The badge counts the Inbox view, so a message that belongs to a
+			// higher-precedence view (Trash, Spam, Drafts) is not unread Inbox mail.
+			clause, cargs := googleFolderScopeSQL(inboxID, "m.id", root)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, p.AccountID, inboxID) {
 			q = `SELECT count(*) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.folder_id=?`
 			args = append(args, inboxID, root)

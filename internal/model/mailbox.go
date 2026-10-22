@@ -241,10 +241,16 @@ type Capabilities struct {
 	// separator and nest.
 	HierarchicalFolders bool `json:"hierarchical_folders"`
 	// Move reports whether messages can be moved between folders.
-	Move bool `json:"move"`
+	Move          bool `json:"move"`
+	CreateFolders bool `json:"create_folders"`
+	RenameFolders bool `json:"rename_folders"`
+	DeleteFolders bool `json:"delete_folders"`
 	// Labels reports whether the mailbox has free-text labels independent of
 	// folders.
-	Labels bool `json:"labels"`
+	Labels       bool `json:"labels"`
+	CreateLabels bool `json:"create_labels"`
+	RenameLabels bool `json:"rename_labels"`
+	DeleteLabels bool `json:"delete_labels"`
 	// Search reports whether the server (or local index) supports search.
 	Search bool `json:"search"`
 	// Drafts reports whether the mailbox holds a server-side Drafts concept the
@@ -262,14 +268,14 @@ type Capabilities struct {
 
 // DomainCapabilities is the declared capability set of a domain inbox.
 func DomainCapabilities() Capabilities {
-	return Capabilities{Folders: true, Move: true, Labels: true, Search: true, Drafts: true, Outbound: true, Realtime: true}
+	return Capabilities{Folders: true, Move: true, Labels: true, CreateLabels: true, RenameLabels: true, DeleteLabels: true, Search: true, Drafts: true, Outbound: true, Realtime: true}
 }
 
 // StandaloneCapabilities is the declared capability set of a standalone inbox
 // backed by a remote IMAP account. The exact booleans a given server reports are
 // refined per connection at handshake time; this is the default surface.
 func StandaloneCapabilities() Capabilities {
-	return Capabilities{Folders: true, HierarchicalFolders: true, Move: true, Labels: true, Search: true, Drafts: true, Outbound: true, Realtime: true, Sync: true}
+	return Capabilities{Folders: true, HierarchicalFolders: true, Move: true, CreateFolders: true, RenameFolders: true, DeleteFolders: true, Search: true, Drafts: true, Outbound: true, Realtime: true, Sync: true}
 }
 
 // ListCompleteness reports whether a listing's result/index is complete, which

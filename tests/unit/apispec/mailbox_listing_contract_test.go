@@ -39,9 +39,16 @@ func TestMailboxListingQueryParity(t *testing.T) {
 		}
 	}
 	guide := apispec.RenderAgentGuide(apispec.Routes())
-	for _, text := range []string{"before=<next_cursor>", "label-catalog", "membership: exclusive", "handoff.publication", "source coverage"} {
+	for _, text := range []string{"before=<next_cursor>", "label-catalog", "handoff.publication", "source coverage", "folder_id", "create_folders", "additive"} {
 		if !strings.Contains(guide, text) {
 			t.Errorf("agent guide missing %q", text)
+		}
+	}
+	// The unified-label contract is gone: a folder is a location, a label is
+	// additive metadata, and neither carries an exclusive membership.
+	for _, text := range []string{"membership: exclusive", "folder:<id>"} {
+		if strings.Contains(guide, text) {
+			t.Errorf("agent guide still describes %q", text)
 		}
 	}
 	if strings.Contains(guide, "body is fetched separately by the content route") {

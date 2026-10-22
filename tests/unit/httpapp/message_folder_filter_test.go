@@ -13,20 +13,33 @@ import (
 )
 
 // TestAPIMessagesFolderFilter proves the account-wide message route honours the
-// folder filter exactly as the inbox-scoped route does: a folder id narrows the
-// result to that folder, an unknown folder id yields an empty list rather than
-// the whole inbox, and no folder filter still lists everything.
+// folder filter exactly as the inbox-scoped route does: a canonical folder id
+// narrows the result to that folder, a legacy custom folder is not a canonical
+// location and matches nothing, an unknown folder id yields an empty list
+// rather than the whole inbox, and no folder filter still lists everything
+// else.
 func TestAPIMessagesFolderFilter(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
-	folder, err := svc.Store.CreateFolder(ctx, p, box.ID, store.FolderCreate{Path: "Projects"})
+	// A legacy custom folder. A domain mailbox organises with labels now, so
+	// such a folder is not a canonical location any more.
+	legacy, err := svc.Store.CreateFolder(ctx, p, box.ID, store.FolderCreate{Path: "Projects"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	filed := seedInbound(t, svc, box, "folder-filter-filed", "<folder-filter-filed@test>", "Filed", "body")
-	if _, _, err := svc.Store.MoveMessageToFolder(ctx, p, filed.ID, folder.ID); err != nil {
+	if _, _, err := svc.Store.MoveMessageToFolder(ctx, p, filed.ID, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A canonical destination: the system Spam folder.
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleSpam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spammed := seedInbound(t, svc, box, "folder-filter-spam", "<folder-filter-spam@test>", "Spammed", "body")
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, spammed.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	seedInbound(t, svc, box, "folder-filter-loose", "<folder-filter-loose@test>", "Loose", "body")
@@ -53,21 +66,30 @@ func TestAPIMessagesFolderFilter(t *testing.T) {
 
 	// The account-wide route narrows to the folder, exactly like the
 	// inbox-scoped route.
-	scoped := ids("/v1/inboxes/" + box.ID + "/messages?folder=" + url.QueryEscape(folder.ID))
-	account := ids("/v1/messages?inbox=" + box.ID + "&folder=" + url.QueryEscape(folder.ID))
-	if len(scoped) != 1 || scoped[0] != filed.ID {
-		t.Fatalf("inbox-scoped folder filter = %v, want only %s", scoped, filed.ID)
+	scoped := ids("/v1/inboxes/" + box.ID + "/messages?folder=" + url.QueryEscape(spam.ID))
+	account := ids("/v1/messages?inbox=" + box.ID + "&folder=" + url.QueryEscape(spam.ID))
+	if len(scoped) != 1 || scoped[0] != spammed.ID {
+		t.Fatalf("inbox-scoped folder filter = %v, want only %s", scoped, spammed.ID)
 	}
-	if len(account) != 1 || account[0] != filed.ID {
-		t.Fatalf("account-wide folder filter = %v, want only %s", account, filed.ID)
+	if len(account) != 1 || account[0] != spammed.ID {
+		t.Fatalf("account-wide folder filter = %v, want only %s", account, spammed.ID)
+	}
+	// A legacy custom folder is not a canonical location: it has no canonical
+	// matches, on either route form.
+	if got := ids("/v1/inboxes/" + box.ID + "/messages?folder=" + url.QueryEscape(legacy.ID)); len(got) != 0 {
+		t.Fatalf("legacy custom folder filter = %v, want no rows", got)
+	}
+	if got := ids("/v1/messages?inbox=" + box.ID + "&folder=" + url.QueryEscape(legacy.ID)); len(got) != 0 {
+		t.Fatalf("account-wide legacy custom folder filter = %v, want no rows", got)
 	}
 	// An unknown folder id narrows to nothing; it never returns the whole inbox.
 	if got := ids("/v1/messages?inbox=" + box.ID + "&folder=fld_missing"); len(got) != 0 {
 		t.Fatalf("unknown folder filter = %v, want no rows", got)
 	}
-	// Without a folder filter the listing is unchanged.
+	// Without a folder filter the listing is unchanged: spam stays out of an
+	// ordinary read.
 	if got := ids("/v1/messages?inbox=" + box.ID); len(got) != 2 {
-		t.Fatalf("unfiltered listing = %v, want both messages", got)
+		t.Fatalf("unfiltered listing = %v, want both ordinary messages", got)
 	}
 }
 

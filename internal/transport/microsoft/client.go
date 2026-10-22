@@ -88,7 +88,7 @@ func NewClient(h *http.Client) *Client {
 	return &Client{HTTP: &copy, BaseURL: "https://graph.microsoft.com/v1.0", AuthBaseURL: "https://login.microsoftonline.com", backoff: make(map[string]time.Time)}
 }
 func Scope(shared bool) string {
-	s := "offline_access User.Read Mail.ReadWrite Mail.Send"
+	s := "offline_access User.Read Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite"
 	if shared {
 		s += " Mail.ReadWrite.Shared Mail.Send.Shared User.ReadBasic.All"
 	}

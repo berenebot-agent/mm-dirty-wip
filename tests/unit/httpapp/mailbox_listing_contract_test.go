@@ -86,18 +86,29 @@ func TestMailboxListingPaginationBothURLForms(t *testing.T) {
 	}
 }
 
+// TestMailboxFiltersAndSearchFolderBothKinds proves a folder filter narrows
+// the listing to that folder and composes with the other filters, for both
+// inbox kinds. A domain mailbox's canonical folders are its system folders,
+// so the filter names the system Spam folder; a standalone mailbox keeps its
+// physical folders.
 func TestMailboxFiltersAndSearchFolderBothKinds(t *testing.T) {
 	t.Parallel()
 	svc, h, u, local, remote, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	ctx := context.Background()
-	folder, err := svc.Store.CreateFolder(ctx, p, local.ID, store.FolderCreate{Path: "Projects"})
+	// A legacy custom folder: a domain mailbox organises with labels now, so
+	// it is not a canonical location.
+	legacy, err := svc.Store.CreateFolder(ctx, p, local.ID, store.FolderCreate{Path: "Legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, local.ID, model.FolderRoleSpam)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := seedInbound(t, svc, local, "wanted-filter", "<wanted-filter@test>", "needle invoice", "needle")
-	if _, _, err := svc.Store.MoveMessageToFolder(ctx, p, want.ID, folder.ID); err != nil {
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, want.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	seedInbound(t, svc, local, "unwanted-filter", "<unwanted-filter@test>", "needle other", "needle")
@@ -108,7 +119,7 @@ func TestMailboxFiltersAndSearchFolderBothKinds(t *testing.T) {
 	fake.add("INBOX", "From: remote@elsewhere.test\r\nSubject: needle other\r\nMessage-ID: <other-remote@test>\r\n\r\nneedle", "<other-remote@test>", "needle other")
 	refreshRemote(t, h, remote.ID, key)
 	for _, tc := range []struct{ inbox, folder, from string }{
-		{local.ID, folder.ID, "sender@outside.test"},
+		{local.ID, spam.ID, "sender@outside.test"},
 		{remote.ID, "Projects", "remote@elsewhere.test"},
 	} {
 		for _, resource := range []string{"messages", "search"} {
@@ -142,6 +153,24 @@ func TestMailboxFiltersAndSearchFolderBothKinds(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+	// A legacy custom folder is not a canonical location: it matches nothing.
+	for _, resource := range []string{"messages", "search"} {
+		path := "/v1/inboxes/" + local.ID + "/" + resource
+		q := url.Values{"folder": {legacy.ID}}
+		if resource == "search" {
+			q.Set("q", "needle")
+		}
+		rr := apiGet(t, h, path+"?"+q.Encode(), key)
+		var env struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if rr.Code != 200 || json.Unmarshal(rr.Body.Bytes(), &env) != nil {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		if len(env.Items) != 0 {
+			t.Fatalf("%s?%s returned %d items, want none: a legacy custom folder is not a canonical location", path, q.Encode(), len(env.Items))
 		}
 	}
 }

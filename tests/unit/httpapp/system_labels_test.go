@@ -14,98 +14,137 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
+// systemFolderIDs returns the stable ids of an inbox's system folders, by role.
+func systemFolderIDs(t *testing.T, h http.Handler, key, inboxID string) map[string]string {
+	t.Helper()
+	rr := apiGet(t, h, "/v1/inboxes/"+inboxID+"/folders", key)
+	var page struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Role string `json:"role"`
+		} `json:"items"`
+	}
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
+		t.Fatalf("folders: %d %s", rr.Code, rr.Body.String())
+	}
+	out := map[string]string{}
+	for _, f := range page.Items {
+		out[f.Role] = f.ID
+	}
+	return out
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSystemLabelsLocalClassification proves a domain mailbox's system
+// classifications are locations, not labels: the catalogue holds additive tags
+// only, the folder endpoint carries the system folders, a system folder id is
+// refused as a label, and the reader shows no Inbox label pill.
 func TestSystemLabelsLocalClassification(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	key := adminKey(t, svc, u)
-	catalog := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
-	var labels struct {
-		Items []struct {
-			ID, Role, Membership string
-			CanAdd               bool `json:"can_add"`
-			CanRemove            bool `json:"can_remove"`
-			CanRename            bool `json:"can_rename"`
-			CanDelete            bool `json:"can_delete"`
-		} `json:"items"`
-	}
-	if catalog.Code != 200 || json.Unmarshal(catalog.Body.Bytes(), &labels) != nil {
-		t.Fatalf("catalogue: %d %s", catalog.Code, catalog.Body.String())
-	}
-	ids := map[string]string{}
-	for _, label := range labels.Items {
-		ids[label.Role] = label.ID
-		if label.CanRename || label.CanDelete || label.CanRemove {
-			t.Fatalf("local system label must be protected: %+v", label)
-		}
-		if label.Role == "sent" && label.CanAdd {
-			t.Fatal("Sent must be read-only")
+
+	// The catalogue holds additive tags only: no system classification.
+	catalogue, raw := fetchLabelCatalogue(t, h, key, box.ID)
+	for _, item := range catalogue.Items {
+		if item.Kind != "tag" || item.Membership != "multiple" {
+			t.Fatalf("catalogue entry must be an additive tag: %+v", item)
 		}
 	}
-	for _, role := range []string{"inbox", "sent", "spam", "trash", "archive"} {
-		if ids[role] == "" {
-			t.Fatalf("missing system label %s", role)
+	if strings.Contains(raw.Body.String(), `"role"`) {
+		t.Fatalf("the catalogue must not carry system classifications: %s", raw.Body.String())
+	}
+
+	// The system folders are discovered through the folder endpoint.
+	folders := systemFolderIDs(t, h, key, box.ID)
+	for _, role := range []string{model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash} {
+		if folders[role] == "" {
+			t.Fatalf("missing system folder %s", role)
 		}
 	}
+
 	m := seedInbound(t, svc, box, "system-labels", "<system-labels@test>", "Classification", "body")
 	if _, err := svc.Store.ReplaceMessageLabels(ctx, p, m.ID, []string{"Alpha", "Beta"}); err != nil {
 		t.Fatal(err)
 	}
-	apply := func(id, op string, want int) {
-		t.Helper()
-		r := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/labels?wait=true", strings.NewReader(`{"label_id":"`+id+`","operation":"`+op+`"}`))
-		r.Header.Set("Authorization", "Bearer "+key)
-		r.Header.Set("Content-Type", "application/json")
+	apply := func(id, op string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/labels?wait=true", strings.NewReader(`{"label_id":"`+id+`","operation":"`+op+`"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		if w.Code != want {
-			t.Fatalf("apply %s %s: %d %s", op, id, w.Code, w.Body.String())
+		h.ServeHTTP(w, req)
+		return w
+	}
+	// A system folder id is not a label: it is refused, and it never files the
+	// message.
+	for _, role := range []string{model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash} {
+		got := apply(folders[role], "add")
+		if got.Code != http.StatusBadRequest && got.Code != http.StatusNotFound && got.Code != http.StatusConflict {
+			t.Fatalf("system folder %s as label = %d: %s", role, got.Code, got.Body.String())
 		}
 	}
-	for _, role := range []string{"inbox", "spam", "trash", "inbox", "archive", "inbox"} {
-		apply(ids[role], "add", 200)
-		for _, path := range []string{
-			"/v1/inboxes/" + box.ID + "/messages?",
-			"/v1/messages?inbox=" + box.ID + "&",
-			"/v1/inboxes/" + box.ID + "/search?",
-			"/v1/search?inbox=" + box.ID + "&",
-		} {
-			w := apiGet(t, h, path+"label_id="+url.QueryEscape(ids[role])+"&label_id=tag:Alpha&label_id=tag:Beta", key)
-			var page struct {
-				Items []struct {
-					ID       string
-					LabelIDs []string `json:"label_ids"`
-				} `json:"items"`
-			}
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != m.ID {
-				t.Fatalf("%s %s: %d %s", role, path, w.Code, w.Body.String())
-			}
-			if !stringSliceContains(page.Items[0].LabelIDs, ids[role]) || !stringSliceContains(page.Items[0].LabelIDs, "tag:Beta") {
-				t.Fatalf("membership differs from filter: %+v", page.Items[0])
-			}
-		}
-		if role != "inbox" {
-			w := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?label_id="+url.QueryEscape(ids["inbox"]), key)
-			var page struct {
-				Items []json.RawMessage `json:"items"`
-			}
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 0 {
-				t.Fatalf("%s must leave Inbox: %d %s", role, w.Code, w.Body.String())
-			}
+	state := fetchMessageState(t, h, key, m.ID)
+	if len(state.LabelIDs) != 2 {
+		t.Fatalf("label_ids = %v, want the two additive tags", state.LabelIDs)
+	}
+	for _, id := range state.LabelIDs {
+		if !strings.HasPrefix(id, "tag:") {
+			t.Fatalf("a folder is never a label: %v", state.LabelIDs)
 		}
 	}
-	apply(ids["sent"], "add", 400)
-	apply(ids["inbox"], "remove", 409)
-	// An explicitly addressed additive tag must not resolve to a same-name system label.
-	apply("tag:Inbox", "add", 200)
-	detail := apiGet(t, h, "/v1/messages/"+m.ID, key)
-	if !strings.Contains(detail.Body.String(), `"tag:Inbox"`) || !strings.Contains(detail.Body.String(), ids["inbox"]) {
-		t.Fatalf("tag/system name collision: %s", detail.Body.String())
+	if state.FolderID == nil || *state.FolderID != folders[model.FolderRoleInbox] {
+		t.Fatalf("folder_id = %v, want the system Inbox %s", state.FolderID, folders[model.FolderRoleInbox])
 	}
-	apply("tag:Inbox", "remove", 200)
-	// A label-driven state transition must publish the same durable events as
-	// the legacy spam/trash/restore actions, not just folder_changed.
+	// The reader shows the additive labels, never an Inbox pill.
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := uiGet(t, h, cookie, "/ui/messages/"+m.ID).Body.String()
+	if strings.Contains(page, `class="labelpill">Inbox`) {
+		t.Fatalf("the system Inbox must not be a label pill: %s", page)
+	}
+	for _, want := range []string{"Alpha", "Beta"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the additive label %s is missing from the reader: %s", want, page)
+		}
+	}
+}
+
+// TestSystemClassificationEventsAreDurable proves the spam, trash and
+// restore transitions still publish their durable events, so a client that
+// follows the event log sees the same state the API reports.
+func TestSystemClassificationEventsAreDurable(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	key := adminKey(t, svc, u)
+	m := seedInbound(t, svc, box, "system-events", "<system-events@test>", "Events", "body")
+
+	call := func(method, path, body string) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code < 200 || w.Code > 299 {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+	}
+	call(http.MethodPatch, "/v1/messages/"+m.ID, `{"spam":true}`)
+	call(http.MethodPatch, "/v1/messages/"+m.ID, `{"spam":false}`)
+	call(http.MethodDelete, "/v1/messages/"+m.ID, "")
+	call(http.MethodPost, "/v1/messages/"+m.ID+"/restore", "")
+
 	events, err := svc.Store.ListEvents(ctx, p, 0, box.ID, 200)
 	if err != nil {
 		t.Fatal(err)
@@ -125,93 +164,67 @@ func TestSystemLabelsLocalClassification(t *testing.T) {
 			t.Fatalf("classification event %s emitted %d times, want %d (all: %v)", kind, eventCounts[kind], count, eventCounts)
 		}
 	}
-	// The UI derives selected membership from the same projection as the API.
-	cookie, _ := uiSession(t, svc, u.ID)
-	r := httptest.NewRequest(http.MethodGet, "/ui/messages/"+m.ID, nil)
-	r.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `<span class="labelpill">Inbox</span>`) {
-		t.Fatalf("UI Inbox membership: %d %s", w.Code, w.Body.String())
-	}
 }
 
-func stringSliceContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func TestSystemLabelsIMAPExclusiveViewsAndMove(t *testing.T) {
+// TestSystemLabelsIMAPHasNoLabels proves a raw IMAP mailbox has no canonical
+// labels: the catalogue is empty, label_ids is empty, a label mutation is
+// refused, and the message keeps its one physical folder.
+func TestSystemLabelsIMAPHasNoLabels(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
+	fake.mu.Lock()
 	fake.folders["Spam"] = 100
 	fake.folders["Trash"] = 100
+	fake.mu.Unlock()
 	fake.add("INBOX", "From: a@b.test\r\nSubject: Labels\r\nMessage-ID: <labels-imap@test>\r\n\r\nbody", "<labels-imap@test>", "Labels")
 	key := adminKey(t, svc, u)
 	seed := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages", key)
 	if seed.Code != 200 {
 		t.Fatalf("seed: %d %s", seed.Code, seed.Body.String())
 	}
-	catalog := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
-	var labels struct {
-		Items []struct{ ID, Role, Membership string } `json:"items"`
+	var page struct {
+		Items []struct {
+			ID       string   `json:"id"`
+			LabelIDs []string `json:"label_ids"`
+			FolderID *string  `json:"folder_id"`
+		} `json:"items"`
 	}
-	if catalog.Code != 200 || json.Unmarshal(catalog.Body.Bytes(), &labels) != nil {
-		t.Fatalf("catalogue: %d %s", catalog.Code, catalog.Body.String())
+	if json.Unmarshal(seed.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+		t.Fatalf("IMAP listing: %s", seed.Body.String())
 	}
-	ids := map[string]string{}
-	for _, label := range labels.Items {
-		ids[label.Role] = label.ID
-		if label.Membership != "exclusive" {
-			t.Fatalf("IMAP labels must be exclusive: %+v", label)
-		}
+	messageID := page.Items[0].ID
+	if len(page.Items[0].LabelIDs) != 0 {
+		t.Fatalf("an IMAP mailbox has no canonical labels: %v", page.Items[0].LabelIDs)
 	}
-	var messageID string
+	if page.Items[0].FolderID == nil {
+		t.Fatal("an IMAP message lives in exactly one physical folder")
+	}
+	// A label mutation is refused and never moves the message.
+	req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+messageID+"/labels?wait=true", strings.NewReader(`{"name":"Work","operation":"add"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assertUnsupportedOp(t, "IMAP label mutation", w)
+	if got := fake.folderOf("<labels-imap@test>"); got != "INBOX" {
+		t.Fatalf("a refused label must not move the message: %s", got)
+	}
+	// A label filter is refused too: there is no label to filter on.
 	for _, path := range []string{
-		"/v1/inboxes/" + box.ID + "/messages?", "/v1/messages?inbox=" + box.ID + "&",
-		"/v1/inboxes/" + box.ID + "/search?", "/v1/search?inbox=" + box.ID + "&",
+		"/v1/inboxes/" + box.ID + "/messages?label=Work",
+		"/v1/inboxes/" + box.ID + "/threads?label=Work",
 	} {
-		w := apiGet(t, h, path+"label_id="+url.QueryEscape(ids["inbox"]), key)
-		var page struct {
-			Items []struct {
-				ID       string
-				LabelIDs []string `json:"label_ids"`
-			} `json:"items"`
-		}
-		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || !stringSliceContains(page.Items[0].LabelIDs, ids["inbox"]) {
-			t.Fatalf("IMAP label filter %s: %d %s", path, w.Code, w.Body.String())
-		}
-		messageID = page.Items[0].ID
-	}
-	for _, step := range []struct {
-		op, role string
-		status   int
-	}{{"remove", "inbox", 409}, {"add", "spam", 200}} {
-		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+messageID+"/labels?wait=true", strings.NewReader(`{"label_id":"`+ids[step.role]+`","operation":"`+step.op+`"}`))
-		req.Header.Set("Authorization", "Bearer "+key)
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		if w.Code != step.status {
-			t.Fatalf("IMAP %s: %d %s", step.op, w.Code, w.Body.String())
-		}
-	}
-	if got := fake.folderOf("<labels-imap@test>"); got != "Spam" {
-		t.Fatalf("applying exclusive label must move: %s", got)
-	}
-	for _, label := range []string{ids["inbox"], "folder:other-inbox"} {
-		w := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?label_id="+url.QueryEscape(label)+"&label_id="+url.QueryEscape(ids["spam"]), key)
-		if w.Code != 400 {
-			t.Fatalf("invalid exclusive intersection: %d %s", w.Code, w.Body.String())
+		rr := apiGet(t, h, path, key)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("IMAP label filter %s = %d, want 400: %s", path, rr.Code, rr.Body.String())
 		}
 	}
 }
 
-func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
+// TestSentFolderExcludesPendingAndFailedOutbound proves the Sent folder is a
+// location: only a completed send is filed there, and no system folder is ever
+// a label membership.
+func TestSentFolderExcludesPendingAndFailedOutbound(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
@@ -239,49 +252,38 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 	if _, _, err := svc.Store.MarkSent(ctx, u.AccountID, sent.ID, "<wire-sent@test>", "smtp", ""); err != nil {
 		t.Fatal(err)
 	}
-	catalog := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
-	var labels struct {
-		Items []struct {
-			ID   string `json:"id"`
-			Role string `json:"role"`
-		} `json:"items"`
+	folders := systemFolderIDs(t, h, key, box.ID)
+	sentFolder := folders[model.FolderRoleSent]
+	if sentFolder == "" {
+		t.Fatal("Sent folder not advertised")
 	}
-	if catalog.Code != 200 || json.Unmarshal(catalog.Body.Bytes(), &labels) != nil {
-		t.Fatalf("catalogue: %d %s", catalog.Code, catalog.Body.String())
-	}
-	var sentLabel string
-	for _, label := range labels.Items {
-		if label.Role == model.FolderRoleSent {
-			sentLabel = label.ID
-		}
-	}
-	if sentLabel == "" {
-		t.Fatal("Sent label not advertised")
-	}
+	// Only the completed send is filed in Sent, and no message carries a system
+	// folder as a label.
 	for _, tc := range []struct {
 		id      string
 		hasSent bool
 	}{
 		{pending.ID, false}, {failed.ID, false}, {sent.ID, true},
 	} {
-		res := apiGet(t, h, "/v1/messages/"+tc.id, key)
-		var msg struct {
-			LabelIDs []string `json:"label_ids"`
+		state := fetchMessageState(t, h, key, tc.id)
+		hasSent := state.FolderID != nil && *state.FolderID == sentFolder
+		if hasSent != tc.hasSent {
+			t.Fatalf("%s folder_id = %v, want Sent=%v", tc.id, state.FolderID, tc.hasSent)
 		}
-		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &msg) != nil {
-			t.Fatalf("message detail: %d %s", res.Code, res.Body.String())
-		}
-		if got := stringSliceContains(msg.LabelIDs, sentLabel); got != tc.hasSent {
-			t.Fatalf("%s Sent membership = %v, want %v (%v)", tc.id, got, tc.hasSent, msg.LabelIDs)
+		for _, id := range state.LabelIDs {
+			if !strings.HasPrefix(id, "tag:") {
+				t.Fatalf("%s carries a system membership %q", tc.id, id)
+			}
 		}
 	}
+	// The Sent folder is a filter scope like any other folder.
 	for _, path := range []string{
-		"/v1/inboxes/" + box.ID + "/messages?label_id=",
-		"/v1/messages?inbox=" + box.ID + "&label_id=",
-		"/v1/inboxes/" + box.ID + "/search?label_id=",
-		"/v1/inboxes/" + box.ID + "/threads?label_id=",
+		"/v1/inboxes/" + box.ID + "/messages?folder=",
+		"/v1/messages?inbox=" + box.ID + "&folder=",
+		"/v1/inboxes/" + box.ID + "/search?folder=",
+		"/v1/inboxes/" + box.ID + "/threads?folder=",
 	} {
-		res := apiGet(t, h, path+url.QueryEscape(sentLabel), key)
+		res := apiGet(t, h, path+url.QueryEscape(sentFolder), key)
 		var page struct {
 			Items []struct {
 				ID string `json:"id"`
@@ -300,6 +302,9 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 	}
 }
 
+// TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors proves a thread
+// filter combines the folder scope with the additive label filter, and that
+// the cursor stays stable across pages.
 func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
@@ -318,7 +323,7 @@ func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	filters := "label_id=tag:Selected&label_id=" + url.QueryEscape("folder:"+inbox.ID)
+	filters := "label_id=tag:Selected&folder=" + url.QueryEscape(inbox.ID)
 	for _, prefix := range []string{
 		"/v1/inboxes/" + box.ID + "/threads?",
 		"/v1/threads?inbox=" + box.ID + "&",
@@ -377,10 +382,14 @@ func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
 	}
 }
 
-func TestIMAPLabelFilteredThreadsAreExclusiveAndPaged(t *testing.T) {
+// TestIMAPThreadsAreFilteredByFolder proves a raw IMAP mailbox filters its
+// threads by physical folder, with stable cursors.
+func TestIMAPThreadsAreFilteredByFolder(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
+	fake.mu.Lock()
 	fake.folders["Projects"] = 150
+	fake.mu.Unlock()
 	for _, record := range []struct{ folder, mid, subject string }{
 		{"INBOX", "<thread-imap-a@test>", "Thread A"},
 		{"INBOX", "<thread-imap-b@test>", "Thread B"},
@@ -390,35 +399,14 @@ func TestIMAPLabelFilteredThreadsAreExclusiveAndPaged(t *testing.T) {
 	}
 	key := adminKey(t, svc, u)
 	refreshRemote(t, h, box.ID, key)
-	cat := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
-	var catalog struct {
-		Items []struct {
-			ID, Role, Name string
-		} `json:"items"`
-	}
-	if cat.Code != 200 || json.Unmarshal(cat.Body.Bytes(), &catalog) != nil {
-		t.Fatalf("catalog: %d %s", cat.Code, cat.Body.String())
-	}
-	var inboxLabel, projectLabel string
-	for _, item := range catalog.Items {
-		if item.Role == model.FolderRoleInbox {
-			inboxLabel = item.ID
-		}
-		if item.Name == "Projects" {
-			projectLabel = item.ID
-		}
-	}
-	if inboxLabel == "" || projectLabel == "" {
-		t.Fatalf("missing IMAP classification: %s", cat.Body.String())
-	}
 	for _, test := range []struct {
-		label string
-		count int
-	}{{inboxLabel, 2}, {projectLabel, 1}} {
+		folder string
+		count  int
+	}{{"INBOX", 2}, {"Projects", 1}} {
 		seen := map[string]bool{}
 		before := ""
 		for i := 0; i < test.count; i++ {
-			query := "/v1/inboxes/" + box.ID + "/threads?label_id=" + url.QueryEscape(test.label) + "&limit=1" + before
+			query := "/v1/inboxes/" + box.ID + "/threads?folder=" + url.QueryEscape(test.folder) + "&limit=1" + before
 			res := apiGet(t, h, query, key)
 			var page struct {
 				Items []struct {

@@ -108,7 +108,9 @@ func TestGoogleDirectionUsesAllNativeLabels(t *testing.T) {
 	}{
 		{"sent to self", "INBOX", "outbound", []string{"INBOX", "SENT"}},
 		{"draft", "DRAFT", "unknown", []string{"INBOX", "DRAFT"}},
-		{"archive", "ARCHIVE", "unknown", []string{"Label_1"}},
+		// A message with no system label is in no folder view: it is listed by
+		// the unfiltered listing, not by an Archive folder.
+		{"no system label", "", "unknown", []string{"Label_1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, u, _, _, _ := standaloneFixture(t)

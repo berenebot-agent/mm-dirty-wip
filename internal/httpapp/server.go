@@ -358,6 +358,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/messages/{id}/read", s.withSession(s.withCSRF(s.uiMessageRead)))
 	m.HandleFunc("POST /ui/messages/{id}/spam", s.withSession(s.withCSRF(s.uiMessageSpam)))
 	m.HandleFunc("POST /ui/messages/{id}/labels", s.withSession(s.withCSRF(s.uiMessageLabels)))
+	m.HandleFunc("POST /ui/messages/{id}/move", s.withSession(s.withCSRF(s.uiMessageMove)))
 	m.HandleFunc("GET /ui/messages/{id}/html", s.withSession(s.uiMessageHTML))
 	m.HandleFunc("GET /ui/attachments/{id}", s.withSession(s.uiAttachment))
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))

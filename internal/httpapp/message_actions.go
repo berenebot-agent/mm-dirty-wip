@@ -58,7 +58,10 @@ func queuedNotice(action string, count int, dest string) string {
 // input: read/unread/spam/labels arrive as a "patch" with the specific field
 // set, so the display label is derived from the field rather than the kind.
 func actionLabel(in store.MessageActionInput) string {
-	if in.Kind == "label" || in.Kind == "classify" {
+	if in.Kind == "classify" {
+		return "move"
+	}
+	if in.Kind == "label" {
 		return "labels"
 	}
 	if in.Kind == "patch" {
@@ -79,14 +82,17 @@ func actionLabel(in store.MessageActionInput) string {
 }
 
 func (s *Server) enqueueBulkAction(r *http.Request, p model.Principal, box model.Inbox, id, kind, dest string) bool {
-	if kind == "move" && box.Kind != model.InboxKindStandalone {
-		folder, err := s.Service.Store.GetFolderByPath(r.Context(), p.AccountID, box.ID, dest)
+	in := store.MessageActionInput{Kind: kind, Destination: dest}
+	if kind == "move" {
+		folder, err := s.Service.Store.GetFolderDestination(r.Context(), p.AccountID, box.ID, dest)
 		if err != nil {
 			return false
 		}
-		dest = folder.ID
+		in, err = s.folderMoveAction(r.Context(), p, box, &folder.ID)
+		if err != nil {
+			return false
+		}
 	}
-	in := store.MessageActionInput{Kind: kind, Destination: dest}
 	if kind == "read" || kind == "unread" {
 		read := kind == "read"
 		in.Kind = "patch"

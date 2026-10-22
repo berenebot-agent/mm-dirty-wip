@@ -19,6 +19,9 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
 		return model.NewMailboxError(model.ErrKindForbidden, "forbidden", false, nil)
 	}
+	if mb.inbox.Kind == model.InboxKindStandalone && !s.providerLabelInbox(r.Context(), p, mb.inbox) {
+		return model.NewMailboxError(model.ErrKindUnsupported, "IMAP does not support additive labels; use folders", false, nil)
+	}
 	catalog, err := s.mailboxLabels(r.Context(), p, mb.inbox)
 	if err != nil {
 		return err
@@ -37,7 +40,11 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 		return model.NewMailboxError(model.ErrKindUnsupported, "this provider does not support renaming or deleting this label", false, nil)
 	}
 	if operation == "rename" {
-		if clean, ok := model.NormalizeLabel(strings.TrimSpace(newName)); !ok || clean != strings.TrimSpace(newName) {
+		clean, ok := model.NormalizeLabel(strings.TrimSpace(newName))
+		if s.providerLabelInbox(r.Context(), p, mb.inbox) {
+			clean, ok = model.NormalizeProviderLabel(strings.TrimSpace(newName))
+		}
+		if !ok || clean != strings.TrimSpace(newName) {
 			return model.NewMailboxError(model.ErrKindInvalid, "invalid label name", false, nil)
 		}
 	}

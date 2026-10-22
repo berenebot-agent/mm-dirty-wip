@@ -196,27 +196,24 @@ func TestToolbarIconButtonsAreUniformWidth(t *testing.T) {
 	}
 }
 
-// TestSidebarFolderManagementMarkup proves the sidebar replaced the old
-// "Manage folders" disclosure with a New folder button and a per-folder manage
-// glyph whose dialog is present.
+// TestSidebarFolderManagementMarkup proves a mailbox that owns physical
+// folders keeps the native folder management controls, and that the additive
+// label controls stay in their own section.
 func TestSidebarFolderManagementMarkup(t *testing.T) {
 	t.Parallel()
-	svc, h, u, _, box := httpFixture(t)
-	admin := model.Principal{AccountID: u.AccountID, Admin: true}
-	folder, err := svc.Store.CreateFolder(context.Background(), admin, box.ID, store.FolderCreate{Path: "Projects"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	svc, h, u, _, box, fake := standaloneFixture(t)
+	fake.folders["Projects"] = 3
+	refreshRemote(t, h, box.ID, adminKey(t, svc, u))
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
 
 	for _, want := range []string{
 		`data-folder-new`,
 		`data-folder-manage`,
-		`data-folder-id="` + folder.ID + `"`,
 		`id="folder-new-dialog"`,
 		`id="folder-manage-dialog"`,
-		`New label`,
+		`<span>Folders</span>`,
+		`<span>Custom folders</span>`,
 		// The manage dialog keeps Delete on the same actions row as
 		// Cancel/Rename, left-aligned via .dialog-actions>form: the delete
 		// form is the row's first child and Rename submits the external
@@ -228,7 +225,40 @@ func TestSidebarFolderManagementMarkup(t *testing.T) {
 			t.Fatalf("folder sidebar missing %q", want)
 		}
 	}
+	// A raw IMAP mailbox has no additive labels, so it offers no label
+	// control at all.
+	if strings.Contains(page, "New label") {
+		t.Fatal("IMAP sidebar still offers a label control")
+	}
 	if strings.Contains(page, "Manage folders") || strings.Contains(page, "navfolders") {
 		t.Fatal("folder sidebar still renders the old Manage folders block")
+	}
+}
+
+// TestDomainSidebarHasNoFolderControls proves a domain mailbox has system
+// folders only: it classifies with labels, so it offers no custom folder
+// section and no folder management controls.
+func TestDomainSidebarHasNoFolderControls(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	admin := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := svc.Store.CreateFolder(context.Background(), admin, box.ID, store.FolderCreate{Path: "Projects"}); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+
+	// The system views sit under a Folders heading for every inbox type.
+	if !strings.Contains(page, `<span>Folders</span>`) {
+		t.Fatal("the sidebar must head the system views with Folders")
+	}
+	for _, unwanted := range []string{`<span>Custom folders</span>`, `data-folder-new`, `data-folder-manage`, `id="folder-new-dialog"`} {
+		if strings.Contains(page, unwanted) {
+			t.Fatalf("domain sidebar still offers the folder control %q", unwanted)
+		}
+	}
+	// Its additive labels are still there, under their own heading.
+	if !strings.Contains(page, `<span>Labels</span>`) {
+		t.Fatal("domain sidebar must list its labels")
 	}
 }

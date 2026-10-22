@@ -12,9 +12,13 @@ Google uses `internal/transport/gmail`, encrypted per-inbox OAuth grants and
 opaque provider message/thread IDs. The baseline includes binding, OAuth-attempt,
 ID mapping, native label-membership and independent detection-cursor tables.
 Google messages have one cache row and multiple label memberships; `folder_path`
-is an internal `gmail:<provider-id>` storage locator, while public folder views
-project Gmail system labels or user-label IDs. `ARCHIVE` is a derived view.
-Read/star/label/archive/trash operations execute live, as do send, raw/attachment
+is an internal `gmail:<provider-id>` storage locator, while the public
+projection reports one canonical folder — the first of Trash, Spam, Drafts,
+Inbox, Sent that the message carries — and the user labels as additive
+`tag:Name` labels. A Gmail inbox exposes exactly those five system
+destinations: there is no All Mail, no virtual folder and no derived Archive
+view. Read/star/
+label/archive/trash operations execute live, as do send, raw/attachment
 reads and native draft creation. Metadata backfill is progressive and History API
 updates catch up external changes; API list reads synchronize, UI navigation
 schedules synchronization. Search uses string continuation tokens (including
@@ -80,12 +84,12 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   seeded system or operator-created) or `remote` (mirrored from the provider).
   `IsSystem` marks a protected seeded folder; `RoleLocked` marks an explicit
   operator role mapping that a reconcile must never re-infer. Folders are
-  **not** aliases: managed aliases belong to inboxes. Folders remain a backend
-  detail: the public label catalogue includes system classifications and describes
-  each label's membership and supported actions. `label_ids` is the authoritative
-  projection, including multiple Gmail system memberships; `label_id` resolves
-  catalogue IDs uniformly. Capability descriptors, not ID prefixes or backing
-  folders, determine whether applying a label is additive or a move (D131).
+  **not** aliases: managed aliases belong to inboxes. A folder is also not a
+  label: a message's location is its `folder_id` and its metadata is the
+  additive `label_ids` (`tag:Name`, empty for IMAP). Capability descriptors
+  on the inbox (`folders`, `move`, `create_folders`, `rename_folders`,
+  `delete_folders`, `labels`, `create_labels`, `rename_labels`,
+  `delete_labels`) determine what is supported (D151).
 - `RemoteLocator{FolderPath, UIDValidity, UID, MessageID}` — the remote routing
   address. `Empty()` reports a local record. A locator is valid only while its
   `UIDValidity` still matches the folder.
@@ -97,7 +101,17 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   deployment may refuse it (see the UI warnings and `docs/SELFHOSTING.md`).
 - `Capabilities{...}` with `DomainCapabilities()` / `StandaloneCapabilities()`
   (`StandaloneCapabilities` sets `Sync=true`; `Outbound` is refined per inbox to
-  whether an SMTP binding exists).
+  whether an SMTP binding exists). The folder and label half of the surface is
+  explicit: `Folders`, `Move`, `CreateFolders`, `RenameFolders`,
+  `DeleteFolders`, `Labels`, `CreateLabels`, `RenameLabels`, `DeleteLabels`.
+  A domain or Gmail inbox exposes system folders only (`CreateFolders`,
+  `RenameFolders`, `DeleteFolders` false); Outlook and IMAP expose physical
+  custom folders. An IMAP inbox has no canonical labels (`Labels`,
+  `CreateLabels`, `RenameLabels`, `DeleteLabels` false); Outlook categories
+  can be created but not renamed or deleted — creation writes a native
+  master category and needs the `MailboxSettings.ReadWrite` grant (D152). The
+  capability block on the inbox is the authoritative discovery surface
+  (D151).
 - `ListEnvelope[T]{Items, NextCursor, Completeness, Errors []InboxFailure}` —
   the common listing shape. `Completeness` describes whether the source could
   enumerate the whole result set and is **independent of pagination**: having a
@@ -112,9 +126,10 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
 
 ## 2. Persistence (`internal/store`)
 
-The schema is the public baseline `001` in `internal/dbschema/baseline.sql`,
-applied as one versioned migration and validated by `internal/dbschema`.
-Future changes use versioned public migrations. Key tables:
+The schema starts with public baseline `001` in `internal/dbschema/baseline.sql`.
+Public migration `002` adds the retained domain-folder-to-label mapping;
+`internal/dbschema` validates both versions and the resulting fingerprint.
+The data conversion is transactional and idempotent. Key tables:
 
 - `inboxes` — `kind`, `address`, `namespace`, `remote_*`, `smtp_*`,
   `remote_configured`, `remote_sent_copy_enabled`, `remote_sent_copy_folder`,
@@ -123,8 +138,13 @@ Future changes use versioned public migrations. Key tables:
 - `inbox_folders` — the single folder table for BOTH inbox kinds: `path`, `name`,
   `parent_path`, `role`, `selectable`, `is_system`, `origin`, `role_locked`,
   `remote_uid_validity`, `remote_indexed_at`, and opaque `remote_metadata_json`.
-- `messages.mailbox_id` — a message's single folder membership; `NULL` is the
-  implicit system Inbox bucket.
+- `messages.mailbox_id` — retained internal location. `NULL` permits an implicit
+  Inbox for incoming mail or Sent for successfully sent mail; it is not the
+  public nullable `folder_id`. Domain archive and legacy custom-folder records
+  remain stored while their public location is `null`.
+- `inbox_folder_labels` — the durable domain custom-folder-to-label mapping.
+  Original folder paths and message relationships are retained, and conversion
+  never returns previously filed messages to Inbox.
 - `inbox_remote_credentials` — the encrypted IMAP and optional SMTP secrets
   under `APP_ENCRYPTION_KEY`.
 - `inbox_remote_messages` (header/thread metadata cache only), `inbox_remote_labels`,
@@ -446,6 +466,24 @@ transient scope/`LIST` shortfall or a generation flip.
   IMAP arrivals are queued for bounded background prefix reads in the existing worker;
   existing mail is not back-generated. `created_at` is never replaced
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
+- **One location, one additive label set (D151).**
+  `internal/httpapp/message_response.go` projects a message's location as
+  `folder_id` (one stable MailMoose folder id, `null` when there is none) and
+  its labels as the additive `label_ids` (`tag:Name` only, empty for IMAP).
+  A folder is never a label: the `folder:<id>` catalogue identity and the
+  exclusive/system label classification are gone. Gmail's overlapping native
+  system labels collapse to one deterministic folder (Trash, Spam, Drafts,
+  Inbox, Sent; first match wins), and a Gmail inbox exposes exactly those five
+  system destinations — no All Mail, no virtual folder, no derived Archive
+  view. Outlook and IMAP additionally expose custom physical folders. A domain
+  inbox's internal archive and retained legacy custom folders project
+  `folder_id: null`; legacy custom-folder organisation becomes additive labels
+  without changing the retained original folder relationships. The legacy
+  `mailbox_id` and `folder_path` fields now describe
+  that same canonical folder and are omitted when there is none. Folder CRUD is
+  provider-scoped (domain and Gmail have no custom folders), label operations
+  are refused on IMAP, and a `folder:` label id is refused everywhere.
+  See `docs/API.md` §3b.
 - **Account-wide listings merge sources rather than concatenate inboxes.**
   `internal/httpapp/mailbox_merge.go` resumes each source through its native
   keyset or provider continuation, carried inside an opaque `commonCursor`.

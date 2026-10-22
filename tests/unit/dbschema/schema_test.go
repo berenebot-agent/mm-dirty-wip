@@ -148,7 +148,7 @@ func TestFreshBaselineAndRestart(t *testing.T) {
 	if err := dbschema.Validate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 1 || scalar(t, db, `PRAGMA user_version`) != 1 {
+	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 2 || scalar(t, db, `PRAGMA user_version`) != 1 {
 		t.Fatal("fresh database did not get exactly the public baseline")
 	}
 	if scalar(t, db, `SELECT count(*) FROM sqlite_schema WHERE name IN ('api_keys','api_key_mailbox_roles','hermes_connections','external_aliases','one_accounts','system_settings','outbound_credentials','inbound_credentials','idx_inboxes_id_account')`) != 0 {
@@ -340,10 +340,10 @@ func TestApplicationRejectsUnknownOrPartialDatabases(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]string{
 		"missing baseline marker":  `DELETE FROM schema_migrations`,
-		"unknown future migration": `INSERT INTO schema_migrations VALUES('002','future')`,
+		"unknown future migration": `INSERT INTO schema_migrations VALUES('003','future')`,
 		"unknown lineage":          `PRAGMA user_version=99`,
 		"unsupported lineage":      `PRAGMA user_version=0`,
-		"malformed marker":         `UPDATE schema_migrations SET version='bad'`,
+		"malformed marker":         `UPDATE schema_migrations SET version='bad' WHERE version='001'`,
 		"extra table":              `CREATE TABLE unexpected(payload TEXT)`,
 		"partial column":           `ALTER TABLE inbox_one_bindings DROP COLUMN failure_count`,
 		"missing table":            `DROP TABLE key_sessions`,

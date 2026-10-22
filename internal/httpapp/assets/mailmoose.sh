@@ -278,9 +278,9 @@ commands:
   search           GET  /v1/search?q=               full-text search
   threads          GET  /v1/threads                 list threads
   thread           GET  /v1/threads/{id}            thread detail (+ --messages)
-   labels           GET  /v1/inboxes/{id}/label-catalog  capabilities (without --inbox: legacy names)
+   labels           GET  /v1/inboxes/{id}/label-catalog  additive labels (tag:Name; none for IMAP)
   folders          GET  /v1/inboxes/{id}/folders    list an inbox's folders (common)
-  folder-add       POST /v1/inboxes/{id}/folders    create a folder (--inbox, PATH [NAME])
+  folder-add       POST /v1/inboxes/{id}/folders    create a folder (Outlook/IMAP only; --inbox, PATH [NAME])
   folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
   remote           GET  /v1/inboxes/{id}/remote     standalone inbox remote config
   authoring        GET/PUT /v1/inboxes/{id}/authoring  assistant authoring settings
