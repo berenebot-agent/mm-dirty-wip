@@ -95,6 +95,22 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 	explicit := seedInbound(t, svc, box, "explicit-inbox-uat", "<explicit-inbox-uat@test>", "Explicit Inbox UAT", "needle")
 	moved := seedInbound(t, svc, box, "custom-inbox-uat", "<custom-inbox-uat@test>", "Custom Folder UAT", "needle")
 	other := seedInbound(t, svc, otherBox, "other-inbox-uat", "<other-inbox-uat@test>", "Other Inbox UAT", "needle")
+	spammed := seedInbound(t, svc, box, "spam-inbox-uat", "<spam-inbox-uat@test>", "Spam Inbox UAT", "needle")
+	trashed := seedInbound(t, svc, box, "trash-inbox-uat", "<trash-inbox-uat@test>", "Trash Inbox UAT", "needle")
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, spammed.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Store.TrashMessage(ctx, p, trashed.ID); err != nil {
+		t.Fatal(err)
+	}
+	outbound, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: box, Provider: "smtp", RFCMessageID: "<outbound-inbox-uat@test>",
+		From: model.Address{Address: box.Address}, To: []string{"recipient@example.net"},
+		Subject: "Outbound Inbox UAT", Text: "needle", RawPath: "messages/outbound-inbox-uat.eml", SizeBytes: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := svc.Store.MoveMessageToFolder(ctx, p, explicit.ID, inboxFolder.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +189,7 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 	body := ui.Body.String()
 	if ui.Code != http.StatusOK || !strings.Contains(body, "Implicit Inbox UAT") || !strings.Contains(body, "Explicit Inbox UAT") ||
 		strings.Contains(body, "Custom Folder UAT") || strings.Contains(body, "Other Inbox UAT") ||
+		strings.Contains(body, "Spam Inbox UAT") || strings.Contains(body, "Trash Inbox UAT") || strings.Contains(body, "Outbound Inbox UAT") ||
 		!strings.Contains(body, `data-select-banner data-total="2"`) {
 		t.Fatalf("local Inbox UI must list/count only Inbox mail: %d %s", ui.Code, body)
 	}
@@ -187,6 +204,7 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 		read bool
 	}{
 		{implicit, true}, {explicit, true}, {moved, false}, {other, false},
+		{spammed, false}, {trashed, false}, {outbound, true},
 	} {
 		got, err := svc.Store.GetMessage(ctx, p, tc.msg.ID)
 		if err != nil || got.Read != tc.read {
