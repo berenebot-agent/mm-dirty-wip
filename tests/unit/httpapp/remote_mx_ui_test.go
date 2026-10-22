@@ -233,7 +233,7 @@ func TestRemoteMXViewHidesDirectMXReceiverSettings(t *testing.T) {
 		t.Fatal("Direct MX receiver editor must be visible while Direct MX is selected")
 	}
 }
- 
+
 // uatRemoteMXStatus supplies the same HTTP refusal the account API exposes.
 type uatRemoteMXStatus struct{}
 
