@@ -904,7 +904,7 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 		t.Fatalf("standalone inbox %d: %s", rr.Code, rr.Body.String())
 	}
 	page := rr.Body.String()
-	for _, want := range []string{"/remote", "New label", `data-folder-new`, "Inbox"} {
+	for _, want := range []string{"/remote", "New folder", `data-folder-new`, "Inbox"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("standalone inbox missing %q", want)
 		}
@@ -974,17 +974,18 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 	}
 }
 
-// TestFolderViewBothKinds proves the common custom-folder page lists a local
-// folder's messages for a domain inbox and a remote folder's cached messages for
-// a standalone inbox.
+// TestFolderViewBothKinds proves the common folder page lists a folder's
+// messages for a domain inbox and a remote folder's cached messages for a
+// standalone inbox. A domain mailbox has system folders only, so its half
+// names the system Inbox folder.
 func TestFolderViewBothKinds(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domainBox, standalone, fake := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
 
-	// Create a local folder and file a message into it.
-	localFolder, err := svc.Store.CreateFolder(context.Background(), p, domainBox.ID, store.FolderCreate{Path: "Projects"})
+	// File a message into the domain inbox's system Inbox folder.
+	localFolder, err := svc.Store.GetSystemFolder(context.Background(), u.AccountID, domainBox.ID, model.FolderRoleInbox)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3029,7 +3030,10 @@ func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
 	}
 }
 
-func TestUnifiedIMAPLabelCatalogExclusive(t *testing.T) {
+// TestUnifiedIMAPLabelCatalogHasNoLabels proves a raw IMAP mailbox owns
+// physical folders, not additive labels: its catalogue is empty and it
+// declares no label support, so a folder is never offered as a label.
+func TestUnifiedIMAPLabelCatalogHasNoLabels(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
 	fake.mu.Lock()
@@ -3041,7 +3045,10 @@ func TestUnifiedIMAPLabelCatalogExclusive(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("IMAP catalogue: %d %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), `"name":"Projects"`) || !strings.Contains(rr.Body.String(), `"membership":"exclusive"`) {
-		t.Fatalf("IMAP folder-backed label missing: %s", rr.Body.String())
+	if strings.Contains(rr.Body.String(), `"name":"Projects"`) {
+		t.Fatalf("IMAP folder listed as a label: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"items":[]`) || !strings.Contains(rr.Body.String(), `"can_create":false`) {
+		t.Fatalf("IMAP catalogue must be empty and declare no label support: %s", rr.Body.String())
 	}
 }

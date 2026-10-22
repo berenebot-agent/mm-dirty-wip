@@ -35,6 +35,9 @@ func (s *Store) CreateDefinedLabel(ctx context.Context, p model.Principal, inbox
 	}
 	name = strings.TrimSpace(name)
 	clean, ok := model.NormalizeLabel(name)
+	if s.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		clean, ok = model.NormalizeProviderLabel(name)
+	}
 	if !ok || clean != name {
 		return "", ErrInvalidSearchQuery
 	}

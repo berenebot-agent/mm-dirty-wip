@@ -55,6 +55,57 @@ func TestAPIMessageLabelsPatch(t *testing.T) {
 	}
 }
 
+// TestLegacyLabelWriteIsAdditiveOnly proves the legacy replace-set write is a
+// classification: it fills label_ids with additive tags, keeps the legacy name
+// view, and never files the message.
+func TestLegacyLabelWriteIsAdditiveOnly(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, u)
+	inbox, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := seedInbound(t, svc, box, "legacy-labels", "<legacy-labels@test>", "Legacy", "body")
+	req := httptest.NewRequest("PATCH", "/v1/messages/"+m.ID, strings.NewReader(`{"labels":["Invoices","Unpaid"]}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("patch: %d %s", rr.Code, rr.Body.String())
+	}
+	var patched struct {
+		LabelIDs []string `json:"label_ids"`
+		Labels   []string `json:"labels"`
+		FolderID *string  `json:"folder_id"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &patched); err != nil {
+		t.Fatal(err)
+	}
+	if len(patched.LabelIDs) != 2 || !stringSliceContains(patched.LabelIDs, "tag:Invoices") || !stringSliceContains(patched.LabelIDs, "tag:Unpaid") {
+		t.Fatalf("label_ids = %v, want the two additive tags", patched.LabelIDs)
+	}
+	if !stringSliceContains(patched.Labels, "Invoices") || !stringSliceContains(patched.Labels, "Unpaid") {
+		t.Fatalf("legacy labels = %v", patched.Labels)
+	}
+	if patched.FolderID == nil || *patched.FolderID != inbox.ID {
+		t.Fatalf("a label write must not file the message: %v", patched.FolderID)
+	}
+	// The reader shows the additive labels and no system Inbox pill.
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := uiGet(t, h, cookie, "/ui/messages/"+m.ID).Body.String()
+	if strings.Contains(page, `class="labelpill">Inbox`) {
+		t.Fatalf("the system Inbox must not be a label pill: %s", page)
+	}
+	for _, want := range []string{"Invoices", "Unpaid"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the label %s is missing from the reader: %s", want, page)
+		}
+	}
+}
+
 func TestAPIMessagesLabelFilter(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)

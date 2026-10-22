@@ -111,11 +111,14 @@ func TestThreadUnreadCountsAcrossDomainAndStandaloneRoutes(t *testing.T) {
 	if _, err := svc.Store.ReplaceMessageLabels(ctx, p, root.ID, []string{"Selected"}); err != nil {
 		t.Fatal(err)
 	}
-	folder, err := svc.Store.CreateFolder(ctx, p, local.ID, store.FolderCreate{Path: "Read mail"})
+	folder, err := svc.Store.GetSystemFolder(ctx, p.AccountID, local.ID, model.FolderRoleArchive)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := svc.Store.MoveMessageToFolder(ctx, p, reply.ID, folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Store.ReplaceMessageLabels(ctx, p, reply.ID, []string{"Filed"}); err != nil {
 		t.Fatal(err)
 	}
 	fake.add("INBOX", "From: a@b.test\r\nMessage-ID: <unread-remote-root@test>\r\nSubject: Remote thread\r\n\r\nbody", "<unread-remote-root@test>", "Remote thread")
@@ -138,14 +141,14 @@ func TestThreadUnreadCountsAcrossDomainAndStandaloneRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var inboxLabel string
+	var inboxFolder string
 	for _, f := range folders {
 		if f.Role == model.FolderRoleInbox && f.Origin == "remote" {
-			inboxLabel = "folder:" + f.ID
+			inboxFolder = f.ID
 		}
 	}
-	if inboxLabel == "" {
-		t.Fatal("remote Inbox label missing")
+	if inboxFolder == "" {
+		t.Fatal("remote Inbox folder missing")
 	}
 	// Filtered counts must use the same subset as message_count.
 	for _, tc := range []struct {
@@ -153,8 +156,8 @@ func TestThreadUnreadCountsAcrossDomainAndStandaloneRoutes(t *testing.T) {
 		count, unread int
 	}{
 		{local.ID, "label_id=tag:Selected", 1, 1},
-		{local.ID, "folder=" + url.QueryEscape(folder.ID), 1, 0},
-		{remote.ID, "label_id=" + url.QueryEscape(inboxLabel), 2, 1},
+		{local.ID, "label_id=tag:Filed", 1, 0},
+		{remote.ID, "folder=" + url.QueryEscape(inboxFolder), 2, 1},
 	} {
 		for _, path := range []string{"/v1/inboxes/" + tc.inbox + "/threads?", "/v1/threads?inbox=" + tc.inbox + "&"} {
 			res := apiGet(t, h, path+tc.filter, key)

@@ -8,7 +8,40 @@ import (
 	"strings"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
+
+// googleViewOperator maps a Gmail system label id to the search operator that
+// selects it. Gmail's draft label id is DRAFT but its operator is "drafts".
+func googleViewOperator(label string) string {
+	if label == "DRAFT" {
+		return "drafts"
+	}
+	return strings.ToLower(label)
+}
+
+// googleHigherViews returns the system labels that take precedence over a
+// folder view. A message belongs to the first system label it carries, so a
+// view must exclude the ones above it.
+func googleHigherViews(path string) []string {
+	for i, label := range store.GoogleFolderPrecedence {
+		if label == path {
+			return store.GoogleFolderPrecedence[:i]
+		}
+	}
+	return nil
+}
+
+// googleSystemFolder reports whether a path names one of Gmail's system folder
+// views.
+func googleSystemFolder(path string) bool {
+	for _, label := range store.GoogleFolderPrecedence {
+		if label == path {
+			return true
+		}
+	}
+	return false
+}
 
 func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Principal, inbox string, q RemoteSearchQuery) (RemoteSearchResult, error) {
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
@@ -24,18 +57,26 @@ func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Princip
 			query += " " + k + ":" + strconv.Quote(v)
 		}
 	}
-	if q.FolderPath == "ARCHIVE" {
-		query += " -in:inbox -in:trash -in:spam"
+	scope := m.googleFolderScope(ctx, p.AccountID, inbox, q.FolderPath)
+	if scope != "" && !googleSystemFolder(scope) {
+		// A user label is an additive label, not a folder: it selects no folder
+		// view, so the search has no rows rather than the provider's own label
+		// search.
+		return RemoteSearchResult{Items: []RemoteMessageView{}, Completeness: model.CompletenessComplete}, nil
+	}
+	label := scope
+	if scope != "" {
+		// A message belongs to the first system label it carries, so a view
+		// excludes the labels that take precedence over it.
+		for _, higher := range googleHigherViews(scope) {
+			query += " -in:" + googleViewOperator(higher)
+		}
 	}
 	if q.Unread != nil && *q.Unread {
 		query += " is:unread"
 	}
 	if q.Flagged != nil && *q.Flagged {
 		query += " is:starred"
-	}
-	label := q.FolderPath
-	if label == "ARCHIVE" {
-		label = ""
 	}
 	var cursor struct {
 		Page   string

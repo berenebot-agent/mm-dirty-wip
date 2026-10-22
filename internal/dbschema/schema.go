@@ -23,6 +23,22 @@ const Format = 1
 // BaselineHash pins all application DDL, including FTS5 shadow structures.
 const BaselineHash = "9873715c69e1355ddc1c005075051e23db30be7feaae5522fd21538dd157ab37"
 
+// FolderLabelMapping is the public migration that records which additive label
+// a converted custom folder became. A domain mailbox organises mail with
+// labels, but the folder record and the filed mail's folder membership are
+// preserved: the mapping keeps the conversion reversible and idempotent, so a
+// rerun reuses the same label instead of deriving a new one.
+const FolderLabelMapping = `CREATE TABLE inbox_folder_labels (
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  folder_id TEXT NOT NULL REFERENCES inbox_folders(id) ON DELETE CASCADE,
+  label TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(folder_id)
+);`
+
+// FolderLabelMappingHash pins the schema after the folder-label mapping.
+const FolderLabelMappingHash = "b78427c46676da829537b76c9a54845b2deaf8882b822603a98535728c4dfbc5"
+
 // Queryer is the read surface shared by a pinned connection and a transaction.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -36,7 +52,10 @@ type migration struct {
 }
 
 func migrations() []migration {
-	return []migration{{"001", Baseline, BaselineHash}}
+	return []migration{
+		{"001", Baseline, BaselineHash},
+		{"002", FolderLabelMapping, FolderLabelMappingHash},
+	}
 }
 
 // Migrate accepts only an empty database or an exact supported public schema.

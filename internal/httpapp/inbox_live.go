@@ -126,8 +126,14 @@ func mailboxFilter(id, folder, label string) (f store.MessageFilter, basePath st
 		f.FolderScoped = true
 		f.InboxRole = model.FolderRoleInbox
 	case "sent":
+		// The canonical Sent scope, matching the API's label filter: an
+		// outbound message is Sent while it is unfiled or in the Sent folder.
+		// One filed elsewhere (archived) is no longer Sent, so the view
+		// excludes it.
 		f.Direction = "outbound"
 		f.SentOnly = true
+		f.FolderScoped = true
+		f.InboxRole = model.FolderRoleSent
 		basePath += "/sent"
 	case "spam":
 		f.SpamOnly = true

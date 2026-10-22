@@ -33,6 +33,7 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	expired := false
 	read := false
 	var categories []string
+	masterCategories := []string{"Projects", "Clients"}
 	var fixture *httptest.Server
 	fixture = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer access" || r.Header.Get("Prefer") != `IdType="ImmutableId"` {
@@ -44,6 +45,21 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		message := map[string]any{"id": provider, "conversationId": "thread", "parentFolderId": folder, "subject": "Hello", "isRead": read, "categories": categories, "receivedDateTime": "2026-10-10T10:00:00Z"}
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/outlook/masterCategories"):
+			if r.Method == http.MethodPost {
+				var body struct {
+					DisplayName string `json:"displayName"`
+				}
+				json.NewDecoder(r.Body).Decode(&body)
+				masterCategories = append(masterCategories, body.DisplayName)
+				json.NewEncoder(w).Encode(map[string]any{"id": "category-" + body.DisplayName, "displayName": body.DisplayName, "color": "preset0"})
+				return
+			}
+			value := []any{}
+			for _, name := range masterCategories {
+				value = append(value, map[string]any{"id": "category-" + name, "displayName": name, "color": "preset0"})
+			}
+			json.NewEncoder(w).Encode(map[string]any{"value": value})
 		case strings.HasSuffix(r.URL.Path, "/messages/StableID/move"):
 			var body struct{ DestinationID string }
 			json.NewDecoder(r.Body).Decode(&body)
@@ -83,7 +99,9 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 			w.Write([]byte(`{"id":"archive-id","displayName":"Archiv"}`))
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			value := []any{}
-			if strings.Contains(r.URL.Path, "/"+folder+"/") {
+			// Graph lists a folder's messages when the request is folder
+			// scoped, and the whole mailbox when it is not.
+			if strings.Contains(r.URL.Path, "/"+folder+"/") || !strings.Contains(r.URL.Path, "/mailFolders/") {
 				value = append(value, message)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"value": value})
@@ -134,36 +152,83 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	if e != nil || !v.Read {
 		t.Fatalf("read %#v %v", v, e)
 	}
-	v, e = rm.AddRemoteLabels(ctx, p, box.ID, id, []string{"Projects"})
-	if e != nil || len(v.Labels) != 1 {
+	// Two native categories at once: they are independent additive labels.
+	v, e = rm.AddRemoteLabels(ctx, p, box.ID, id, []string{"Projects", "Clients"})
+	if e != nil || len(v.Labels) != 2 {
 		t.Fatalf("categories %#v %v", v, e)
 	}
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
-	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
-	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"name":"Projects"`) ||
-		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
+	key := adminKey(t, svc, u)
+	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	if catalog.Code != http.StatusOK {
 		t.Fatalf("Graph categories should be additive labels: %d %s", catalog.Code, catalog.Body.String())
 	}
+	// The catalogue holds the additive categories only: an Outlook folder is a
+	// location, not a label.
 	var labels struct {
-		Items []struct{ ID, Role, Membership string } `json:"items"`
+		Items []struct {
+			ID, Name, Kind, Membership, Role string
+		} `json:"items"`
 	}
 	if err := json.Unmarshal(catalog.Body.Bytes(), &labels); err != nil {
 		t.Fatal(err)
 	}
-	var inboxLabel string
-	for _, label := range labels.Items {
-		if label.Role == "inbox" {
-			inboxLabel = label.ID
-			if label.Membership != "exclusive" {
-				t.Fatalf("Outlook folder must stay exclusive: %+v", label)
-			}
+	if len(labels.Items) != 2 {
+		t.Fatalf("Outlook catalogue: %+v", labels.Items)
+	}
+	seenCategories := map[string]bool{}
+	for _, item := range labels.Items {
+		if item.Kind != "tag" || item.Membership != "multiple" || item.Role != "" {
+			t.Fatalf("Outlook catalogue entry: %+v", item)
+		}
+		seenCategories[item.ID] = true
+	}
+	for _, want := range []string{"tag:Projects", "tag:Clients"} {
+		if !seenCategories[want] {
+			t.Fatalf("Outlook catalogue misses %s: %+v", want, labels.Items)
 		}
 	}
-	if inboxLabel == "" {
-		t.Fatal("missing Outlook Inbox classification")
+	// A category can be created, but not renamed or deleted.
+	var capabilities struct {
+		Capabilities struct {
+			CanCreate        bool   `json:"can_create"`
+			CreateKind       string `json:"create_kind"`
+			CreateMembership string `json:"create_membership"`
+			CanRename        bool   `json:"can_rename"`
+			CanDelete        bool   `json:"can_delete"`
+		} `json:"capabilities"`
 	}
-	key := adminKey(t, svc, u)
+	if err := json.Unmarshal(catalog.Body.Bytes(), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if !capabilities.Capabilities.CanCreate || capabilities.Capabilities.CreateKind != "tag" ||
+		capabilities.Capabilities.CreateMembership != "multiple" {
+		t.Fatalf("Outlook capabilities: %+v", capabilities.Capabilities)
+	}
+	if capabilities.Capabilities.CanRename || capabilities.Capabilities.CanDelete {
+		t.Fatalf("Outlook categories are neither renamable nor deletable: %+v", capabilities.Capabilities)
+	}
+	// The system folders are discovered through the folder endpoint.
+	folders := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/folders", key)
+	var folderPage struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		} `json:"items"`
+	}
+	if folders.Code != http.StatusOK || json.Unmarshal(folders.Body.Bytes(), &folderPage) != nil {
+		t.Fatalf("Outlook folders: %d %s", folders.Code, folders.Body.String())
+	}
+	inboxFolder := ""
+	for _, f := range folderPage.Items {
+		if f.Path == "inbox-id" {
+			inboxFolder = f.ID
+		}
+	}
+	if inboxFolder == "" {
+		t.Fatalf("missing Outlook Inbox folder: %s", folders.Body.String())
+	}
 	assertThreadUnreadRoutes(t, srv.Handler(), key, box.ID, page.Items[0].ThreadKey, 1, 0)
 	for _, path := range []string{
 		"/v1/inboxes/" + box.ID + "/threads?label_id=tag:Projects",
@@ -179,24 +244,109 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 		}
 		assertThreadUnread(t, page.Items[0], 1, 0)
 	}
+	// The message carries its category as an additive label and its Outlook
+	// folder as its location.
 	for _, path := range []string{
 		"/v1/inboxes/" + box.ID + "/messages?", "/v1/messages?inbox=" + box.ID + "&",
 		"/v1/inboxes/" + box.ID + "/search?", "/v1/search?inbox=" + box.ID + "&",
 	} {
-		w := apiGet(t, srv.Handler(), path+"label_id="+url.QueryEscape(inboxLabel)+"&label_id=tag:Projects", key)
+		w := apiGet(t, srv.Handler(), path+"label_id="+url.QueryEscape("tag:Projects"), key)
 		var page struct {
 			Items []struct {
 				ID       string
 				LabelIDs []string `json:"label_ids"`
+				FolderID *string  `json:"folder_id"`
 			} `json:"items"`
 		}
-		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != id || !stringSliceContains(page.Items[0].LabelIDs, inboxLabel) || !stringSliceContains(page.Items[0].LabelIDs, "tag:Projects") {
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != id {
 			t.Fatalf("Outlook label filter %s: %d %s", path, w.Code, w.Body.String())
 		}
+		if len(page.Items[0].LabelIDs) != 2 || !stringSliceContains(page.Items[0].LabelIDs, "tag:Projects") || !stringSliceContains(page.Items[0].LabelIDs, "tag:Clients") {
+			t.Fatalf("Outlook label_ids: %v", page.Items[0].LabelIDs)
+		}
+		if page.Items[0].FolderID == nil || *page.Items[0].FolderID != inboxFolder {
+			t.Fatalf("Outlook folder_id = %v, want %s", page.Items[0].FolderID, inboxFolder)
+		}
+	}
+	// A folder is not a label: it is refused, and it never files the message.
+	applyLabel := func(labelID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+id+"/labels?wait=true", strings.NewReader(`{"label_id":"`+labelID+`","operation":"add"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		return w
+	}
+	if got := applyLabel("folder:" + inboxFolder); got.Code == http.StatusOK {
+		t.Fatalf("an Outlook folder must not be applicable as a label: %s", got.Body.String())
+	}
+	// A native category is created through the catalogue.
+	created := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/label-catalog", strings.NewReader(`{"name":"NewCategory"}`))
+	created.Header.Set("Authorization", "Bearer "+key)
+	created.Header.Set("Content-Type", "application/json")
+	createdRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(createdRR, created)
+	if createdRR.Code != http.StatusCreated {
+		t.Fatalf("create Outlook category: %d %s", createdRR.Code, createdRR.Body.String())
+	}
+	var createdLabel struct {
+		ID         string `json:"id"`
+		Kind       string `json:"kind"`
+		Membership string `json:"membership"`
+	}
+	if err := json.Unmarshal(createdRR.Body.Bytes(), &createdLabel); err != nil {
+		t.Fatal(err)
+	}
+	if createdLabel.ID != "tag:NewCategory" || createdLabel.Kind != "tag" || createdLabel.Membership != "multiple" {
+		t.Fatalf("created Outlook category: %+v", createdLabel)
+	}
+	after := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	if after.Code != http.StatusOK || !strings.Contains(after.Body.String(), `"id":"tag:NewCategory"`) {
+		t.Fatalf("created Outlook category missing from the catalogue: %d %s", after.Code, after.Body.String())
+	}
+	// It is a native Outlook master category, created on the provider.
+	graphRequest, gerr := http.NewRequest(http.MethodGet, fixture.URL+"/users/shared@example.net/outlook/masterCategories", nil)
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	graphRequest.Header.Set("Authorization", "Bearer access")
+	graphRequest.Header.Set("Prefer", `IdType="ImmutableId"`)
+	graphResponse, gerr := fixture.Client().Do(graphRequest)
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	defer graphResponse.Body.Close()
+	var graphCategories struct {
+		Value []struct {
+			DisplayName string `json:"displayName"`
+		} `json:"value"`
+	}
+	if gerr := json.NewDecoder(graphResponse.Body).Decode(&graphCategories); gerr != nil {
+		t.Fatal(gerr)
+	}
+	createdNatively := false
+	for _, category := range graphCategories.Value {
+		createdNatively = createdNatively || category.DisplayName == "NewCategory"
+	}
+	if !createdNatively {
+		t.Fatalf("the category was not created natively in Outlook: %+v", graphCategories.Value)
+	}
+	// An invalid category name is refused.
+	invalid := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/label-catalog", strings.NewReader(`{"name":""}`))
+	invalid.Header.Set("Authorization", "Bearer "+key)
+	invalid.Header.Set("Content-Type", "application/json")
+	invalidRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(invalidRR, invalid)
+	if invalidRR.Code != http.StatusBadRequest {
+		t.Fatalf("invalid Outlook category = %d, want 400: %s", invalidRR.Code, invalidRR.Body.String())
 	}
 	v, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "archive-id")
 	if e != nil || v.ID != id || v.FolderPath != "archive-id" {
 		t.Fatalf("move %#v %v", v, e)
+	}
+	// A folder move keeps every category: filing a message never drops a label.
+	if len(v.Labels) != 2 || !stringSliceContains(v.Labels, "Projects") || !stringSliceContains(v.Labels, "Clients") {
+		t.Fatalf("a move must keep the categories: %#v", v.Labels)
 	}
 	page, e = rm.ListRemoteMessages(ctx, p, box.ID, "inbox-id", 50, "")
 	if e != nil || len(page.Items) != 0 {

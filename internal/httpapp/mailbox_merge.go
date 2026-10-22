@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -166,9 +167,7 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 		localFilter.FolderScoped = true
 		localFilter.MailboxID = folder
 	}
-	// A folder-backed label scope is a folder id; the store applies it through
-	// FolderScoped/MailboxID, which the scoped route sets directly and this merge
-	// must carry through for the account-wide route to agree.
+	// Preserve the independent folder selector in account-wide queries.
 	localFilter.Before = cur.sourceCursor("local")
 	localFilter.Limit = pageLookahead(limit)
 	msgs, lerr := s.Service.Store.ListMessages(ctx, p, localFilter)
@@ -188,6 +187,9 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 	scanCursors := map[string]string{}
 	for _, mb := range boxes {
 		if !mb.routed || !mb.remoteConfigured() {
+			continue
+		}
+		if len(f.Labels) > 0 && !s.providerLabelInbox(ctx, p, mb.inbox) {
 			continue
 		}
 		scopeFolder, present := s.remoteFilterFolder(ctx, p.AccountID, mb.inbox.ID, folder, f)
@@ -350,6 +352,13 @@ func (s *Server) labelFilteredRemoteThreads(ctx context.Context, p model.Princip
 	if _, err := mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, "", 1, ""); err != nil {
 		return nil, err
 	}
+	for i, folder := range folders {
+		if f, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, mb.inbox.ID, folder); err == nil {
+			folders[i] = f.Path
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+	}
 	records, err := s.Service.Store.ListRemoteThreadsFiltered(ctx, p.AccountID, mb.inbox.ID, folders, labels, limit, before)
 	if err != nil {
 		return nil, normalizeMailboxStoreError(err)
@@ -385,7 +394,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 	var entries []tentry
 	var local []model.Thread
 	var lerr error
-	if len(labels.Names) > 0 || len(labels.MembershipIDs) > 0 {
+	if len(labels.Names) > 0 {
 		filter := store.MessageFilter{Labels: labels.Names}
 		if folder != "" {
 			filter.MailboxID, filter.FolderScoped = folder, true
@@ -411,11 +420,14 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		if !mb.routed || !mb.remoteConfigured() {
 			continue
 		}
+		if len(labels.Names) > 0 && !s.providerLabelInbox(ctx, p, mb.inbox) {
+			continue
+		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
 		var threads []model.Thread
 		var rerr error
-		if len(labels.Names) > 0 || len(labels.MembershipIDs) > 0 {
-			paths := append([]string{}, labels.ScopePaths...)
+		if len(labels.Names) > 0 {
+			paths := []string{}
 			if folder != "" {
 				paths = append(paths, folder)
 			}
@@ -504,10 +516,12 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 		localFilter.FolderScoped = true
 		localFilter.MailboxID = folder
 	}
-	if labels.Scope != "" {
-		localFilter.FolderScoped = false
-		localFilter.MailboxID = ""
-		labels.applyLocal(&localFilter)
+	if inboxID != "" {
+		if box, err := s.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID); err == nil && box.Kind == model.InboxKindDomain {
+			if err := s.applyLocalFolder(ctx, p, inboxID, folder, &localFilter); err != nil {
+				return nil, "", model.CompletenessUnknown, nil, err
+			}
+		}
 	}
 	entries := make([]mergedItem, 0, limit+1)
 	local, lerr := s.Service.Store.SearchMessagesFiltered(ctx, p, q, localFilter)
@@ -528,6 +542,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 	scanCursors := map[string]string{}
 	for _, mb := range boxes {
 		if !mb.routed || (inboxID != "" && mb.inbox.ID != inboxID) || (inboxID == "" && !mb.remoteConfigured()) {
+			continue
+		}
+		if len(labels.Names) > 0 && !s.providerLabelInbox(ctx, p, mb.inbox) {
 			continue
 		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
@@ -561,14 +578,11 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 			rawLimit = remoteFilterScanPage
 		}
 		searchFolder := folder
-		if labels.Scope != "" {
-			searchFolder = labels.Scope
-		}
 		// Match the connected message listing: an unknown folder has no rows.
 		// Do not pass a nonexistent folder to a live provider search, where Gmail
 		// in particular would expose its own invalid-label error to API clients.
 		// When folders have not been discovered yet, leave the search alone.
-		if folder != "" && labels.Scope == "" {
+		if folder != "" {
 			knownFolders, ferr := s.Service.Store.ListFolders(ctx, p.AccountID, mb.inbox.ID)
 			if ferr != nil {
 				return nil, "", model.CompletenessUnknown, nil, normalizeMailboxStoreError(ferr)
@@ -576,7 +590,8 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 			if len(knownFolders) > 0 {
 				found := false
 				for _, f := range knownFolders {
-					if f.Path == folder {
+					if f.Path == folder || f.ID == folder {
+						searchFolder = f.Path
 						found = true
 						break
 					}
@@ -610,22 +625,11 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 			} else if res.Completeness != model.CompletenessComplete && completeness == model.CompletenessComplete {
 				completeness = model.CompletenessUnknown
 			}
-			var identity inboxIdentity
-			if len(labels.MembershipIDs) > 0 {
-				pageMessages := make([]model.Message, 0, len(res.Items))
-				for _, v := range res.Items {
-					pageMessages = append(pageMessages, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-				}
-				identity = s.labelIdentity(ctx, p, mb.inbox, pageMessages)
-			}
 			for _, v := range res.Items {
 				if hasAttachment != nil && v.HasAttach != *hasAttachment {
 					continue
 				}
 				m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-				if !labels.matchesMembership(m, identity) {
-					continue
-				}
 				if len(labels.Names) > 0 && len(filterByLabelNames([]model.Message{m}, labels.Names)) == 0 {
 					continue
 				}

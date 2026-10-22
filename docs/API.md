@@ -67,7 +67,7 @@ Returns a compact discovery document:
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
   "bootstrap": "/v1/bootstrap",
-  "capabilities": ["inboxes","messages","threads","search","labels","attachments","events","drafts","draft-approval","outbox","send","hermes-relay"]
+  "capabilities": ["inboxes","messages","threads","search","folders","labels","attachments","events","drafts","draft-approval","outbox","send","hermes-relay"]
 }
 ```
 
@@ -163,14 +163,19 @@ Standalone Google/Gmail inboxes also use this surface (D098). Connect using the
 human wizard with a BYO Google OAuth Web client; see
 [Google/Gmail setup](EMAIL_PROVIDERS.md#google--gmail).
 Google list views cache metadata and synchronize through the History API; body
-and attachment reads remain live. Folder locators are Gmail label IDs, with
-`ARCHIVE` a derived view. A message can occur in multiple label views with the
-same stable ID. Label changes update Gmail; archive removes `INBOX`. Sending
-uses Gmail API, RemoteDraft creates a native Gmail draft, and Gmail maintains
-the Sent copy. Permanent deletion and custom system-role remapping are
-unsupported. Search uses the same `before` / `next_cursor` convention as other
-listings; tokens are opaque and must be passed back without parsing. Provider
-credentials and client secrets are never exposed.
+and attachment reads remain live. A message can occur in several Gmail views
+with the same stable ID, so MailMoose projects one canonical folder from the
+Gmail system labels — Trash, Spam, Drafts, Inbox, Sent, first match wins — and
+reports the rest as additive labels. A Gmail inbox exposes exactly those five
+system destinations: there is no All Mail, no virtual folder and no derived
+Archive view. Label changes update Gmail; archive removes `INBOX` and keeps
+`SENT`, so an archived message still reports the Sent folder. Sending uses
+Gmail API, RemoteDraft creates a native
+Gmail draft, and Gmail maintains the Sent copy. Permanent deletion and custom
+system-role remapping are unsupported. Search uses the same `before` /
+`next_cursor` convention as other listings; tokens are opaque and must be
+passed back without parsing. Provider credentials and client secrets are never
+exposed.
 
 Routes under `/v1/inboxes/{id}/…` dispatch on the inbox kind, so one set of
 endpoints reads a domain inbox (local store) and a standalone inbox (live remote
@@ -221,15 +226,17 @@ Empty optional envelope fields (`next_cursor`, `errors`) may be omitted.
 |---|---|---|
 | Message items, filters, pagination, roles | Same native contract | Same native contract |
 | Message detail and raw MIME | Locally stored | Live fetch; unavailable provider returns an error, not a cached body |
-| Labels | Persistent additive tags and folder destinations | Catalogue describes additive labels/categories or exclusive folder destinations |
+| Labels | Persistent additive tags; no custom folders | Catalogue describes the additive labels/categories the mailbox supports; a folder is never a label |
+| Folders | System folders only | System folders, plus custom folders for Outlook and IMAP |
 | Permanent deletion | Supported after Trash | IMAP/Outlook subject to provider constraints; Google/One unsupported |
 | Assistant request-send | MailMoose approval | Remote draft by default; MailMoose approval can be configured |
 | Sending identities | Primary, managed aliases and explicit domain grants | Connected address; no managed-domain alias grant |
 | Transport setup | Domain sending/receiving settings | Per-inbox connector or human OAuth setup |
 
-These differences do not select a different message schema. Inspect the label
-catalogue's capabilities and the inbox's authoring settings rather than guessing
-from `kind`. `permissions.can_send` reports authorization, not provider readiness.
+These differences do not select a different message schema. Inspect the inbox's
+folder and label capabilities and its authoring settings rather than guessing
+from `kind`. `permissions.can_send` reports authorization, not provider
+readiness.
 
 The common routes:
 
@@ -242,7 +249,7 @@ GET    /v1/inboxes/{id}/messages        ?folder=&before=&label_id=&from=&to=&unr
 GET    /v1/inboxes/{id}/messages/{messageId}
 GET    /v1/inboxes/{id}/messages/{messageId}/content
 GET    /v1/inboxes/{id}/messages/{messageId}/attachments/{part}
-POST   /v1/inboxes/{id}/messages/{messageId}/move   {"folder_id":"..."}
+POST   /v1/inboxes/{id}/messages/{messageId}/move   {"folder_id":"..."}   # null = archive
 GET    /v1/inboxes/{id}/threads         ?folder=&before=&limit=
 GET    /v1/inboxes/{id}/threads/{threadId}
 GET    /v1/inboxes/{id}/search          ?q=&folder=&from=&to=&subject=&label_id=&unread=&has_attachment=&before=&limit=
@@ -256,20 +263,26 @@ connected mail it is a dotted MIME part path (e.g. `1.2`), discovered from MIME.
 
 ### Folders, roles and labels
 
-Every inbox has a single hierarchical **folder** tree. A folder carries a
-`role` (`folder`, `inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`,
-`outbox`, `label`) or is an ordinary custom folder. Local, IMAP and Outlook mail
-belongs to one folder; Gmail supports multiple label views. Moving a message
-emits `message.folder_changed`. A protected system folder
-cannot be renamed or deleted, and a non-empty folder is refused (nothing is
-silently cascaded). The **label catalogue** distinguishes additive tags from
-exclusive folder-backed move destinations; inspect its capabilities rather than
-assuming every label is independent of folders.
+Every inbox exposes a **folder** tree, and every message carries a canonical
+folder and, separately, additive labels. The two are never mixed: a folder id
+is not a label id. The full contract, the per-provider matrix and the
+examples are in [§3b Folders and labels](#3b-folders-and-labels). In short:
+
+- `Message.folder_id` is the message's location: one stable MailMoose folder
+  id (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null`.
+- `Message.label_ids` holds additive labels only (`tag:Name`), always present
+  and empty for an IMAP inbox.
+- A folder carries a `role` (`folder`, `inbox`, `sent`, `drafts`, `trash`,
+  `spam`, `archive`, `outbox`, `label`); a protected system folder cannot be
+  renamed or deleted, a non-empty folder is refused (nothing is silently
+  cascaded), and Sent and Drafts are never move destinations.
+- Moving a message emits `message.folder_changed`.
 
 Move a message with `POST /v1/inboxes/{id}/messages/{messageId}/move` and
-`{"folder_id":"<folder-id>"}`. The destination must belong to that inbox.
-Like other message actions, it queues by default and accepts `?wait=true` to
-wait for completion; the response contains the resulting message when complete.
+`{"folder_id":"<folder-id>"}`, or `{"folder_id":null}` to archive it (a domain
+or Gmail inbox only). The destination must belong to that inbox. Like other
+message actions, it queues by default and accepts `?wait=true` to wait for
+completion; the response contains the resulting message when complete.
 
 ### Standalone (remote) specifics
 
@@ -329,6 +342,301 @@ unreachable — there is no offline fallback that serves cached metadata as the
 body. A purge (`DELETE /v1/messages/{id}/purge`) requires Assistant or Owner and
 only acts on a message already in the Trash-role folder.
 
+## 3b. Folders and labels
+
+This is the authoritative contract for a message's **location** and its
+**labels**. Every provider uses it; only the capabilities differ. It replaces
+the earlier unified-label projection, where a folder was also a label and
+`label_ids` carried system classifications.
+
+### Two things, never mixed
+
+| Concept | Field | Shape | Meaning |
+|---|---|---|---|
+| Location | `folder_id` | one MailMoose folder id (`fld_...`) or `null` | the folder the message is filed in |
+| Labels | `label_ids` | array of `tag:Name` | additive metadata, several per message |
+
+- `folder_id` is **always present** and nullable: `null` means the message has
+  no canonical folder. The ids are the ones `GET /v1/inboxes/{id}/folders`
+  returns, and they are stable.
+- `label_ids` is **always present** and holds **additive labels only**. There
+  is no system classification in it any more, and no `folder:<id>` identity:
+  a folder id is never a label id, and `label_id` filters match labels only.
+- `labels` remains the legacy additive-name view. `mailbox_id` and
+  `folder_path` remain as compatibility aliases of `folder_id` and its path;
+  both are omitted when there is no canonical folder.
+
+### Capability discovery
+
+The inbox is the authoritative capability surface. Read `capabilities` from
+`GET /v1/inboxes/{id}` (or from the inbox list):
+
+| Capability | Folder meaning | Label meaning |
+|---|---|---|
+| `folders` | the inbox exposes named folders — list them | — |
+| `move` | messages can be moved between folders | — |
+| `create_folders` | a new custom folder can be created | — |
+| `rename_folders` | a custom folder can be renamed | — |
+| `delete_folders` | an empty custom folder can be deleted | — |
+| `labels` | — | the inbox has additive labels |
+| `create_labels` | — | a new label can be created |
+| `rename_labels` | — | a label can be renamed |
+| `delete_labels` | — | a label can be deleted |
+
+`GET /v1/inboxes/{id}/label-catalog` repeats the label half in its own
+`capabilities` block (`can_create`, `create_kind`, `create_membership`,
+`can_rename`, `can_delete`) and lists the labels themselves. That block is
+present even when the catalogue is empty, so an empty catalogue still says
+what the inbox supports. Do not infer support from the inbox kind or the
+provider name.
+
+### What each provider supports
+
+| | Domain (MailMoose) | Gmail | Outlook (Microsoft) | IMAP |
+|---|---|---|---|---|
+| Folders | system folders only | the five system folders only | system **and** custom | system **and** custom |
+| Custom folders | none — `create_folders`, `rename_folders`, `delete_folders` are false | none — same three are false | yes | yes |
+| `folder_id` | one canonical folder, may be `null` | one canonical folder, may be `null` | one physical folder, always present once indexed | one physical folder, always present once indexed |
+| Labels | MailMoose tags | Gmail user labels | Outlook categories | **none** |
+| `label_ids` | `tag:Name` | `tag:Name` | `tag:Name` | `[]` |
+| Label create / rename / delete | yes / yes / yes | yes / yes / yes | yes / no / no | no / no / no |
+| Move a message | yes | yes | yes | yes |
+| Move with `folder_id: null` (archive) | yes | yes | no | no |
+
+A **canonical** folder is a location returned by the Folders API: a supported
+system destination, or a custom physical folder on Outlook or IMAP.
+A domain inbox's archive is an internal destination — the record may exist,
+but it is not a canonical folder, so a message filed in it reports
+`folder_id: null`. A domain message's canonical folder is one of Inbox, Sent,
+Spam or Trash; mail in a legacy custom folder has no canonical folder
+either, and carries the folder's name as a label instead (see
+[Existing mail](#existing-mail)).
+
+Outlook categories can be created, but the connector does not implement native
+category rename or deletion and advertises those operations as unsupported.
+Creating a category requires `MailboxSettings.ReadWrite` and uses the
+native master-category endpoint (see
+[Microsoft / Outlook](EMAIL_PROVIDERS.md#microsoft--outlook)); a mailbox
+connected before that grant was added must be reconnected once. A MailMoose
+domain inbox and a Gmail inbox have no custom folders at all, so folder
+creation, rename and delete are refused for them.
+
+An IMAP inbox has **no canonical labels**: label creation, rename, delete,
+application and label filters are all refused with an unsupported error. Use
+folders and `move` for an IMAP mailbox. Legacy free-text tags that older
+releases stored on IMAP mail are preserved in the legacy `labels` field, but
+they are not canonical `label_ids` and cannot be applied or removed.
+
+### Gmail: one deterministic folder, five system destinations
+
+Gmail can hold a message under several system labels at once, so MailMoose
+projects exactly one canonical folder, deterministically. The folder list of a
+Gmail inbox is these five system destinations and nothing else:
+
+| Order | Folder | Note |
+|---|---|---|
+| 1 | Trash | a trashed message stays in Trash |
+| 2 | Spam | |
+| 3 | Drafts | |
+| 4 | Inbox | a message in both Inbox and Sent projects Inbox |
+| 5 | Sent | |
+
+The first match wins. There are **no virtual folders**: no All Mail, no
+derived Archive view. A message that carries none of the five is an archived
+message and reports `folder_id: null`.
+
+Archiving is `{"folder_id": null}`: it removes the `INBOX` label. A message
+that also carried `SENT` keeps it, so an archived message still projects
+`folder_id` on Sent; a message that carried only `INBOX` reports
+`folder_id: null`. Archiving never creates a folder.
+
+### Operations
+
+| Operation | Domain | Gmail | Outlook | IMAP |
+|---|---|---|---|---|
+| `GET /v1/inboxes/{id}/folders` | yes | yes | yes | yes |
+| `POST /v1/inboxes/{id}/folders` | refused | refused | yes | yes |
+| `PATCH` / `DELETE /v1/inboxes/{id}/folders/{folderId}` | refused | refused | custom folders only | custom folders only |
+| `POST /v1/inboxes/{id}/messages/{messageId}/move` | yes | yes | yes | yes |
+| `GET /v1/inboxes/{id}/label-catalog` | yes | yes | yes | empty |
+| `POST` / `PATCH` / `DELETE /v1/inboxes/{id}/label-catalog[/{labelId}]` | yes | yes | create only | refused |
+| `POST /v1/inboxes/{id}/messages/{messageId}/labels` | yes | yes | yes | refused |
+| `label_id` / `label` filter | yes | yes | yes | refused |
+
+System folders are protected everywhere: they cannot be renamed or deleted,
+and **Sent, Drafts and Outbox are never move destinations** — a sent copy is
+produced by sending, a draft by the drafts API. A move into them is refused.
+A domain or Gmail inbox files only into its canonical system destinations; a
+move into any other folder is refused.
+
+`{"folder_id": null}` means **archive**, not "no folder": a domain inbox files
+the message in its archive (an internal destination, so the message then
+reports `folder_id: null`), and a Gmail inbox removes the `INBOX` label — a
+message that also carried `SENT` keeps it and still projects the Sent folder.
+An Outlook or IMAP message always lives in exactly one physical folder, so a
+null move is refused there.
+
+A label is always additive. Applying one never moves a message and never
+changes its folder; removing one never changes its folder either. Folder
+destinations are reached with `move` and a folder id, never with a label.
+
+Failures use the normal error envelope: an unsupported operation (a folder
+write on a domain or Gmail inbox, a label operation on an IMAP inbox, a null
+move on an Outlook or IMAP inbox) answers `409`; renaming or deleting a
+protected system folder answers `403`; an unknown folder answers `404`; an
+unknown label answers `404`.
+
+### Examples
+
+Discover the capabilities and the folders of one inbox:
+
+```http
+GET /v1/inboxes/inb_01K.../folders
+```
+
+```json
+{
+  "items": [
+    {"id": "fld_inbox",  "inbox_id": "inb_01K...", "path": "Inbox",  "name": "Inbox",  "role": "inbox",  "selectable": true, "is_system": true},
+    {"id": "fld_sent",   "inbox_id": "inb_01K...", "path": "Sent",   "name": "Sent",   "role": "sent",   "selectable": true, "is_system": true},
+    {"id": "fld_spam",   "inbox_id": "inb_01K...", "path": "Spam",   "name": "Spam",   "role": "spam",   "selectable": true, "is_system": true},
+    {"id": "fld_trash",  "inbox_id": "inb_01K...", "path": "Trash",  "name": "Trash",  "role": "trash",  "selectable": true, "is_system": true}
+  ],
+  "completeness": "complete"
+}
+```
+
+A domain inbox's list is Inbox, Sent, Spam and Trash: Drafts and Outbox have
+their own APIs, and the archive is an internal destination, not a canonical
+folder. A Gmail inbox's list is exactly its five system destinations (Trash,
+Spam, Drafts, Inbox, Sent).
+
+**Domain inbox** — canonical system folders, local tags as labels, a nullable
+folder:
+
+```json
+{
+  "id": "msg_01K...",
+  "folder_id": "fld_inbox",
+  "label_ids": ["tag:Invoices", "tag:Unpaid"],
+  "labels": ["Invoices", "Unpaid"]
+}
+```
+
+A message still filed in a legacy custom folder reports no canonical folder
+and carries the folder's name as a label instead:
+
+```json
+{
+  "id": "msg_01K...",
+  "folder_id": null,
+  "label_ids": ["tag:Archive-2026"],
+  "labels": ["Archive-2026"]
+}
+```
+
+Move it into another system folder, then archive it:
+
+```http
+POST /v1/inboxes/inb_01K.../messages/msg_01K.../move?wait=true
+{"folder_id": "fld_spam"}
+```
+
+```http
+POST /v1/inboxes/inb_01K.../messages/msg_01K.../move?wait=true
+{"folder_id": null}
+```
+
+**Gmail inbox** — the five system destinations, provider user labels as
+labels, one projected folder:
+
+```json
+{
+  "id": "msg_01K...",
+  "folder_id": "fld_gmail_inbox",
+  "label_ids": ["tag:Receipts"],
+  "labels": ["Receipts"]
+}
+```
+
+A Gmail message that carries both `INBOX` and `SENT` reports the Inbox
+folder; after archiving (which removes `INBOX`) the same message reports the
+Sent folder, or `folder_id: null` when it carried nothing else. It keeps its
+user labels either way.
+
+**Outlook inbox** — physical custom folders and categories:
+
+```json
+{
+  "id": "msg_01K...",
+  "folder_id": "fld_graph_9a1",
+  "label_ids": ["tag:Follow up"],
+  "labels": ["Follow up"]
+}
+```
+
+The folder id is a MailMoose id for the Outlook folder the message sits in;
+the label is an Outlook category. A category can be created but not renamed
+or deleted.
+
+**IMAP inbox** — one physical folder, no canonical labels:
+
+```json
+{
+  "id": "msg_01K...",
+  "folder_id": "fld_imap_inbox",
+  "label_ids": [],
+  "labels": ["legacy-local-tag"]
+}
+```
+
+The legacy local tag is preserved in `labels` only. Applying or removing a
+label on this inbox is refused.
+
+Apply and remove an additive label:
+
+```http
+POST /v1/inboxes/inb_01K.../messages/msg_01K.../labels?wait=true
+{"label_id": "tag:Invoices", "operation": "add"}
+```
+
+```http
+POST /v1/inboxes/inb_01K.../messages/msg_01K.../labels?wait=true
+{"label_id": "tag:Invoices", "operation": "remove"}
+```
+
+### Existing mail
+
+Public schema migration `002` adds `inbox_folder_labels`; startup then converts
+legacy domain organisation transactionally without changing message IDs.
+Back up the SQLite database and message files before upgrading. Retained records
+preserve the old organisation, but an older binary does not accept the newer
+schema: a binary downgrade requires restoring a compatible backup.
+
+- **Domain mail with legacy custom folders.** A domain mailbox organises with
+  labels, so its legacy custom folders are mapped to additive labels. The
+  mapping is **additive, not destructive**:
+
+  - The custom folder **records are retained**, with their original full
+    paths, and the **message-to-folder relations are retained** with them, so
+    the organisation can be restored or rolled back.
+  - Each custom folder is mapped to one additive label. The mapping is
+    deterministic — the same folder always yields the same label — and
+    collision-safe: a label name already in use in that inbox takes the first
+    free numeric suffix (`Archive-2026-2`), so no folder goes unmapped and no
+    label collides. The mapping is recorded in a mapping table, so the
+    conversion is **idempotent** and never re-derives or duplicates a label.
+  - A message filed in a legacy custom folder has **no canonical folder**:
+    `folder_id` is `null`, and the folder is visible as its label (and through
+    the retained folder record) instead.
+  - A domain inbox accepts no new custom folders afterwards
+    (`create_folders`, `rename_folders` and `delete_folders` are false).
+- **IMAP mail with legacy local tags.** The tags are preserved in the legacy
+  `labels` field. They are not canonical `label_ids`, are not in the label
+  catalogue, and cannot be applied or removed through the canonical Labels API.
+  The legacy PATCH `labels` field remains a local-tag compatibility interface;
+  it does not add canonical IMAP label support.
+
 ## 4. Messages
 
 ### One message schema for every inbox
@@ -341,7 +649,8 @@ type based on the route, inbox kind, or provider. See decisions **D109/D110**.
 
 The required core is `id`, `inbox_id`, `from`, `to`, `cc`, `subject`, `read`,
 `has_attachments`, `size_bytes`, `provider`, `message_transport`, `direction`,
-and `snippet`. `to` and `cc` are always arrays (`[]` when empty), never `null`.
+`snippet`, `folder_id`, and `label_ids`. `folder_id` is nullable; `label_ids`
+is always an array. `to` and `cc` are always arrays (`[]` when empty), never `null`.
 All other fields are optional; unavailable values are
 omitted, not replaced by invented values. A known boolean `false` is distinct
 from an absent/unknown boolean. Empty optional strings and arrays are omitted.
@@ -366,24 +675,25 @@ received/sent timestamps survive every projection. Unknown delivery `status`,
 `is_spam`, or `created_at` remain absent. `created_at` is not synthesized from
 receipt or indexing time; `indexed_at` can advance on a remote header refresh.
 
-`label_ids` is the authoritative membership array for the owning inbox's label
-catalogue, including system classifications such as Inbox, Sent, Spam and Trash.
-It is always present, can contain multiple IDs, and uses the same projection on
-every inbox kind and route. Fresh ordinary inbound mail has Inbox membership even
-when its underlying local placement is implicit. Mail filed elsewhere, outbound
-mail, Spam and Trash do not acquire Inbox membership merely by being in the inbox
-object. The legacy `labels` array remains the additive-name view only; new clients
-should read `label_ids` and filter with `label_id`.
+`folder_id` is the message's canonical location: one stable MailMoose folder id
+(`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null` when the message has
+no canonical folder. It is always present, and it uses the same projection on
+every inbox kind and route. A folder id is never a label id.
 
-Use catalogue IDs verbatim. Existing `tag:<Name>` and `folder:<id>` identities
-remain stable; their prefixes describe backing representation, **not** whether
-membership is exclusive. Gmail can carry several system and custom labels at
-once. Native domain tags and Outlook categories remain additive; IMAP labels and
-Outlook folder classifications are exclusive. Folders are a backend detail, not
-a separate contract agents must implement.
-The endpoint reference below lists the label routes. Filtering and membership
-semantics are described in this contract and in the served [`/agent`](/agent)
-guide.
+`label_ids` is the additive-label array for the owning inbox: `tag:Name` ids
+only — domain tags, Gmail user labels, Outlook categories. It is always
+present, can hold several ids, and is empty for an IMAP inbox, which has no
+canonical labels. System classifications are **not** in it any more; a system
+folder is reported by `folder_id`. The legacy `labels` array remains the
+additive-name view only; new clients should read `label_ids` and filter with
+`label_id`.
+
+Use catalogue ids verbatim. `tag:<Name>` identities are stable, and a folder
+is addressed with its own id, never as a label. See
+[§3b Folders and labels](#3b-folders-and-labels) for the per-provider rules,
+the capability surface and the Gmail folder projection. The endpoint reference
+below lists the label routes. Filtering semantics are described in this
+contract and in the served [`/agent`](/agent) guide.
 
 `snippet` is always a plain-text string, normalized to at most 200 Unicode
 characters. `"-"` means no usable preview is available: not yet generated,
@@ -418,10 +728,11 @@ body just to acknowledge an action.
 
 Messages can be filtered by label with `label` (legacy name) or `label_id`
 (catalogue id); repeated values AND together and both forms resolve identically
-on the inbox-scoped and account-wide routes. A folder-backed `label_id` requires
-an `inbox=` scope account-wide. Repeated filters AND together; `tag:<Name>` and
-a bare name are equivalent, and a `folder:<id>` filter is valid only for a folder
-in the scoped inbox.
+on the inbox-scoped and account-wide routes. Both filter **additive labels
+only**: `tag:<Name>` and a bare name are equivalent, and an IMAP inbox refuses
+a label filter because it has no canonical labels. A folder is not a label —
+scope one with `folder` instead of `label_id`, and a `folder:<id>` label id no
+longer exists.
 
 **Compatibility:** Clients that used list or thread responses to read local
 message bodies must now fetch a message detail. Clients that relied on empty
@@ -509,8 +820,9 @@ include_spam
 trashed
 ```
 
-`folder` scopes the listing to one folder: a folder id for a domain inbox, a
-folder path for a standalone inbox — the same rule the inbox-scoped route uses.
+`folder` scopes the listing to one canonical folder using the stable MailMoose
+ID returned by the Folders API. The ID also scopes an account-wide query to its
+owning inbox. Legacy standalone folder paths remain accepted for compatibility.
 On the account-wide route it applies to the inbox named by `inbox=`; without that
 scope it narrows the connected (standalone) inboxes by folder path and leaves the
 local store unfiltered.
@@ -572,7 +884,8 @@ Normalized message:
   "size_bytes": 2048,
   "is_spam": false,
   "labels": ["Invoices", "Unpaid"],
-  "label_ids": ["folder:fld_example_inbox", "tag:Invoices", "tag:Unpaid"]
+  "label_ids": ["tag:Invoices", "tag:Unpaid"],
+  "folder_id": "fld_example_inbox"
 }
 ```
 
@@ -588,7 +901,12 @@ receiver instead.
 
 ### Labels
 
-Use the inbox's **provider-aware catalogue**, including when it has no labels:
+Labels are **additive metadata** — a name attached to a message, independent of
+where the message sits. A message's location is its `folder_id`; see
+[§3b Folders and labels](#3b-folders-and-labels) for the full contract, the
+per-provider matrix and the capability surface.
+
+Use the inbox's **additive label catalogue**, including when it has no labels:
 
 ```http
 GET    /v1/inboxes/{id}/label-catalog
@@ -598,53 +916,52 @@ DELETE /v1/inboxes/{id}/label-catalog/{labelId}
 POST   /v1/inboxes/{id}/messages/{messageId}/labels?wait=true
 ```
 
-Catalogue entries expose `id`, `name`, `kind` (`tag` or `folder`), `membership`
-(`multiple` or `exclusive`), `source`, and `can_add`, `can_remove`, `can_rename`
-and `can_delete` capabilities. System entries also expose `role`, such as `inbox`,
-`sent`, `spam`, `trash` or `archive`; their rename/delete capabilities are false.
-Sent and remote Drafts are discoverable but read-only classification targets.
-Local drafts and outbox jobs have their own APIs and are not Message memberships.
-The catalogue's `capabilities` describes creation and edit support even when
-`items` is empty. A domain inbox can keep an empty named tag; Gmail/One own their
-provider labels, Outlook exposes categories and folder destinations, and raw
-IMAP uses folder-backed destinations. Labels are inbox-scoped; an account-wide
-name filter matches that name within each authorized inbox.
+Catalogue entries expose `id` (always `tag:Name`), `name`, `source`
+(`local` or `provider`) and the `can_add`, `can_remove`, `can_rename` and
+`can_delete` capabilities. `kind` and `membership` are retained for
+compatibility and are always `tag` and `multiple`: there is no exclusive label
+and no system classification in the catalogue any more. A system folder is
+discovered through `GET /v1/inboxes/{id}/folders` and reported on a message by
+`folder_id`. Local drafts and outbox jobs have their own APIs and are not
+message memberships.
+
+The catalogue's `capabilities` describes label creation and edit support even
+when `items` is empty. A domain inbox can keep an empty named tag; Gmail owns
+its user labels; Outlook exposes categories (created, but not renamed or
+deleted — creating one needs the `MailboxSettings.ReadWrite` grant); an IMAP
+inbox has no canonical labels and returns an empty catalogue. Labels are
+inbox-scoped; an account-wide name filter matches that name within each
+authorized inbox.
 
 Filter ordinary mailbox views with the same parameter on every backend:
 `GET /v1/inboxes/{id}/messages?label_id=<catalogue-id>` (or the corresponding
-search route). Repeated `label_id` filters AND together; multiple Gmail system
-memberships can be intersected. Only one exclusive classification may be
-requested. Inbox-scoped and account-wide list/search routes share resolution;
-account-wide `folder:<id>` filters still require `inbox=`.
+search route). Repeated `label_id` filters AND together. The filter matches
+additive labels only; a folder is scoped with `folder`, and an IMAP inbox
+refuses a label filter. Inbox-scoped and account-wide list/search routes share
+resolution.
 
 Apply a catalogue entry with `{"label_id":"tag:Invoices","operation":"add"}`;
 use `add` only where `can_add` is true and `remove` only where `can_remove` is
-true. This includes supported system classifications. Adding an exclusive label
-**moves** the message rather than adding an independent classification; removing
-one without a replacement is rejected. Applying Inbox, Spam or Trash to local
-mail updates placement and visibility state atomically. Additive labels are
-preserved. Gmail system actions preserve unrelated memberships and use Google's
-normal Inbox/Spam/Trash transitions. Label writes require Assistant or Owner and
-follow the normal queued-action / `?wait=true` convention.
-
-Existing `folder=`, folder endpoints and `/move` remain compatibility interfaces;
-their folder-only behaviour is unchanged. Agents do not need them to discover,
-filter or apply supported ordinary classifications. The web reader selects its
-labels using the same membership projection as API responses.
+true. A label is always additive: applying it never moves the message and
+never changes its folder, and removing it never changes its folder. To change
+a message's folder, use `POST /v1/inboxes/{id}/messages/{messageId}/move` with
+a folder id. A folder id passed as a label is refused. Label writes require
+Assistant or Owner and follow the normal queued-action / `?wait=true`
+convention. Label operations are unsupported on an IMAP inbox.
 
 A native additive tag is trimmed and internal runs of whitespace collapsed. It must be
 non-empty, at most 64 characters, and must not contain control characters, `/`
 or `\`. (The path separators are rejected so a label can be addressed by its own
 URL query parameter without path-encoding ambiguity.) An invalid label is
 rejected with a validation error. Provider-owned labels follow provider naming
-rules and can include hierarchical names; use returned catalogue IDs verbatim.
+rules and can include hierarchical names; use returned catalogue ids verbatim.
 
 ```http
 GET /v1/labels
 ```
 
 This is the legacy flat-name view, scoped to the key's authorized inboxes. It
-does not describe capabilities, empty labels or exclusive destinations.
+does not describe capabilities or empty labels.
 
 Legacy replace-set additive-label writes remain available through
 `PATCH /v1/messages/{id}`:
@@ -711,7 +1028,8 @@ limit
 Search operates only within the key's authorized inbox set. Both route forms
 accept `q`, `folder`, `label`, `label_id`, `from`, `to`, `subject`, `unread`,
 `has_attachment`, `before`, and `limit`; the account-wide form also accepts
-`inbox`. Omit `q` for a filter-only search. Use plain text for portable searches:
+`inbox`. `label` and `label_id` match additive labels only, and an IMAP inbox
+refuses both. Omit `q` for a filter-only search. Use plain text for portable searches:
 local mail uses FTS5 while connected mailboxes use their provider's search engine;
 advanced syntax, tokenization and searchable fields are not identical. There is
 no portable date-range filter; `before` is a continuation, never a timestamp.

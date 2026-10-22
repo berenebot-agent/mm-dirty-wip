@@ -8402,16 +8402,18 @@ function generateBearerSecret() {
   });
 }());
 
-// Folder management (shared mailbox sidebar). The "New folder" button opens a
-// dialog with a single name field; each custom folder's folder glyph opens a
-// manage dialog with Rename and Delete. The manage dialog's forms start with no
-// action and are pointed at the clicked folder's routes here, so one dialog
-// serves every folder on the page.
+// Folder and label management (shared mailbox sidebar). "New folder" and "New
+// label" open their own dialogs; each sidebar row's glyph opens the shared
+// manage dialog, whose forms start with no action and are pointed at the
+// clicked row's routes here, so one dialog serves every folder and label on
+// the page. A folder and a label are different things, so the dialog says
+// which one it is about to rename or delete.
 (function () {
   var sidebar = document.querySelector('[data-sidebar]');
   if (!sidebar) { return; }
   var inboxID = sidebar.getAttribute('data-inbox') || '';
-  var newDlg = document.getElementById('folder-new-dialog');
+  var folderNewDlg = document.getElementById('folder-new-dialog');
+  var labelNewDlg = document.getElementById('label-new-dialog');
   var manageDlg = document.getElementById('folder-manage-dialog');
 
   function wireClose(dlg) {
@@ -8420,31 +8422,42 @@ function generateBearerSecret() {
       btn.addEventListener('click', function () { dlg.close(); });
     });
   }
-  wireClose(newDlg);
+  wireClose(folderNewDlg);
+  wireClose(labelNewDlg);
   wireClose(manageDlg);
 
-  var newBtn = sidebar.querySelector('[data-folder-new]');
-  if (newBtn && newDlg && typeof newDlg.showModal === 'function') {
-    newBtn.addEventListener('click', function () {
-      var input = newDlg.querySelector('input[name=name], input[name=path]');
+  function wireNew(btn, dlg) {
+    if (!btn || !dlg || typeof dlg.showModal !== 'function') { return; }
+    btn.addEventListener('click', function () {
+      var input = dlg.querySelector('input[name=name], input[name=path]');
       if (input) { input.value = ''; }
-      newDlg.showModal();
+      dlg.showModal();
       if (input) { input.focus(); }
     });
   }
+  wireNew(sidebar.querySelector('[data-folder-new]'), folderNewDlg);
+  wireNew(sidebar.querySelector('[data-label-new]'), labelNewDlg);
 
   if (!manageDlg || typeof manageDlg.showModal !== 'function') { return; }
   sidebar.querySelectorAll('[data-folder-manage]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var id = btn.getAttribute('data-label-id') || btn.getAttribute('data-folder-id') || '';
+      var kind = btn.getAttribute('data-manage-kind') === 'folder' ? 'folder' : 'label';
+      var id = kind === 'folder' ? (btn.getAttribute('data-folder-id') || '') : (btn.getAttribute('data-label-id') || '');
       var name = btn.getAttribute('data-folder-name') || '';
-      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/labels/' + encodeURIComponent(id);
+      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/' + kind + 's/' + encodeURIComponent(id);
       var renameForm = manageDlg.querySelector('[data-folder-rename-form]');
       var deleteForm = manageDlg.querySelector('[data-folder-delete-form]');
       var input = manageDlg.querySelector('[data-folder-rename-input]');
+      var title = manageDlg.querySelector('#folder-manage-title');
+      var del = manageDlg.querySelector('[data-manage-delete]');
       if (renameForm) { renameForm.setAttribute('action', base + '/rename'); }
       if (deleteForm) { deleteForm.setAttribute('action', base + '/delete'); }
       if (input) { input.value = name; }
+      if (title) { title.textContent = kind === 'folder' ? 'Manage folder' : 'Manage label'; }
+      if (del) {
+        del.textContent = kind === 'folder' ? 'Delete folder' : 'Delete label';
+        del.setAttribute('data-confirm', kind === 'folder' ? 'Delete this folder? It must be empty.' : 'Delete this label? This will remove the label from its messages.');
+      }
       manageDlg.showModal();
       if (input) { input.focus(); input.select(); }
     });
