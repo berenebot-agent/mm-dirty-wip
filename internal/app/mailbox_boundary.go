@@ -35,6 +35,8 @@ func mapStoreError(err error) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, store.ErrInvalidCursor):
+		return model.NewMailboxError(model.ErrKindInvalid, "invalid cursor", false, err)
 	case errors.Is(err, store.ErrNotFound):
 		return model.NewMailboxError(model.ErrKindNotFound, "mailbox not found", false, err)
 	case errors.Is(err, store.ErrForbidden):

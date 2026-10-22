@@ -176,6 +176,9 @@ func decodeMap(v string) map[string]any {
 	return out
 }
 
+// ErrInvalidCursor reports a stale, unknown or malformed pagination position.
+var ErrInvalidCursor = errors.New("invalid cursor")
+
 var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
 var ErrSenderNotAllowed = errors.New("sender not allowed")
