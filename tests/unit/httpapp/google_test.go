@@ -95,6 +95,27 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
 		t.Fatalf("Gmail label should be additive and deduplicated: %d %s", catalog.Code, catalog.Body.String())
 	}
+	// A nonexistent Gmail label must agree with the cached listing and never
+	// leak the provider-specific messages.list error through the search API.
+	// This fixture deliberately returns a message even for an invalid label,
+	// so the test also verifies that the invalid query is not sent upstream.
+	key := adminKey(t, svc, u)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/search?q=Hello&folder=NoSuchFolder",
+		"/v1/search?inbox=" + box.ID + "&q=Hello&folder=NoSuchFolder",
+		"/v1/inboxes/" + box.ID + "/messages?folder=NoSuchFolder",
+	} {
+		rr := apiGet(t, srv.Handler(), path, key)
+		var env struct { Items []json.RawMessage `json:"items"` }
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &env) != nil || len(env.Items) != 0 {
+			t.Fatalf("unknown Google folder %s: %d %s", path, rr.Code, rr.Body.String())
+		}
+	}
+	valid := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/search?q=Hello&folder=INBOX", key)
+	var validEnv struct { Items []json.RawMessage `json:"items"` }
+	if valid.Code != http.StatusOK || json.Unmarshal(valid.Body.Bytes(), &validEnv) != nil || len(validEnv.Items) != 1 {
+		t.Fatalf("valid Google folder search must still reach provider: %d %s", valid.Code, valid.Body.String())
+	}
 	if _, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "ARCHIVE"); e != nil {
 		t.Fatal(e)
 	}
