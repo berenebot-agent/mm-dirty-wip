@@ -18,6 +18,9 @@ type labelFilter struct {
 	FolderID      string
 	Role          string
 	MembershipIDs []string
+	// ScopePaths preserves every provider-native membership selector for
+	// indexed thread aggregation, including intersected Gmail system labels.
+	ScopePaths []string
 }
 
 // labelFilterFromQuery reads the repeatable "label" and "label_id" parameters.
@@ -63,6 +66,7 @@ func (s *Server) labelFilterFromQuery(ctx context.Context, p model.Principal, bo
 				exclusive = target.ID
 			}
 			out.MembershipIDs = appendUniqueFold(out.MembershipIDs, target.ID)
+			out.ScopePaths = appendUniqueFold(out.ScopePaths, target.FolderPath)
 			if out.Scope == "" {
 				out.Scope, out.FolderID, out.Role = target.FolderPath, target.FolderID, target.Role
 				if box.Kind == model.InboxKindDomain {
