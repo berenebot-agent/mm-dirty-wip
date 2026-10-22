@@ -1315,11 +1315,11 @@ func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxI
 		where += ` AND EXISTS (SELECT 1 FROM inbox_remote_labels l WHERE l.account_id=? AND l.inbox_id=? AND l.remote_message_id=m.id AND l.label=?)`
 		args = append(args, accountID, inboxID, name)
 	}
-	query := `SELECT m.thread_key,m.inbox_id,MAX(COALESCE(m.subject,'')),COUNT(*),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(COALESCE(m.received_at,''))`+where+` GROUP BY m.thread_key,m.inbox_id`
+	query := `SELECT m.thread_key,m.inbox_id,MAX(COALESCE(m.subject,'')),COUNT(*),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(COALESCE(m.received_at,''))` + where + ` GROUP BY m.thread_key,m.inbox_id`
 	if strings.TrimSpace(beforeKey) != "" {
 		var latest sql.NullString
 		cursorArgs := append(append([]any{}, args...), beforeKey)
-		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))`+where+` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
+		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))` + where + ` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
 			return nil, err
 		}
 		if !latest.Valid {
