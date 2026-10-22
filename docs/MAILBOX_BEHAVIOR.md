@@ -227,6 +227,8 @@ External aliases are removed, so sending has one target shape per kind:
   metadata. List reads stay metadata-only.
 - **Threads and search:** `ListRemoteThreads`, `GetRemoteThread`, `SearchRemote`,
   `ListRemoteLabels`, `SetRemoteLabels` / `AddRemoteLabels` / `RemoveRemoteLabels`.
+  These low-level methods retain legacy IMAP data internally, but the public
+  message PATCH rejects IMAP `labels` writes; canonical IMAP labels are unsupported.
 - **Sending / copies:** `RemoteStandaloneSender.ResolveInboxSendingConfig` (the
   injected `StandaloneSenderResolver`), `RemoteHandoffPublisher` (append the
   frozen draft to the remote Drafts folder and verify),

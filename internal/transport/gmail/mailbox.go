@@ -34,11 +34,24 @@ func (c *Client) Labels(ctx context.Context, token string) ([]Label, error) {
 	return out.Labels, nil
 }
 
-// List returns one page of messages matching the optional query and label. page
-// is the opaque nextPageToken from a previous call. limit maps to maxResults and
-// is clamped to Gmail's maximum of 500.
+// List returns one page of messages matching the optional query and label.
+// It retains Gmail's default exclusion of Spam/Trash for compatibility.
 func (c *Client) List(ctx context.Context, token, query, labelID, page string, limit int) (MessagePage, error) {
+	return c.list(ctx, token, query, labelID, page, limit, false)
+}
+
+// ListIncludingSpamTrash includes Spam/Trash for complete mailbox indexing and
+// common mailbox searches, where both folders must remain discoverable.
+func (c *Client) ListIncludingSpamTrash(ctx context.Context, token, query, labelID, page string, limit int) (MessagePage, error) {
+	return c.list(ctx, token, query, labelID, page, limit, true)
+}
+
+// list handles pagination and clamps maxResults to Gmail's maximum of 500.
+func (c *Client) list(ctx context.Context, token, query, labelID, page string, limit int, includeSpamTrash bool) (MessagePage, error) {
 	q := url.Values{}
+	if includeSpamTrash {
+		q.Set("includeSpamTrash", "true")
+	}
 	if query != "" {
 		q.Set("q", query)
 	}

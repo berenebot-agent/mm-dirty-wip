@@ -13,8 +13,7 @@ import (
 // TestGoogleFolderScopeFollowsSingleFolderPrecedence proves a Gmail message
 // carrying several system labels belongs to exactly one folder view — Trash,
 // Spam, Drafts, Inbox, Sent — and that a message with no system label belongs
-// to the derived Archive view. A user label stays additive: membership alone
-// selects it.
+// to no folder. A user label stays additive and does not select a folder.
 func TestGoogleFolderScopeFollowsSingleFolderPrecedence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -43,11 +42,17 @@ func TestGoogleFolderScopeFollowsSingleFolderPrecedence(t *testing.T) {
 		{"m-sent", []string{"SENT"}},
 		{"m-archive", []string{"Label_1"}},
 	} {
-		if _, err := s.UpsertGoogleMessage(ctx, u.AccountID, box.ID, m.provider, "th-"+m.provider, m.labels, store.RemoteMessageInput{
+		rec, err := s.UpsertGoogleMessage(ctx, u.AccountID, box.ID, m.provider, "th-"+m.provider, m.labels, store.RemoteMessageInput{
 			RFCMessageID: "<" + m.provider + "@test>", Subject: m.provider, FromAddress: "sender@example.net",
 			ReceivedAt: &received, InternalDate: &received,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if m.provider == "m-inbox" || m.provider == "m-sent-inbox" {
+			if err := s.UpdateRemoteMessageFlags(ctx, u.AccountID, box.ID, rec.ID, true, false, false, false, nil); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	view := func(path string) []string {
@@ -109,8 +114,11 @@ func TestGoogleFolderScopeFollowsSingleFolderPrecedence(t *testing.T) {
 	if counts["ARCHIVE"][0] != 0 {
 		t.Fatalf("archive count = %v, want none", counts["ARCHIVE"])
 	}
-	if counts["INBOX"][0] != 2 {
-		t.Fatalf("inbox count = %v, want 2", counts["INBOX"])
+	if counts["INBOX"][0] != 2 || counts["INBOX"][1] != 0 {
+		t.Fatalf("inbox counts = %v, want 2 total and 0 unread", counts["INBOX"])
+	}
+	if counts["SPAM"][0] != 1 || counts["SPAM"][1] != 1 {
+		t.Fatalf("spam counts = %v, want 1 total and 1 unread", counts["SPAM"])
 	}
 	// The thread scope resolves the same single folder view.
 	threads, err := s.ListRemoteThreads(ctx, u.AccountID, box.ID, "INBOX", 50, "")

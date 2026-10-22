@@ -99,7 +99,7 @@ func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Princip
 	if m.Service.Store.IsOne(ctx, p.AccountID, inbox) {
 		pageSize = 10
 	}
-	page, e := client.List(ctx, t, strings.TrimSpace(query), label, cursor.Page, pageSize)
+	page, e := client.ListIncludingSpamTrash(ctx, t, strings.TrimSpace(query), label, cursor.Page, pageSize)
 	if e != nil {
 		return RemoteSearchResult{}, e
 	}

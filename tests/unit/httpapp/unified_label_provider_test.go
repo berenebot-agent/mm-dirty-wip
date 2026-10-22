@@ -160,6 +160,24 @@ func TestUnifiedLabelCatalogAcrossBackends(t *testing.T) {
 	}
 	assertUnsupportedOp(t, "apply label", post("/v1/inboxes/"+box.ID+"/messages/"+messageID+"/labels?wait=true", `{"name":"Work","operation":"add"}`))
 	assertUnsupportedOp(t, "create label", post("/v1/inboxes/"+box.ID+"/label-catalog", `{"name":"Work"}`))
+	// The Beta 2 message PATCH route must no longer write hidden IMAP labels,
+	// even when combined with an otherwise valid read-state change.
+	for _, body := range []string{`{"labels":["NewTag"]}`, `{"labels":[],"read":true}`} {
+		req := httptest.NewRequest(http.MethodPatch, "/v1/messages/"+messageID+"?wait=true", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		assertUnsupportedOp(t, "legacy IMAP PATCH labels", rr)
+	}
+	preserved := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages", key)
+	page.Items = nil
+	if preserved.Code != http.StatusOK || json.Unmarshal(preserved.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+		t.Fatalf("IMAP tags after rejected PATCH: %d %s", preserved.Code, preserved.Body.String())
+	}
+	if !stringSliceContains(page.Items[0].Labels, "LegacyTag") || len(page.Items[0].LabelIDs) != 0 {
+		t.Fatalf("legacy IMAP tag changed by rejected PATCH: %+v", page.Items[0])
+	}
 	rename := httptest.NewRequest(http.MethodPatch, "/v1/inboxes/"+box.ID+"/label-catalog/tag:Work", strings.NewReader(`{"name":"Other"}`))
 	rename.Header.Set("Authorization", "Bearer "+key)
 	rename.Header.Set("Content-Type", "application/json")

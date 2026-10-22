@@ -375,7 +375,7 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 		if one && c.BackfillSnapshot != "" {
 			e = json.Unmarshal([]byte(c.BackfillSnapshot), &p)
 		} else {
-			p, e = client.List(ctx, t, query, "", c.BackfillPage, limit)
+			p, e = client.ListIncludingSpamTrash(ctx, t, query, "", c.BackfillPage, limit)
 			if e == nil && one {
 				b, err := json.Marshal(p)
 				if err != nil {

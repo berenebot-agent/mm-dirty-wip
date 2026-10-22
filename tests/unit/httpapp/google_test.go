@@ -57,6 +57,13 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/history"):
 			json.NewEncoder(w).Encode(map[string]any{"historyId": history, "history": []any{map[string]any{"id": history, "labelsRemoved": []any{map[string]any{"message": map[string]string{"id": "a"}}}}}})
 		case strings.HasSuffix(r.URL.Path, "/messages"):
+			// Gmail excludes Spam and Trash unless explicitly requested. Both
+			// backfill and live search must request the complete mailbox.
+			if r.URL.Query().Get("includeSpamTrash") != "true" {
+				t.Errorf("Gmail message listing omitted includeSpamTrash=true: %s", r.URL)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			w.Write([]byte(`{"messages":[{"id":"a","threadId":"th"}]}`))
 		case strings.HasSuffix(r.URL.Path, "/messages/a/modify"):
 			var v struct {
