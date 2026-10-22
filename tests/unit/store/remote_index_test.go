@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"context"
 	"testing"
 	"time"
@@ -558,13 +559,11 @@ func TestRemoteMessagesKeysetPaginationNoSkip(t *testing.T) {
 	if len(seen) != 6 {
 		t.Fatalf("pagination returned %d distinct messages, want 6 (gaps=%v)", len(seen), seen)
 	}
-	// An unknown cursor is an empty result, never a silent restart from newest.
+	// A missing cursor must be rejected so a client can recover explicitly.
+	// Silently returning an empty page hides a lost position.
 	extra, err := st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Limit: 2, Before: "rm_does_not_exist"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(extra) != 0 {
-		t.Fatalf("unknown cursor returned %d rows, want 0", len(extra))
+	if !errors.Is(err, store.ErrInvalidCursor) || len(extra) != 0 {
+		t.Fatalf("unknown cursor returned %d rows, err=%v; want invalid cursor", len(extra), err)
 	}
 }
 
