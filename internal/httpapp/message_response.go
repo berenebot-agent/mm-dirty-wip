@@ -241,7 +241,7 @@ func labelIDsFor(m model.Message, id inboxIdentity) []string {
 			case model.FolderRoleInbox:
 				member = m.Direction == "inbound" && !m.Spam && m.DeletedAt == nil && (m.MailboxID == "" || m.MailboxID == f.ID)
 			case model.FolderRoleSent:
-				member = m.Direction == "outbound" && m.DeletedAt == nil && !m.Spam
+				member = m.Direction == "outbound" && m.Status == "sent" && m.DeletedAt == nil && !m.Spam
 			case model.FolderRoleSpam:
 				member = m.Spam && m.DeletedAt == nil
 			case model.FolderRoleTrash:
