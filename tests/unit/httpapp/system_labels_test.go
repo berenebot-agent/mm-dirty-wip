@@ -259,11 +259,16 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 	if sentLabel == "" {
 		t.Fatal("Sent label not advertised")
 	}
-	for _, tc := range []struct{ id string; hasSent bool }{
+	for _, tc := range []struct {
+		id      string
+		hasSent bool
+	}{
 		{pending.ID, false}, {failed.ID, false}, {sent.ID, true},
 	} {
 		res := apiGet(t, h, "/v1/messages/"+tc.id, key)
-		var msg struct{ LabelIDs []string `json:"label_ids"` }
+		var msg struct {
+			LabelIDs []string `json:"label_ids"`
+		}
 		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &msg) != nil {
 			t.Fatalf("message detail: %d %s", res.Code, res.Body.String())
 		}
@@ -278,7 +283,11 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 		"/v1/inboxes/" + box.ID + "/threads?label_id=",
 	} {
 		res := apiGet(t, h, path+url.QueryEscape(sentLabel), key)
-		var page struct{ Items []struct{ ID string `json:"id"` } `json:"items"` }
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
 		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
 			t.Fatalf("%s: %d %s", path, res.Code, res.Body.String())
 		}
@@ -351,14 +360,20 @@ func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
 	// requiring a folder-backed scope, including a resumable merged cursor.
 	res := apiGet(t, h, "/v1/threads?label_id=tag:Selected&limit=1", key)
 	var first struct {
-		Items []struct{ ID string `json:"id"` } `json:"items"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
 		NextCursor string `json:"next_cursor"`
 	}
 	if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &first) != nil || len(first.Items) != 1 || first.NextCursor == "" {
 		t.Fatalf("account-wide first thread page: %d %s", res.Code, res.Body.String())
 	}
 	next := apiGet(t, h, "/v1/threads?label_id=tag:Selected&limit=1&before="+url.QueryEscape(first.NextCursor), key)
-	var second struct{ Items []struct{ ID string `json:"id"` } `json:"items"` }
+	var second struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
 	if next.Code != 200 || json.Unmarshal(next.Body.Bytes(), &second) != nil || len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
 		t.Fatalf("account-wide second thread page: %d %s", next.Code, next.Body.String())
 	}
@@ -379,7 +394,9 @@ func TestIMAPLabelFilteredThreadsAreExclusiveAndPaged(t *testing.T) {
 	refreshRemote(t, h, box.ID, key)
 	cat := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
 	var catalog struct {
-		Items []struct{ ID, Role, Name string } `json:"items"`
+		Items []struct {
+			ID, Role, Name string
+		} `json:"items"`
 	}
 	if cat.Code != 200 || json.Unmarshal(cat.Body.Bytes(), &catalog) != nil {
 		t.Fatalf("catalog: %d %s", cat.Code, cat.Body.String())
@@ -396,14 +413,20 @@ func TestIMAPLabelFilteredThreadsAreExclusiveAndPaged(t *testing.T) {
 	if inboxLabel == "" || projectLabel == "" {
 		t.Fatalf("missing IMAP classification: %s", cat.Body.String())
 	}
-	for _, test := range []struct{ label string; count int }{{inboxLabel, 2}, {projectLabel, 1}} {
+	for _, test := range []struct {
+		label string
+		count int
+	}{{inboxLabel, 2}, {projectLabel, 1}} {
 		seen := map[string]bool{}
 		before := ""
 		for i := 0; i < test.count; i++ {
 			query := "/v1/inboxes/" + box.ID + "/threads?label_id=" + url.QueryEscape(test.label) + "&limit=1" + before
 			res := apiGet(t, h, query, key)
 			var page struct {
-				Items []struct{ ID string `json:"id"`; MessageCount int `json:"message_count"` } `json:"items"`
+				Items []struct {
+					ID           string `json:"id"`
+					MessageCount int    `json:"message_count"`
+				} `json:"items"`
 				NextCursor string `json:"next_cursor"`
 			}
 			if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].MessageCount != 1 || seen[page.Items[0].ID] {
