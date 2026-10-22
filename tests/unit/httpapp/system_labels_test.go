@@ -291,3 +291,134 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 		}
 	}
 }
+
+
+func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	key := adminKey(t, svc, u)
+	inbox, err := svc.Store.GetSystemFolder(ctx, p.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := seedInbound(t, svc, box, "threads-label-alpha", "<threads-label-alpha@test>", "Alpha", "body")
+	b := seedInbound(t, svc, box, "threads-label-bravo", "<threads-label-bravo@test>", "Bravo", "body")
+	_ = seedInbound(t, svc, box, "threads-label-other", "<threads-label-other@test>", "Other", "body")
+	for _, id := range []string{a.ID, b.ID} {
+		if _, err := svc.Store.ReplaceMessageLabels(ctx, p, id, []string{"Selected"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filters := "label_id=tag:Selected&label_id=" + url.QueryEscape("folder:"+inbox.ID)
+	for _, prefix := range []string{
+		"/v1/inboxes/" + box.ID + "/threads?",
+		"/v1/threads?inbox=" + box.ID + "&",
+	} {
+		seen := map[string]bool{}
+		before := ""
+		for pageNo := 0; pageNo < 3; pageNo++ {
+			endpoint := prefix + filters + "&limit=1" + before
+			res := apiGet(t, h, endpoint, key)
+			var page struct {
+				Items []struct {
+					ID           string `json:"id"`
+					MessageCount int    `json:"message_count"`
+				} `json:"items"`
+				NextCursor string `json:"next_cursor"`
+			}
+			if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil {
+				t.Fatalf("%s: %d %s", endpoint, res.Code, res.Body.String())
+			}
+			if len(page.Items) == 0 {
+				break
+			}
+			if len(page.Items) != 1 || page.Items[0].MessageCount != 1 || seen[page.Items[0].ID] {
+				t.Fatalf("filtered thread count, cursor or duplicate: %s", res.Body.String())
+			}
+			seen[page.Items[0].ID] = true
+			if page.NextCursor == "" {
+				break
+			}
+			before = "&before=" + url.QueryEscape(page.NextCursor)
+		}
+		if len(seen) != 2 || !seen[a.ThreadID] || !seen[b.ThreadID] {
+			t.Fatalf("%s: filtered threads = %v", prefix, seen)
+		}
+	}
+	// Account-wide tag filters use the same matching/counting logic without
+	// requiring a folder-backed scope, including a resumable merged cursor.
+	res := apiGet(t, h, "/v1/threads?label_id=tag:Selected&limit=1", key)
+	var first struct {
+		Items []struct{ ID string `json:"id"` } `json:"items"`
+		NextCursor string `json:"next_cursor"`
+	}
+	if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &first) != nil || len(first.Items) != 1 || first.NextCursor == "" {
+		t.Fatalf("account-wide first thread page: %d %s", res.Code, res.Body.String())
+	}
+	next := apiGet(t, h, "/v1/threads?label_id=tag:Selected&limit=1&before="+url.QueryEscape(first.NextCursor), key)
+	var second struct{ Items []struct{ ID string `json:"id"` } `json:"items"` }
+	if next.Code != 200 || json.Unmarshal(next.Body.Bytes(), &second) != nil || len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("account-wide second thread page: %d %s", next.Code, next.Body.String())
+	}
+}
+
+func TestIMAPLabelFilteredThreadsAreExclusiveAndPaged(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box, fake := standaloneFixture(t)
+	fake.folders["Projects"] = 150
+	for _, record := range []struct{ folder, mid, subject string }{
+		{"INBOX", "<thread-imap-a@test>", "Thread A"},
+		{"INBOX", "<thread-imap-b@test>", "Thread B"},
+		{"Projects", "<thread-imap-project@test>", "Project Thread"},
+	} {
+		fake.add(record.folder, "From: a@b.test\r\nSubject: "+record.subject+"\r\nMessage-ID: "+record.mid+"\r\n\r\nbody", record.mid, record.subject)
+	}
+	key := adminKey(t, svc, u)
+	refreshRemote(t, h, box.ID, key)
+	cat := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	var catalog struct {
+		Items []struct{ ID, Role, Name string } `json:"items"`
+	}
+	if cat.Code != 200 || json.Unmarshal(cat.Body.Bytes(), &catalog) != nil {
+		t.Fatalf("catalog: %d %s", cat.Code, cat.Body.String())
+	}
+	var inboxLabel, projectLabel string
+	for _, item := range catalog.Items {
+		if item.Role == model.FolderRoleInbox {
+			inboxLabel = item.ID
+		}
+		if item.Name == "Projects" {
+			projectLabel = item.ID
+		}
+	}
+	if inboxLabel == "" || projectLabel == "" {
+		t.Fatalf("missing IMAP classification: %s", cat.Body.String())
+	}
+	for _, test := range []struct{ label string; count int }{{inboxLabel, 2}, {projectLabel, 1}} {
+		seen := map[string]bool{}
+		before := ""
+		for i := 0; i < test.count; i++ {
+			query := "/v1/inboxes/" + box.ID + "/threads?label_id=" + url.QueryEscape(test.label) + "&limit=1" + before
+			res := apiGet(t, h, query, key)
+			var page struct {
+				Items []struct{ ID string `json:"id"`; MessageCount int `json:"message_count"` } `json:"items"`
+				NextCursor string `json:"next_cursor"`
+			}
+			if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].MessageCount != 1 || seen[page.Items[0].ID] {
+				t.Fatalf("IMAP thread filter %s: %d %s", query, res.Code, res.Body.String())
+			}
+			seen[page.Items[0].ID] = true
+			if i < test.count-1 {
+				if page.NextCursor == "" {
+					t.Fatalf("IMAP thread cursor missing: %s", res.Body.String())
+				}
+				before = "&before=" + url.QueryEscape(page.NextCursor)
+			}
+		}
+		if len(seen) != test.count {
+			t.Fatalf("IMAP distinct thread count = %d, want %d", len(seen), test.count)
+		}
+	}
+}
