@@ -219,6 +219,11 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 			return nil
 		}
 		if in.Kind == "patch" {
+			// Legacy IMAP tags are retained for read compatibility, but are no
+			// longer writable. Check before read/spam changes to avoid partial PATCH.
+			if in.Labels != nil && !w.remote.IsGoogle(ctx, p.AccountID, box.ID) && !w.remote.IsMicrosoft(ctx, p.AccountID, box.ID) {
+				return model.NewMailboxError(model.ErrKindUnsupported, "IMAP does not support labels; use folders", false, nil)
+			}
 			if in.Read != nil {
 				if _, err = w.remote.SetRemoteRead(ctx, p, box.ID, a.MessageID, *in.Read); err != nil {
 					return err
@@ -404,7 +409,8 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 	if !p.CanAssist(inboxID) {
 		return store.MessageAction{}, store.ErrForbidden
 	}
-	if _, err := s.Store.GetInbox(ctx, p, inboxID); err != nil {
+	box, err := s.Store.GetInbox(ctx, p, inboxID)
+	if err != nil {
 		return store.MessageAction{}, err
 	}
 	m, err := s.Store.GetMessage(ctx, p, messageID)
@@ -457,6 +463,10 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 			return store.MessageAction{}, store.ErrConflict
 		}
 	case "patch":
+		if in.Labels != nil && box.Kind == model.InboxKindStandalone &&
+			!s.Store.IsGoogle(ctx, p.AccountID, inboxID) && !s.Store.IsMicrosoft(ctx, p.AccountID, inboxID) {
+			return store.MessageAction{}, model.NewMailboxError(model.ErrKindUnsupported, "IMAP does not support labels; use folders", false, nil)
+		}
 		if in.Read == nil && in.Spam == nil && in.Labels == nil {
 			return store.MessageAction{}, store.ErrConflict
 		}
