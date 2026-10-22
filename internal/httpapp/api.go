@@ -1228,7 +1228,7 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, t := range threads {
-				items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
+				items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, UnreadCount: t.UnreadCount, LastMessageAt: t.LastMessageAt})
 			}
 		}
 		completeness = s.remoteIndexCompleteness(r.Context(), p.AccountID, inbox)
@@ -1273,7 +1273,13 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	}
 	subject := msgs[len(msgs)-1].Subject
 	_ = remote
-	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "messages": s.messageResponses(r, msgs, false)})
+	unread := 0
+	for _, m := range msgs {
+		if !m.Read {
+			unread++
+		}
+	}
+	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "unread_count": unread, "messages": s.messageResponses(r, msgs, false)})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
