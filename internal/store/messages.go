@@ -1472,7 +1472,7 @@ func spamClause(alias string, spamOnly, includeSpam bool) string {
 //
 //   - scoped with id="": the implicit Inbox only (mailbox_id IS NULL).
 //   - scoped with id set: exactly that folder id, plus implicit Inbox members
-//     when the id names the inbox\x27s system Inbox folder.
+//     when the id names the inbox's system Inbox folder.
 //   - unscoped with id="": no restriction (every folder), the pre-folder default.
 //   - unscoped with id set: mailbox_id = id (an extra restriction on any read).
 //
@@ -1488,7 +1488,7 @@ func folderClause(alias, id, role string, scoped bool) string {
 		// An explicit Inbox folder id also represents the default NULL bucket.
 		// The correlated folder lookup ensures an account-wide filter never pulls
 		// implicit Inbox mail from a different inbox. Other folders remain exact.
-		return " AND (" + prefix + "mailbox_id=? OR (" + prefix + "mailbox_id IS NULL AND EXISTS (SELECT 1 FROM inbox_folders f WHERE f.id=? AND f.inbox_id=" + prefix + "inbox_id AND f.role=\x27inbox\x27)))"
+		return " AND (" + prefix + "mailbox_id=? OR (" + prefix + "mailbox_id IS NULL AND " + prefix + "direction='inbound' AND EXISTS (SELECT 1 FROM inbox_folders f WHERE f.id=? AND f.inbox_id=" + prefix + "inbox_id AND f.role='inbox')))"
 	}
 	if scoped {
 		if role != "" {
