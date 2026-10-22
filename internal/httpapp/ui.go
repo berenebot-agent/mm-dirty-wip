@@ -700,11 +700,11 @@ type pageData struct {
 	SendingPausedURL      string
 	// InboxOpenID, when set, is the inbox whose edit dialog the dashboard should
 	// reopen on load. InboxOpenTab selects the section.
-	InboxOpenID        string
-	InboxOpenTab       string
-	InboxOpenAlias     string
-	Inboxes            []model.Inbox
-	Messages           []model.Message
+	InboxOpenID    string
+	InboxOpenTab   string
+	InboxOpenAlias string
+	Inboxes        []model.Inbox
+	Messages       []model.Message
 	// Delivery attempts without an available message are audit events, not mail.
 	UnlinkedDeliveries []store.DomainLogEntry
 	Credentials        []credentialView

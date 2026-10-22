@@ -21,28 +21,45 @@ func TestListingCursorsFailClosed(t *testing.T) {
 		t.Fatalf("first page: %d %s", first.Code, first.Body.String())
 	}
 	var page struct {
-		Items []struct{ ID string `json:"id"` } `json:"items"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
 		NextCursor string `json:"next_cursor"`
 	}
-	if err := json.Unmarshal(first.Body.Bytes(), &page); err != nil { t.Fatal(err) }
-	if len(page.Items) != 1 || page.NextCursor == "" { t.Fatalf("no cursor: %s", first.Body.String()) }
+	if err := json.Unmarshal(first.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.NextCursor == "" {
+		t.Fatalf("no cursor: %s", first.Body.String())
+	}
 	next := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?limit=1&before="+url.QueryEscape(page.NextCursor), key)
-	if next.Code != http.StatusOK { t.Fatalf("valid cursor: %d %s", next.Code, next.Body.String()) }
-	var second struct { Items []struct{ ID string `json:"id"` } `json:"items"` }
-	if err := json.Unmarshal(next.Body.Bytes(), &second); err != nil { t.Fatal(err) }
+	if next.Code != http.StatusOK {
+		t.Fatalf("valid cursor: %d %s", next.Code, next.Body.String())
+	}
+	var second struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(next.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
 	if len(second.Items) != 1 || second.Items[0].ID == page.Items[0].ID {
 		t.Fatalf("pagination did not advance: %s -> %s", first.Body.String(), next.Body.String())
 	}
 	paths := []string{
-		"/v1/messages?inbox="+box.ID,
-		"/v1/inboxes/"+box.ID+"/messages",
-		"/v1/threads?inbox="+box.ID,
-		"/v1/inboxes/"+box.ID+"/threads",
-		"/v1/search?inbox="+box.ID+"&q=cursor",
-		"/v1/inboxes/"+box.ID+"/search?q=cursor",
+		"/v1/messages?inbox=" + box.ID,
+		"/v1/inboxes/" + box.ID + "/messages",
+		"/v1/threads?inbox=" + box.ID,
+		"/v1/inboxes/" + box.ID + "/threads",
+		"/v1/search?inbox=" + box.ID + "&q=cursor",
+		"/v1/inboxes/" + box.ID + "/search?q=cursor",
 	}
 	for _, path := range paths {
-		sep := "?"; if strings.Contains(path, "?") { sep = "&" }
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
 		for _, bad := range []string{"abc", "msg_06zzzzzzzzzzzzzzzzzzzzzzzzzz"} {
 			res := apiGet(t, h, path+sep+"before="+url.QueryEscape(bad), key)
 			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "invalid cursor") {
