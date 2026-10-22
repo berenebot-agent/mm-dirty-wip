@@ -1434,6 +1434,57 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 	return out, rows.Err()
 }
 
+// ListThreadsFilteredBefore groups only messages matching the same predicates
+// as message listing/search. Counts, ordering and the cursor all use matching
+// messages, so an older non-matching message never creates a duplicate thread.
+func (s *Store) ListThreadsFilteredBefore(ctx context.Context, p model.Principal, f MessageFilter, limit int, beforeID string) ([]model.Thread, error) {
+	f.Before = ""
+	f.Limit = 0
+	where, args, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT t.id,t.inbox_id,t.subject,COUNT(m.id),MAX(m.created_at)
+FROM messages m JOIN threads t ON t.id=m.thread_id
+WHERE m.account_id=?` + where + ` GROUP BY t.id`
+	all := append([]any{p.AccountID}, args...)
+	if strings.TrimSpace(beforeID) != "" {
+		cursorSQL := `SELECT MAX(m.created_at) FROM messages m WHERE m.account_id=? AND m.thread_id=?` + where
+		cursorArgs := append([]any{p.AccountID, beforeID}, args...)
+		var latest sql.NullString
+		if err := s.read.QueryRowContext(ctx, cursorSQL, cursorArgs...).Scan(&latest); err != nil {
+			return nil, err
+		}
+		if !latest.Valid {
+			return []model.Thread{}, nil
+		}
+		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		all = append(all, latest.String, latest.String, beforeID)
+	}
+	q += ` ORDER BY MAX(m.created_at) DESC,t.id DESC`
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	q += ` LIMIT ?`
+	all = append(all, limit)
+	rows, err := s.read.QueryContext(ctx, q, all...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Thread{}
+	for rows.Next() {
+		var th model.Thread
+		var latest string
+		if err := rows.Scan(&th.ID, &th.InboxID, &th.Subject, &th.MessageCount, &latest); err != nil {
+			return nil, err
+		}
+		th.LastMessageAt = parseTime(latest)
+		out = append(out, th)
+	}
+	return out, rows.Err()
+}
+
 // trashClause returns the SQL fragment that applies Trash visibility. The
 // ordinary read path (trashed=false) excludes trashed messages; the Trash view
 // (trashed=true) selects only them. alias is the messages table alias.
