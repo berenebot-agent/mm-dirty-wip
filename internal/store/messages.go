@@ -434,6 +434,9 @@ type MessageFilter struct {
 	// Trashed selects the Trash view: only messages with deleted_at set. The
 	// default (false) excludes trashed messages from ordinary reads.
 	Trashed bool
+	// SentOnly restricts outbound membership to mail accepted by the provider.
+	// A queued or failed outbound message is not in the Sent classification.
+	SentOnly bool
 	// MailboxID restricts results to one folder within the inbox. An empty value
 	// (with FolderScoped false) matches any folder, preserving the pre-folder
 	// behaviour for callers that do not select a folder explicitly. The system
@@ -496,6 +499,9 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 	if f.Direction != "" {
 		q += ` AND m.direction=?`
 		args = append(args, f.Direction)
+	}
+	if f.SentOnly {
+		q += ` AND m.direction='outbound' AND m.status='sent'`
 	}
 	if f.From != "" {
 		q += ` AND m.from_address LIKE ?`
@@ -1639,6 +1645,9 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	sqlq += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
 	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
+	if f.SentOnly {
+		sqlq += ` AND m.direction='outbound' AND m.status='sent'`
+	}
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden
