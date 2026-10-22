@@ -20,6 +20,9 @@ All notable changes to MailMoose are documented here. This project follows
 - A Remote MX domain can now be given a per-domain authentication enforcement
   policy (moderate or hard) like a Direct MX domain, instead of always grading
   the receiver's evidence at moderate. The default is unchanged.
+- The Receiving dialog now shows the account Remote MX receiver's status beside
+  its connection, so a domain can be checked against the receiver it actually
+  talks to.
 
 - The provider guide and the self-hosting guide now say plainly that a Direct MX
   domain receives no mail until the installation's receiver is configured, and
@@ -51,6 +54,11 @@ All notable changes to MailMoose are documented here. This project follows
   Direct MX receiver's settings.
 - The Direct MX panel now names both sides of the instruction — the domain whose
   MX records to publish and the receiver hostname to point them at.
+
+- Connected mailbox search on an unknown folder now returns an empty page, like
+  the connected message listing, instead of passing the nonexistent folder to
+  the provider. Gmail in particular would otherwise surface its own
+  invalid-label error to API clients.
 
 - Domain and connected inbox listings now share message/thread/search handlers,
   filters and `before=<next_cursor>` pagination. Single-inbox thread/search
