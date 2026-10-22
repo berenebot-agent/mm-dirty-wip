@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -540,6 +541,16 @@ func (s *Store) DeleteFolder(ctx context.Context, p model.Principal, inboxID, fo
 // returns the current message and no event. It returns a message.folder_changed
 // event carrying the old and new folder ids.
 func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string) (model.Message, *model.Event, error) {
+	return s.moveMessageToFolder(ctx, p, messageID, destFolderID, false)
+}
+
+// ClassifyMessage applies a system classification and its visibility state atomically.
+// The compatibility folder-move API retains its original folder-only behaviour.
+func (s *Store) ClassifyMessage(ctx context.Context, p model.Principal, messageID, destFolderID string) (model.Message, *model.Event, error) {
+	return s.moveMessageToFolder(ctx, p, messageID, destFolderID, true)
+}
+
+func (s *Store) moveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string, classify bool) (model.Message, *model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -557,6 +568,7 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 	}
 	dest := strings.TrimSpace(destFolderID)
 	destPath := ""
+	role := model.FolderRoleInbox
 	if dest != "" {
 		folder, ferr := scanFolder(tx.QueryRowContext(ctx, `SELECT `+folderColumns+` FROM inbox_folders WHERE inbox_id=? AND id=?`, m.InboxID, dest))
 		if ferr == sql.ErrNoRows {
@@ -569,9 +581,28 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 			return model.Message{}, nil, fmt.Errorf("%w: folder is not selectable", ErrConflict)
 		}
 		destPath = folder.Path
+		role = folder.Role
 	}
 	oldID := m.MailboxID
-	if oldID == dest {
+	spam, deleted := m.Spam, m.DeletedAt
+	if classify {
+		switch role {
+		case model.FolderRoleInbox:
+			spam, deleted = false, nil
+		case model.FolderRoleArchive:
+			spam, deleted = false, nil
+		case model.FolderRoleSpam:
+			spam, deleted = true, nil
+		case model.FolderRoleTrash:
+			if deleted == nil {
+				now := time.Now().UTC()
+				deleted = &now
+			}
+		default:
+			return model.Message{}, nil, ErrConflict
+		}
+	}
+	if oldID == dest && spam == m.Spam && deleted == m.DeletedAt {
 		if err = tx.Commit(); err != nil {
 			return model.Message{}, nil, err
 		}
@@ -581,7 +612,7 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 	if dest != "" {
 		destArg = dest
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET mailbox_id=? WHERE id=? AND account_id=?`, destArg, messageID, p.AccountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET mailbox_id=?,is_spam=?,deleted_at=? WHERE id=? AND account_id=?`, destArg, spam, nullTimePtr(deleted), messageID, p.AccountID); err != nil {
 		return model.Message{}, nil, err
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageFolderChanged, messageID, map[string]any{
@@ -596,6 +627,7 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 	}
 	m.MailboxID = dest
 	m.FolderPath = destPath
+	m.Spam, m.DeletedAt = spam, deleted
 	return m, &ev, nil
 }
 

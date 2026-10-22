@@ -58,7 +58,7 @@ func queuedNotice(action string, count int, dest string) string {
 // input: read/unread/spam/labels arrive as a "patch" with the specific field
 // set, so the display label is derived from the field rather than the kind.
 func actionLabel(in store.MessageActionInput) string {
-	if in.Kind == "label" {
+	if in.Kind == "label" || in.Kind == "classify" {
 		return "labels"
 	}
 	if in.Kind == "patch" {
@@ -318,7 +318,7 @@ func (s *Server) pendingMessageOverlay(r *http.Request, data *pageData) {
 			if a.Input.Labels != nil {
 				m.Labels = *a.Input.Labels
 			}
-			if a.Input.Kind == "delete" || a.Input.Kind == "purge" || a.Input.Kind == "move" || a.Input.Kind == "restore" || a.Input.Spam != nil {
+			if a.Input.Kind == "delete" || a.Input.Kind == "purge" || a.Input.Kind == "move" || a.Input.Kind == "classify" || a.Input.Kind == "restore" || a.Input.Spam != nil {
 				data.Messages = append(data.Messages[:j], data.Messages[j+1:]...)
 				j--
 			}

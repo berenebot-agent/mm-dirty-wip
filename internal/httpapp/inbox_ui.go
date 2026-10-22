@@ -351,7 +351,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
 		UnifiedLabels: func() []mailLabel {
 			labels, _ := s.mailboxLabels(r.Context(), p, box)
-			return labels
+			return sidebarLabels(labels)
 		}(),
 		Notice: r.URL.Query().Get("notice"),
 	})
@@ -407,7 +407,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
 		UnifiedLabels: func() []mailLabel {
 			labels, _ := s.mailboxLabels(r.Context(), p, box)
-			return labels
+			return sidebarLabels(labels)
 		}(),
 		Notice: r.URL.Query().Get("notice"),
 	})
@@ -756,7 +756,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		CurrentPageBefore:          before,
 		Folder:                     folder,
 		Folders:                    folderSidebar,
-		UnifiedLabels:              unifiedLabels,
+		UnifiedLabels:              sidebarLabels(unifiedLabels),
 		PagerURL:                   pagerURL,
 		TotalCount:                 totalCount,
 		Labels:                     inboxLabels,

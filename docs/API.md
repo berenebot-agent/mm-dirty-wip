@@ -366,12 +366,21 @@ received/sent timestamps survive every projection. Unknown delivery `status`,
 `is_spam`, or `created_at` remain absent. `created_at` is not synthesized from
 receipt or indexing time; `indexed_at` can advance on a remote header refresh.
 
-`label_ids` is the canonical unified label membership for the owning inbox's
-label catalogue: additive labels are `tag:<Name>` and the single folder-backed
-label is `folder:<id>`. It is always present and `[]` when the message carries no
-label, and it is the same projection on every inbox kind and route. The legacy
-`labels` array remains the additive-name view only (folder-backed labels are
-absent from it); new clients should read `label_ids` and filter with `label_id`.
+`label_ids` is the authoritative membership array for the owning inbox's label
+catalogue, including system classifications such as Inbox, Sent, Spam and Trash.
+It is always present, can contain multiple IDs, and uses the same projection on
+every inbox kind and route. Fresh ordinary inbound mail has Inbox membership even
+when its underlying local placement is implicit. Mail filed elsewhere, outbound
+mail, Spam and Trash do not acquire Inbox membership merely by being in the inbox
+object. The legacy `labels` array remains the additive-name view only; new clients
+should read `label_ids` and filter with `label_id`.
+
+Use catalogue IDs verbatim. Existing `tag:<Name>` and `folder:<id>` identities
+remain stable; their prefixes describe backing representation, **not** whether
+membership is exclusive. Gmail can carry several system and custom labels at
+once. Native domain tags and Outlook categories remain additive; IMAP labels and
+Outlook folder classifications are exclusive. Folders are a backend detail, not
+a separate contract agents must implement.
 The endpoint reference below lists the label routes. Filtering and membership
 semantics are described in this contract and in the served [`/agent`](/agent)
 guide.
@@ -563,7 +572,7 @@ Normalized message:
   "size_bytes": 2048,
   "is_spam": false,
   "labels": ["Invoices", "Unpaid"],
-  "label_ids": ["tag:Invoices", "tag:Unpaid"]
+  "label_ids": ["folder:fld_example_inbox", "tag:Invoices", "tag:Unpaid"]
 }
 ```
 
@@ -590,18 +599,38 @@ POST   /v1/inboxes/{id}/messages/{messageId}/labels?wait=true
 ```
 
 Catalogue entries expose `id`, `name`, `kind` (`tag` or `folder`), `membership`
-(`multiple` or `exclusive`), `source`, and supported remove/rename/delete actions.
+(`multiple` or `exclusive`), `source`, and `can_add`, `can_remove`, `can_rename`
+and `can_delete` capabilities. System entries also expose `role`, such as `inbox`,
+`sent`, `spam`, `trash` or `archive`; their rename/delete capabilities are false.
+Sent and remote Drafts are discoverable but read-only classification targets.
+Local drafts and outbox jobs have their own APIs and are not Message memberships.
 The catalogue's `capabilities` describes creation and edit support even when
 `items` is empty. A domain inbox can keep an empty named tag; Gmail/One own their
 provider labels, Outlook exposes categories and folder destinations, and raw
 IMAP uses folder-backed destinations. Labels are inbox-scoped; an account-wide
 name filter matches that name within each authorized inbox.
 
+Filter ordinary mailbox views with the same parameter on every backend:
+`GET /v1/inboxes/{id}/messages?label_id=<catalogue-id>` (or the corresponding
+search route). Repeated `label_id` filters AND together; multiple Gmail system
+memberships can be intersected. Only one exclusive classification may be
+requested. Inbox-scoped and account-wide list/search routes share resolution;
+account-wide `folder:<id>` filters still require `inbox=`.
+
 Apply a catalogue entry with `{"label_id":"tag:Invoices","operation":"add"}`;
-use `remove` only where `can_remove` is true. Adding an exclusive folder-backed
-label **moves** the message; it is not another independent classification.
-System folders use the explicit move endpoint. Label writes require Assistant
-or Owner and follow the normal queued-action / `?wait=true` convention.
+use `add` only where `can_add` is true and `remove` only where `can_remove` is
+true. This includes supported system classifications. Adding an exclusive label
+**moves** the message rather than adding an independent classification; removing
+one without a replacement is rejected. Applying Inbox, Spam or Trash to local
+mail updates placement and visibility state atomically. Additive labels are
+preserved. Gmail system actions preserve unrelated memberships and use Google's
+normal Inbox/Spam/Trash transitions. Label writes require Assistant or Owner and
+follow the normal queued-action / `?wait=true` convention.
+
+Existing `folder=`, folder endpoints and `/move` remain compatibility interfaces;
+their folder-only behaviour is unchanged. Agents do not need them to discover,
+filter or apply supported ordinary classifications. The web reader selects its
+labels using the same membership projection as API responses.
 
 A native additive tag is trimmed and internal runs of whitespace collapsed. It must be
 non-empty, at most 64 characters, and must not contain control characters, `/`

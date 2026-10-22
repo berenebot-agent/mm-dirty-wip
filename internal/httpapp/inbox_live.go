@@ -139,7 +139,6 @@ func mailboxFilter(id, folder, label string) (f store.MessageFilter, basePath st
 		if label == "" {
 			return f, basePath, false
 		}
-		f.Direction = "inbound"
 		f.Labels = []string{label}
 		basePath += "/label"
 	default:

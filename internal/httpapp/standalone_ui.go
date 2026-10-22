@@ -365,7 +365,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		Folder:           "folder",
 		ActiveFolderID:   target.ID,
 		Folders:          sidebar,
-		UnifiedLabels:    unifiedLabels,
+		UnifiedLabels:    sidebarLabels(unifiedLabels),
 		UnreadCount:      unread[id],
 		SpamCount:        spamCount,
 		TrashCount:       trashCount,
@@ -406,13 +406,13 @@ func (s *Server) folderMessages(r *http.Request, p model.Principal, box model.In
 		}
 		return out, nil
 	}
-	return s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{
-		InboxID:      box.ID,
-		MailboxID:    folder.ID,
-		FolderScoped: true,
-		Before:       before,
-		Limit:        inboxPageSize + 1,
-	})
+	f := store.MessageFilter{
+		InboxID: box.ID,
+		Before:  before,
+		Limit:   inboxPageSize + 1,
+	}
+	(labelFilter{FolderID: folder.ID, Role: folder.Role}).applyLocal(&f)
+	return s.Service.Store.ListMessages(r.Context(), p, f)
 }
 
 // folderMessageCount returns the exact number of messages in a folder, for the
@@ -425,11 +425,9 @@ func (s *Server) folderMessageCount(r *http.Request, p model.Principal, box mode
 		}
 		return len(msgs), nil
 	}
-	return s.Service.Store.CountMessages(r.Context(), p, store.MessageFilter{
-		InboxID:      box.ID,
-		MailboxID:    folder.ID,
-		FolderScoped: true,
-	})
+	f := store.MessageFilter{InboxID: box.ID}
+	(labelFilter{FolderID: folder.ID, Role: folder.Role}).applyLocal(&f)
+	return s.Service.Store.CountMessages(r.Context(), p, f)
 }
 
 // remoteMessageToModel projects a cached remote message onto the common message
@@ -561,7 +559,7 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
 	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
-	unifiedLabels = selectedMailboxLabels(unifiedLabels, m)
+	unifiedLabels = s.selectedMailboxLabels(r.Context(), p, box, unifiedLabels, m)
 	// The conversation thread is read from the cached remote index only: opening
 	// a message must never block on IMAP. A thread with no cached ancestors is
 	// simply not shown.
@@ -589,7 +587,7 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Inbox:            &box,
 		Folder:           folder,
 		Folders:          folderSidebar,
-		UnifiedLabels:    unifiedLabels,
+		UnifiedLabels:    sidebarLabels(unifiedLabels),
 		MessageLabels:    unifiedLabels,
 		Labels:           inboxLabels,
 		LabelUnread:      labelUnread,
