@@ -46,6 +46,12 @@ func TestLabelRoutesDocumentActualResponses(t *testing.T) {
 	if !contains(message["required"].([]string), "label_ids") {
 		t.Fatal("Message.label_ids must be required")
 	}
+	label := schemas["MailboxLabel"].(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"membership", "can_add", "can_remove", "role"} {
+		if _, ok := label[field]; !ok {
+			t.Fatalf("MailboxLabel.%s missing", field)
+		}
+	}
 	caps := schemas["MailboxLabelCapabilities"].(map[string]any)
 	for _, field := range []string{"can_create", "create_kind", "create_membership", "can_rename", "can_delete"} {
 		if _, ok := caps["properties"].(map[string]any)[field]; !ok {

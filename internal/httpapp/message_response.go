@@ -117,10 +117,11 @@ func messageResponseOf(m model.Message, body bool) messageResponse {
 // membership into the unified label_ids the catalogue advertises. It is resolved
 // once per inbox per response, never per message.
 type inboxIdentity struct {
-	kind     string
-	provider string
-	byID     map[string]model.Folder
-	byPath   map[string]model.Folder
+	kind              string
+	provider          string
+	byID              map[string]model.Folder
+	byPath            map[string]model.Folder
+	googleMemberships map[string][]string
 }
 
 // messageResponses resolves inbox identity once per inbox, never per item. It
@@ -149,7 +150,8 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 						id.provider = "imap"
 					}
 				}
-				id.byID, id.byPath = s.labelFolderIndex(r.Context(), p, box)
+				membership := s.labelIdentity(r.Context(), p, box, ms)
+				id.byID, id.byPath, id.googleMemberships = membership.byID, membership.byPath, membership.googleMemberships
 			}
 			identities[m.InboxID] = id
 		}
@@ -164,11 +166,26 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 	return out
 }
 
+func (s *Server) labelIdentity(ctx context.Context, p model.Principal, box model.Inbox, ms []model.Message) inboxIdentity {
+	id := inboxIdentity{kind: box.Kind}
+	id.byID, id.byPath = s.labelFolderIndex(ctx, p, box)
+	if box.Kind == model.InboxKindStandalone && s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
+		var ids []string
+		for _, m := range ms {
+			if m.InboxID == box.ID {
+				ids = append(ids, m.ID)
+			}
+		}
+		id.googleMemberships, _ = s.Service.Store.GoogleMemberships(ctx, p.AccountID, box.ID, ids)
+	}
+	return id
+}
+
 // labelFolderIndex indexes an inbox's label-eligible folders by id and by path so
 // a message's single folder membership can be projected as a unified label id on
 // every backend, including Microsoft's provider folder ids.
 func (s *Server) labelFolderIndex(ctx context.Context, p model.Principal, box model.Inbox) (map[string]model.Folder, map[string]model.Folder) {
-	folders, err := s.Service.Store.ListFolders(ctx, p.AccountID, box.ID)
+	folders, err := s.labelFolders(ctx, p, box)
 	if err != nil {
 		return nil, nil
 	}
@@ -186,9 +203,8 @@ func (s *Server) labelFolderIndex(ctx context.Context, p model.Principal, box mo
 
 // labelIDsFor composes the unified membership ids for one message. Additive
 // names are name-addressed (tag:<Name>) exactly as the action API addresses them;
-// folder membership is id-addressed (folder:<id>) exactly as the catalogue
-// advertises it. A message has one folder membership, so at most one folder id is
-// emitted.
+// system and exclusive memberships use the catalogue's opaque folder:<id> IDs.
+// Gmail may carry several system memberships alongside its additive user labels.
 func labelIDsFor(m model.Message, id inboxIdentity) []string {
 	out := make([]string, 0, len(m.Labels)+1)
 	for _, name := range m.Labels {
@@ -198,14 +214,64 @@ func labelIDsFor(m model.Message, id inboxIdentity) []string {
 		}
 		out = appendUniqueFold(out, "tag:"+name)
 	}
+	if memberships, ok := id.googleMemberships[m.ID]; ok {
+		for _, path := range memberships {
+			if f, found := id.byPath[path]; found {
+				kind := "folder"
+				if f.Role == model.FolderRoleFolder || f.Role == model.FolderRoleLabel {
+					kind = "tag"
+				}
+				out = appendUniqueFold(out, labelIDFor(kind, f.Name, f.ID))
+			}
+		}
+		// Gmail Archive is a view, not an independently applied provider label.
+		if !containsLabel(memberships, "INBOX") && !containsLabel(memberships, "TRASH") && !containsLabel(memberships, "SPAM") {
+			for _, f := range id.byID {
+				if f.Role == model.FolderRoleArchive {
+					out = appendUniqueFold(out, "folder:"+f.ID)
+				}
+			}
+		}
+		return out
+	}
+	if id.kind == model.InboxKindDomain {
+		for _, f := range id.byID {
+			member := false
+			switch f.Role {
+			case model.FolderRoleInbox:
+				member = m.Direction == "inbound" && !m.Spam && m.DeletedAt == nil && (m.MailboxID == "" || m.MailboxID == f.ID)
+			case model.FolderRoleSent:
+				member = m.Direction == "outbound" && m.DeletedAt == nil && !m.Spam
+			case model.FolderRoleSpam:
+				member = m.Spam && m.DeletedAt == nil
+			case model.FolderRoleTrash:
+				member = m.DeletedAt != nil
+			}
+			if member {
+				out = appendUniqueFold(out, "folder:"+f.ID)
+			}
+		}
+		if m.Spam || m.DeletedAt != nil {
+			return out
+		}
+	}
 	folder, ok := id.byID[m.MailboxID]
 	if !ok && m.FolderPath != "" {
 		folder, ok = id.byPath[m.FolderPath]
 	}
-	if ok {
+	if ok && (folder.Role == model.FolderRoleFolder || folder.Role == model.FolderRoleLabel || folder.Role == model.FolderRoleArchive || id.kind == model.InboxKindStandalone) {
 		out = appendUniqueFold(out, "folder:"+folder.ID)
 	}
 	return out
+}
+
+func containsLabel(labels []string, want string) bool {
+	for _, label := range labels {
+		if label == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) messageResponse(r *http.Request, m model.Message) messageResponse {

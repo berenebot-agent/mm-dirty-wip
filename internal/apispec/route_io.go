@@ -51,7 +51,7 @@ var (
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
 	qContentType = p("content_type", "string", false, "Remote attachment media-type hint; downloads are served as application/octet-stream with attachment disposition and nosniff.")
-	qLabelID     = p("label_id", "array", false, "Repeatable unified label id from the label catalogue: tag:<Name> for additive labels, or folder:<id> for a folder-backed label (single-inbox scope required account-wide).")
+	qLabelID     = p("label_id", "array", false, "Primary membership filter: repeat IDs verbatim from the label catalogue, including system classifications. Repeated IDs AND together; only one exclusive label is allowed, while multiple Gmail memberships can be intersected. folder:<id> requires a single-inbox scope account-wide. No provider-specific identifiers are required.")
 )
 
 // queuedAction is the async-default success payload shared by mutations that
