@@ -59,6 +59,11 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- Restored beta-2 `unread_count` on connected-inbox thread lists and details,
+  and included it consistently for domain inboxes and account-wide thread
+  routes. Filtered lists count unread messages in the same matching subset as
+  `message_count`, and all-read threads explicitly return `unread_count: 0`.
+
 - Direct MX's DNS instruction now points the client domain at the hostname in
   MailMoose's configured receiving URL (or public URL), not the separately
   configurable SMTP greeting hostname.

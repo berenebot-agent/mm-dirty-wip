@@ -48,3 +48,15 @@ func TestMailboxListingQueryParity(t *testing.T) {
 		t.Fatal("agent guide still describes metadata-only remote details")
 	}
 }
+
+func TestThreadSchemasIncludeUnreadCount(t *testing.T) {
+	t.Parallel()
+	schemas := apispec.Schemas()
+	for _, name := range []string{"Thread", "ThreadDetail"} {
+		properties := schemas[name].(map[string]any)["properties"].(map[string]any)
+		field, ok := properties["unread_count"].(map[string]any)
+		if !ok || field["type"] != "integer" {
+			t.Fatalf("%s.unread_count must be an integer: %v", name, properties["unread_count"])
+		}
+	}
+}

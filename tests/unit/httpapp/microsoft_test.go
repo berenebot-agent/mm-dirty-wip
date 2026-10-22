@@ -164,6 +164,21 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 		t.Fatal("missing Outlook Inbox classification")
 	}
 	key := adminKey(t, svc, u)
+	assertThreadUnreadRoutes(t, srv.Handler(), key, box.ID, page.Items[0].ThreadKey, 1, 0)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/threads?label_id=tag:Projects",
+		"/v1/threads?inbox=" + box.ID + "&label_id=tag:Projects",
+		"/v1/threads?label_id=tag:Projects",
+	} {
+		res := apiGet(t, srv.Handler(), path, key)
+		var page struct {
+			Items []threadUnreadResponse `json:"items"`
+		}
+		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+			t.Fatalf("Outlook filtered thread: %d %s", res.Code, res.Body.String())
+		}
+		assertThreadUnread(t, page.Items[0], 1, 0)
+	}
 	for _, path := range []string{
 		"/v1/inboxes/" + box.ID + "/messages?", "/v1/messages?inbox=" + box.ID + "&",
 		"/v1/inboxes/" + box.ID + "/search?", "/v1/search?inbox=" + box.ID + "&",

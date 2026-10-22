@@ -116,6 +116,21 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	// This fixture deliberately returns a message even for an invalid label,
 	// so the test also verifies that the invalid query is not sent upstream.
 	key := adminKey(t, svc, u)
+	assertThreadUnreadRoutes(t, h, key, box.ID, page.Items[0].ThreadKey, 1, 1)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/threads?label_id=tag:Projects",
+		"/v1/threads?inbox=" + box.ID + "&label_id=tag:Projects",
+		"/v1/threads?label_id=tag:Projects",
+	} {
+		res := apiGet(t, h, path, key)
+		var page struct {
+			Items []threadUnreadResponse `json:"items"`
+		}
+		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+			t.Fatalf("Gmail filtered thread: %d %s", res.Code, res.Body.String())
+		}
+		assertThreadUnread(t, page.Items[0], 1, 1)
+	}
 	for _, path := range []string{
 		"/v1/inboxes/" + box.ID + "/search?q=Hello&folder=NoSuchFolder",
 		"/v1/search?inbox=" + box.ID + "&q=Hello&folder=NoSuchFolder",

@@ -523,6 +523,7 @@ type Thread struct {
 	InboxID       string    `json:"inbox_id"`
 	Subject       string    `json:"subject"`
 	MessageCount  int       `json:"message_count"`
+	UnreadCount   int       `json:"unread_count"`
 	LastMessageAt time.Time `json:"last_message_at"`
 }
 

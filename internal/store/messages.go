@@ -1373,7 +1373,7 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL`
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL`
 	var args []any
 	if folderID != "" {
 		q += folderClause("m", folderID, "", true)
@@ -1425,7 +1425,7 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 	for rows.Next() {
 		var t model.Thread
 		var last string
-		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &last); err != nil {
+		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &t.UnreadCount, &last); err != nil {
 			return nil, err
 		}
 		t.LastMessageAt = parseTime(last)
@@ -1444,7 +1444,7 @@ func (s *Store) ListThreadsFilteredBefore(ctx context.Context, p model.Principal
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,COUNT(m.id),MAX(m.created_at)
+	q := `SELECT t.id,t.inbox_id,t.subject,COUNT(m.id),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(m.created_at)
 FROM messages m JOIN threads t ON t.id=m.thread_id
 WHERE m.account_id=?` + where + ` GROUP BY t.id`
 	all := append([]any{p.AccountID}, args...)
@@ -1476,7 +1476,7 @@ WHERE m.account_id=?` + where + ` GROUP BY t.id`
 	for rows.Next() {
 		var th model.Thread
 		var latest string
-		if err := rows.Scan(&th.ID, &th.InboxID, &th.Subject, &th.MessageCount, &latest); err != nil {
+		if err := rows.Scan(&th.ID, &th.InboxID, &th.Subject, &th.MessageCount, &th.UnreadCount, &latest); err != nil {
 			return nil, err
 		}
 		th.LastMessageAt = parseTime(latest)
