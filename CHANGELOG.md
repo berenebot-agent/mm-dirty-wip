@@ -206,6 +206,23 @@ All notable changes to MailMoose are documented here. This project follows
   message says where to move it instead), and a system folder such as the
   Inbox is not a label (the answer still is a `404`, but it says to use the
   move route).
+- A stale or unknown pagination cursor is now refused instead of being
+  guessed at. A `before` cursor that no longer resolves — because the message
+  it named was deleted, or because it was never a cursor at all — used to be
+  treated as an empty position, so the listing silently restarted from the
+  newest message and a pager looped forever, or came back empty and looked
+  like the end of the mailbox. The listing now fails with an `invalid cursor`
+  error, for local and connected inboxes alike, across message, thread and
+  search pages. The old `cursor` query parameter is refused the same way and
+  the answer names `before`, the parameter that does work; the API reference
+  already said search no longer accepted `cursor`.
+- The dashboard no longer shows an outbound delivery that has no message record
+  as a second, unopenable row in "Recent messages". Such a transition is an
+  audit event rather than a mail, and it now gets its own "Unlinked outbound
+  delivery events" table, so one send is one row and the events that cannot be
+  attributed to a message stay visible for investigation instead of being
+  inferred from the subject, recipient and timing, which two independently
+  sent messages can share.
 
 ### Changed
 
