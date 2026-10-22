@@ -540,7 +540,10 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 		if err == nil {
 			q += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
 			args = append(args, beforeCreated, beforeCreated, f.Before)
-		} else if err != sql.ErrNoRows {
+		} else if err == sql.ErrNoRows {
+			// Never restart a resumed page at the newest message.
+			return "", nil, ErrInvalidCursor
+		} else {
 			return "", nil, err
 		}
 	}
@@ -1416,6 +1419,9 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 		if cerr := s.read.QueryRowContext(ctx, cursorQuery, cursorArgs...).Scan(&last); cerr != nil {
 			return nil, cerr
 		}
+		if !last.Valid {
+			return nil, ErrInvalidCursor
+		}
 		cur := last.String
 		q += ` AND (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
 		args = append(args, cur, cur, beforeID)
@@ -1466,7 +1472,7 @@ WHERE m.account_id=?` + where + ` GROUP BY t.id`
 			return nil, err
 		}
 		if !latest.Valid {
-			return []model.Thread{}, nil
+			return nil, ErrInvalidCursor
 		}
 		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
 		all = append(all, latest.String, latest.String, beforeID)
@@ -1762,7 +1768,9 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		if err == nil {
 			sqlq += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
 			args = append(args, beforeCreated, beforeCreated, f.Before)
-		} else if err != sql.ErrNoRows {
+		} else if err == sql.ErrNoRows {
+			return nil, ErrInvalidCursor
+		} else {
 			return nil, err
 		}
 	}

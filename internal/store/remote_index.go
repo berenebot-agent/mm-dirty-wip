@@ -909,14 +909,13 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 		q += ` AND is_flagged=1`
 	}
 	if f.Before != "" {
-		// Resolve the cursor to its ordering tuple. An unknown cursor is treated
-		// as empty (no rows) rather than silently restarting from the newest,
-		// which would loop a pager forever.
+		// Resolve the cursor to its ordering tuple. An unknown cursor is
+		// invalid, never a silent restart or an apparent end of the mailbox.
 		var beforeRecv sql.NullString
 		cerr := s.read.QueryRowContext(ctx, `SELECT received_at FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, f.Before).Scan(&beforeRecv)
 		switch {
 		case cerr == sql.ErrNoRows:
-			return []RemoteMessage{}, nil
+			return nil, ErrInvalidCursor
 		case cerr != nil:
 			return nil, cerr
 		default:
@@ -1249,6 +1248,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 		if cerr != nil {
 			return nil, cerr
 		}
+		if !latest.Valid {
+			return nil, ErrInvalidCursor
+		}
 		cur := latest.String
 		q += ` HAVING (max(COALESCE(received_at,'')) < ? OR (max(COALESCE(received_at,'')) = ? AND thread_key < ?))`
 		args = append(args, cur, cur, beforeKey)
@@ -1311,7 +1313,7 @@ func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxI
 			return nil, err
 		}
 		if !latest.Valid {
-			return []RemoteThread{}, nil
+			return nil, ErrInvalidCursor
 		}
 		query += ` HAVING (MAX(COALESCE(m.received_at,'')) < ? OR (MAX(COALESCE(m.received_at,'')) = ? AND m.thread_key < ?))`
 		args = append(args, latest.String, latest.String, beforeKey)

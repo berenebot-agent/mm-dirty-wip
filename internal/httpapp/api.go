@@ -650,6 +650,10 @@ func sanitizedMessages(ms []model.Message) []model.Message {
 }
 
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("cursor") {
+		writeError(w, http.StatusBadRequest, "use before with the returned next_cursor, not cursor")
+		return
+	}
 	p := principal(r)
 	unread, ok := boolQuery(w, r, "unread")
 	if !ok {
@@ -1160,6 +1164,10 @@ func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("cursor") {
+		writeError(w, http.StatusBadRequest, "use before with the returned next_cursor, not cursor")
+		return
+	}
 	limit, ok := limitQuery(w, r)
 	if !ok {
 		return

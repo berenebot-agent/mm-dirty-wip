@@ -242,6 +242,9 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 			scanBefore = res.NextCursor
 		}
 		if rerr != nil {
+			if errors.Is(rerr, store.ErrInvalidCursor) {
+				return nil, "", nil, normalizeMailboxStoreError(rerr)
+			}
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 		} else if collected == 0 && !exhausted && scanBefore != "" {
 			// No match in the scanned window and more rows remain: carry the scan
@@ -440,6 +443,9 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 			}
 		}
 		if rerr != nil {
+			if errors.Is(rerr, store.ErrInvalidCursor) {
+				return nil, "", nil, normalizeMailboxStoreError(rerr)
+			}
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 			continue
 		}
