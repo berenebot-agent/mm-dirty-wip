@@ -1472,7 +1472,8 @@ func TestOriginalSearchThreadsEnvelope(t *testing.T) {
 
 // TestOriginalMessageRemoteFallback proves the original /v1/messages/{id} routes
 // resolve a standalone inbox's remote metadata id: GET returns the projection,
-// PATCH sets read/labels, and DELETE moves it to the remote Trash folder.
+// PATCH sets read state, and DELETE moves it to the remote Trash folder.
+// Additive labels are unsupported for IMAP, including through legacy PATCH.
 func TestOriginalMessageRemoteFallback(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
@@ -1495,13 +1496,13 @@ func TestOriginalMessageRemoteFallback(t *testing.T) {
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Remote patch") {
 		t.Fatalf("remote GET %d: %s", rr.Code, rr.Body.String())
 	}
-	// PATCH read + labels
-	req := httptest.NewRequest("PATCH", "/v1/messages/"+id, strings.NewReader(`{"read":true,"labels":["Alpha"]}`))
+	// PATCH read state without attempting unsupported IMAP label writes.
+	req := httptest.NewRequest("PATCH", "/v1/messages/"+id, strings.NewReader(`{"read":true}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"labels":["Alpha"]`) {
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"read":true`) {
 		t.Fatalf("remote PATCH %d: %s", rr.Code, rr.Body.String())
 	}
 	// DELETE moves to the remote Trash folder.
