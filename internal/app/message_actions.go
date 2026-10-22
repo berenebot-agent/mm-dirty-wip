@@ -309,8 +309,13 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 		_, ev, e := w.svc.Store.MoveMessageToFolder(ctx, p, a.MessageID, in.Destination)
 		return publish(ev, e)
 	case "classify":
-		_, ev, e := w.svc.Store.ClassifyMessage(ctx, p, a.MessageID, in.Destination)
-		return publish(ev, e)
+		events, e := w.svc.Store.ClassifyMessage(ctx, p, a.MessageID, in.Destination)
+		if e == nil {
+			for _, event := range events {
+				w.svc.Hub.Publish(event)
+			}
+		}
+		return e
 	case "purge":
 		path, _, ev, e := w.svc.Store.PurgeMessage(ctx, p, a.MessageID)
 		if e != nil {
