@@ -1370,8 +1370,8 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL`
 	var args []any
 	if folderID != "" {
-		q += ` AND m.mailbox_id=?`
-		args = append(args, folderID)
+		q += folderClause("m", folderID, "", true)
+		args = append(args, folderArgs(folderID, "", true)...)
 	}
 	q += ` WHERE t.account_id=?`
 	args = append(args, p.AccountID)
@@ -1391,11 +1391,11 @@ func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal
 	q += ` GROUP BY t.id HAVING count(m.id) > 0`
 	if strings.TrimSpace(beforeID) != "" {
 		var last sql.NullString
-		cursorQuery := `SELECT MAX(created_at) FROM messages WHERE thread_id=?`
+		cursorQuery := `SELECT MAX(m.created_at) FROM messages m WHERE m.thread_id=?`
 		cursorArgs := []any{beforeID}
 		if folderID != "" {
-			cursorQuery += ` AND mailbox_id=?`
-			cursorArgs = append(cursorArgs, folderID)
+			cursorQuery += folderClause("m", folderID, "", true)
+			cursorArgs = append(cursorArgs, folderArgs(folderID, "", true)...)
 		}
 		if cerr := s.read.QueryRowContext(ctx, cursorQuery, cursorArgs...).Scan(&last); cerr != nil {
 			return nil, cerr
@@ -1471,7 +1471,8 @@ func spamClause(alias string, spamOnly, includeSpam bool) string {
 // when role is supplied.
 //
 //   - scoped with id="": the implicit Inbox only (mailbox_id IS NULL).
-//   - scoped with id set: exactly that folder id.
+//   - scoped with id set: exactly that folder id, plus implicit Inbox members
+//     when the id names the inbox\x27s system Inbox folder.
 //   - unscoped with id="": no restriction (every folder), the pre-folder default.
 //   - unscoped with id set: mailbox_id = id (an extra restriction on any read).
 //
@@ -1484,7 +1485,10 @@ func folderClause(alias, id, role string, scoped bool) string {
 		prefix = alias + "."
 	}
 	if id != "" {
-		return " AND " + prefix + "mailbox_id=?"
+		// An explicit Inbox folder id also represents the default NULL bucket.
+		// The correlated folder lookup ensures an account-wide filter never pulls
+		// implicit Inbox mail from a different inbox. Other folders remain exact.
+		return " AND (" + prefix + "mailbox_id=? OR (" + prefix + "mailbox_id IS NULL AND EXISTS (SELECT 1 FROM inbox_folders f WHERE f.id=? AND f.inbox_id=" + prefix + "inbox_id AND f.role=\x27inbox\x27)))"
 	}
 	if scoped {
 		if role != "" {
@@ -1499,7 +1503,7 @@ func folderClause(alias, id, role string, scoped bool) string {
 // the predicate and its parameters can never drift apart. They follow folderClause.
 func folderArgs(id, role string, scoped bool) []any {
 	if id != "" {
-		return []any{id}
+		return []any{id, id}
 	}
 	if scoped && role != "" {
 		return []any{role}
