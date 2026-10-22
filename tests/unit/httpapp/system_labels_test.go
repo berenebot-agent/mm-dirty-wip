@@ -211,7 +211,6 @@ func TestSystemLabelsIMAPExclusiveViewsAndMove(t *testing.T) {
 	}
 }
 
-
 func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
@@ -300,7 +299,6 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 		}
 	}
 }
-
 
 func TestLabelFilteredThreadsUseMatchedMessagesAndStableCursors(t *testing.T) {
 	t.Parallel()
