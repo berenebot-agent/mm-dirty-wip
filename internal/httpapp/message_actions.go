@@ -114,7 +114,14 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 		if ui {
 			s.uiError(w, err, 400)
 		} else {
-			mapStoreError(w, err)
+			// Mailbox capability errors use the same 409 unsupported-operation
+			// response as the canonical label endpoints.
+			var mailboxErr *model.MailboxError
+			if errors.As(err, &mailboxErr) {
+				mapMailboxError(w, err)
+			} else {
+				mapStoreError(w, err)
+			}
 		}
 		return
 	}
