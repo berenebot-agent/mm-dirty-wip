@@ -107,7 +107,7 @@ docker compose up -d
 
 Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
 
-For external access, place MailMoose behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup; a separate provider webhook hostname may require port `8082`. See the [self-hosting guide](docs/SELFHOSTING.md).
+For external access, place MailMoose behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup in UI. See the [self-hosting guide](docs/SELFHOSTING.md).
 
 ## Connect your agent
 
