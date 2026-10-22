@@ -940,8 +940,13 @@ func (s *Store) RestoreMessage(ctx context.Context, p model.Principal, id string
 		}
 		return m, nil, nil
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
+	if err = tx.QueryRowContext(ctx, `UPDATE messages SET deleted_at=NULL,
+		mailbox_id=CASE WHEN mailbox_id IN (SELECT id FROM inbox_folders WHERE inbox_id=? AND role='trash') THEN NULL ELSE mailbox_id END
+		WHERE id=? AND account_id=? RETURNING COALESCE(mailbox_id,'')`, m.InboxID, id, p.AccountID).Scan(&m.MailboxID); err != nil {
 		return model.Message{}, nil, err
+	}
+	if m.MailboxID == "" {
+		m.FolderPath = ""
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageRestored, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
 	if err != nil {
@@ -1281,8 +1286,13 @@ func (s *Store) SetMessageSpam(ctx context.Context, p model.Principal, id string
 	if spam {
 		reason = "manual"
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=? WHERE id=? AND account_id=?`, boolInt(spam), reason, id, p.AccountID); err != nil {
+	if err = tx.QueryRowContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=?,
+		mailbox_id=CASE WHEN ?=0 AND mailbox_id IN (SELECT id FROM inbox_folders WHERE inbox_id=? AND role='spam') THEN NULL ELSE mailbox_id END
+		WHERE id=? AND account_id=? RETURNING COALESCE(mailbox_id,'')`, boolInt(spam), reason, boolInt(spam), m.InboxID, id, p.AccountID).Scan(&m.MailboxID); err != nil {
 		return model.Message{}, nil, err
+	}
+	if m.MailboxID == "" {
+		m.FolderPath = ""
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageSpamChanged, id, map[string]any{
 		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,

@@ -250,24 +250,6 @@ type folderSidebarItem struct {
 	Count int64
 }
 
-// buildFolderSidebar returns the inbox's custom folders (role "folder") in
-// hierarchical order, for the common folder sidebar. System folders are excluded
-// because they already have their own sidebar entries.
-func (s *Server) buildFolderSidebar(ctx context.Context, accountID, inboxID string) []folderSidebarItem {
-	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
-	if err != nil {
-		return nil
-	}
-	var out []folderSidebarItem
-	for _, f := range folders {
-		if f.Role != model.FolderRoleFolder {
-			continue
-		}
-		out = append(out, folderSidebarItem{ID: f.ID, Path: f.Path, Name: f.Name, Role: f.Role, Count: f.MessageCount})
-	}
-	return out
-}
-
 // findInboxFolder resolves a custom folder id within one inbox. Both the local
 // bulk path and the remote bulk path use it to turn the folder id carried on the
 // folder view's bulk form into the folder's store row (id for the local filter,
@@ -330,9 +312,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
-	sidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
-
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
 	msgs, err := s.folderMessages(r, p, box, target, before)
 	if err != nil {
@@ -364,7 +344,6 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		Messages:         msgs,
 		Folder:           "folder",
 		ActiveFolderID:   target.ID,
-		Folders:          sidebar,
 		UnifiedLabels:    sidebarLabels(unifiedLabels),
 		UnreadCount:      unread[id],
 		SpamCount:        spamCount,
@@ -386,6 +365,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		// this page used to omit entirely.
 		s.applyStandaloneMailbox(r, p, box, &data)
 	}
+	s.applyMailboxSidebar(r.Context(), p, box, &data)
 	s.pendingMessageOverlay(r, &data)
 	s.renderMail(w, r, folderBody, data)
 }
@@ -557,7 +537,6 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
-	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
 	unifiedLabels = s.selectedMailboxLabels(r.Context(), p, box, unifiedLabels, m)
 	// The conversation thread is read from the cached remote index only: opening
@@ -586,7 +565,6 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Message:          &m,
 		Inbox:            &box,
 		Folder:           folder,
-		Folders:          folderSidebar,
 		UnifiedLabels:    sidebarLabels(unifiedLabels),
 		MessageLabels:    unifiedLabels,
 		Labels:           inboxLabels,
@@ -604,6 +582,7 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Notice:           r.URL.Query().Get("notice"),
 	}
 	s.applyStandaloneMailbox(r, p, box, &data)
+	s.applyMailboxSidebar(r.Context(), p, box, &data)
 	s.render(w, r, messageBody, data)
 }
 
@@ -984,7 +963,6 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 		StandalonePlain:      box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain,
 		Notice:               r.URL.Query().Get("notice"),
 	}
-	data.Folders = s.buildFolderSidebar(r.Context(), p.AccountID, id)
 	if folders, lerr := s.Service.Store.ListFolders(r.Context(), p.AccountID, id); lerr == nil {
 		items := make([]folderListResponse, 0, len(folders))
 		for _, f := range folders {

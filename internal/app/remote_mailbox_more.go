@@ -34,6 +34,8 @@ func (m *RemoteMailboxService) ListRemoteThreads(ctx context.Context, p model.Pr
 	if err != nil {
 		return nil, err
 	}
+	// A client may address a folder by its stable id.
+	folderPath = m.remoteFolderScope(ctx, p.AccountID, inboxID, folderPath)
 	if strings.TrimSpace(folderPath) != "" && !m.folderInScope(inbox, folderPath) {
 		return nil, model.NewMailboxError(model.ErrKindNotFound, "folder is not in this mailbox's scope", false, nil)
 	}
@@ -171,6 +173,8 @@ func (m *RemoteMailboxService) SearchRemote(ctx context.Context, p model.Princip
 			folderPath = model.NamespaceINBOX
 		}
 	}
+	// A client may address a folder by its stable id.
+	folderPath = m.remoteFolderScope(ctx, p.AccountID, inboxID, folderPath)
 	if !m.folderInScope(inbox, folderPath) {
 		return RemoteSearchResult{}, model.NewMailboxError(model.ErrKindNotFound, "folder is not in this mailbox's scope", false, nil)
 	}

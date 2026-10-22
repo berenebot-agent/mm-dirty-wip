@@ -4963,6 +4963,14 @@ inbox/account list and search routes; repeated filters AND together, and multipl
 Gmail system memberships can be intersected. Inbox-scoping requirements for
 account-wide folder-addressed IDs remain unchanged.
 
+> **Superseded in part by D151 (2026-10-22, human approved).** The unified
+> membership projection described in this amendment is replaced: a message's
+> location is `folder_id` (one stable MailMoose folder id, or `null`) and
+> `label_ids` carries additive labels only (`tag:Name`, empty for IMAP). The
+> `folder:<id>` identity, the exclusive/system label classification and the
+> catalogue's `role` are gone. The route, role and filter-resolution decisions
+> in D131 stand.
+
 Per-label `can_add` and optional system `role` augment the existing capabilities.
 Supported system actions use the label endpoint; Sent/Drafts remain read-only,
 and system labels cannot be renamed or deleted. Applying an exclusive label
@@ -6214,3 +6222,117 @@ duplicate scoped listing logic. No new endpoint, dependency, service, secret
 handling, or database schema/migration. Regression coverage includes both inbox
 kinds/URL forms, tied dates, maximum page size, filters, completeness, local
 attachment downloads, rendered OpenAPI/agent guidance, and executable clients.
+
+## D151 — Universal folders and additive labels: one location, one label set
+
+**Requirement:** The unified-label contract (D131) made a folder *also* a
+label. `label_ids` carried a mix of `tag:<Name>` and `folder:<id>`, the
+catalogue classified entries as exclusive or multiple, and the system
+classifications (Inbox, Sent, Spam, Trash) travelled as label identities.
+That made one mailbox concept carry two vocabularies: a client could not tell
+whether applying an entry would add metadata or move the message, `label_id`
+meant two different things, and the behaviour differed per provider (IMAP
+labels were folders, Outlook folders were exclusive labels, Gmail had
+overlapping system labels with no canonical one). Operators also had no
+single place that said what a mailbox supports: "create a label" meant a
+MailMoose tag on one provider, a Gmail user label on another and a remote
+folder on a third.
+
+**Decision (2026-10-22, human approved — API Beta 3, intentional contract
+change):** A message has two independent classifications and they are never
+mixed.
+
+- `folder_id` is the canonical location: one stable MailMoose folder id
+  (`fld_...`, the ids `GET /v1/inboxes/{id}/folders` returns) or `null`. It is
+  always present. A folder id is never a label id, and the `folder:<id>`
+  catalogue identity is removed.
+- `label_ids` carries **additive labels only** (`tag:Name`): MailMoose tags
+  for a domain inbox, Gmail user labels, Outlook categories. It is always
+  present and empty for an IMAP inbox, which has no canonical labels and
+  refuses every label operation. The exclusive/system label classification
+  (`membership`, catalogue `role`) is gone; the catalogue's `kind` and
+  `membership` remain for compatibility and are always `tag` and `multiple`.
+
+Capability discovery is one surface: the inbox. `model.Capabilities` gains
+`create_folders`, `rename_folders`, `delete_folders`, `create_labels`,
+`rename_labels` and `delete_labels` beside the existing `folders`, `move` and
+`labels`, so `GET /v1/inboxes/{id}` states what the mailbox supports. A domain
+or Gmail inbox exposes system folders only (no custom folders, no folder
+CRUD); Outlook and IMAP expose physical custom folders; IMAP has no labels at
+all; Outlook categories can be created but not renamed or deleted (Graph
+exposes no managed category rename or delete). The label catalogue keeps its
+own `capabilities` block for compatibility, reporting the label half of the
+same surface and staying present on an empty catalogue.
+
+Gmail's overlapping native system labels collapse to one deterministic
+canonical folder — Trash, Spam, Drafts, Inbox, Sent, first match wins, `null`
+when none match. A Gmail inbox's folder list is exactly those five system
+destinations: there is no virtual folder, no All Mail and no derived Archive
+view. Archiving removes `INBOX` and keeps `SENT`, so an archived message still
+projects the Sent folder. A `null` move means **archive**: a domain inbox
+files the message in its internal archive — a destination that is not a
+canonical folder, so the message then reports `folder_id: null` — and a Gmail
+inbox removes `INBOX`. An Outlook or IMAP message always lives in exactly one
+physical folder, so a null move is refused there. System folders are protected
+everywhere, and Sent, Drafts and Outbox are never move destinations: a sent
+copy comes from sending, a draft from the drafts API.
+
+Existing mail is preserved, not flattened. A domain inbox's legacy custom
+folders keep their records, with their original full paths, and the message
+relations that point at them, so the organisation can be restored or rolled
+back. Each custom folder is mapped to one additive label by a deterministic,
+collision-safe mapping (a label name already in use takes the first free
+numeric suffix) recorded in a mapping table, so the mapping is idempotent and
+never re-derives or duplicates a label. A message filed in a legacy custom
+folder has no canonical folder: `folder_id` is `null` and the folder is
+visible as its label. Legacy IMAP local tags are preserved in the legacy
+`labels` field but are not canonical `label_ids` and cannot be applied or
+removed.
+
+**Reason:** One mailbox, one vocabulary. A location and a piece of metadata
+are different things, and the contract says so in two fields instead of
+pretending a folder is a label. The capability block moves the provider
+differences out of the client: a generic agent reads what the mailbox supports
+instead of inferring it from a provider name.
+
+**Supersedes:** D131's unified membership projection, its `folder:<id>`
+identity, its exclusive/membership classification and the system label
+classification in the catalogue. D131's route, role and filter-resolution
+decisions stand.
+
+**Complexity:** Additive capability booleans on the existing capability
+struct, one projection change in the message response, provider-scoped refusals
+in the label, folder and filter paths, and the documentation of the new
+contract. No new endpoint, dependency, service or runtime component. A
+migration preserves existing folder and label data rather than rewriting it.
+
+## D152 — Outlook category creation uses the native master-category endpoint
+
+**Requirement:** D151 makes an Outlook category the mailbox's additive label.
+Creating one has to write to the mailbox, and Graph only offers that through
+`POST /users/{mailbox}/outlook/masterCategories`, which is guarded by the
+`MailboxSettings.ReadWrite` delegated permission. Without it MailMoose could
+only remember a category name locally, which is not a category the mailbox
+knows about.
+
+**Decision (2026-10-22, human approved):** The Microsoft connector requests
+`MailboxSettings.ReadWrite` alongside `User.Read`, `Mail.ReadWrite`,
+`Mail.Send` and `offline_access` (plus the shared-mailbox permissions for a
+shared connection). Category creation calls the native master-category
+endpoint, and a defined-label cache entry is written **only after Graph has
+accepted the category**, so a failed creation never leaves MailMoose claiming
+a category the mailbox does not have. Categories stay read-only for rename
+and delete: `rename_labels` and `delete_labels` remain false, while native
+category add/remove on a message keeps working.
+
+**Consequence for operators:** a Microsoft mailbox connected before this
+permission was added does not carry the grant, and Microsoft does not add a
+scope to an existing token. Such an inbox must be reconnected once from its
+settings. A grant that arrives without the new permission is refused with
+`Microsoft mailbox permissions were not granted`, so a partially consented
+connection never looks healthy.
+
+**Complexity:** One added scope, one native endpoint call in the Outlook
+category-creation path, and a cache write ordered after the provider's
+acceptance. No new dependency, service, secret handling or schema change; the
+permission is delegated by the signed-in user and is not stored separately.

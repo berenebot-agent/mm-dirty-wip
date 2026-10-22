@@ -63,10 +63,15 @@ List, thread and search pagination always follows `next_cursor` by sending it as
 `completeness` and per-inbox `errors`; pagination does not prove the whole mailbox
 has been indexed. Fetch message detail for bodies, since listings omit them.
 
-Read `/v1/inboxes/{id}/label-catalog` for label IDs and capabilities. Some labels
-are additive classifications; others are exclusive move destinations. Do not
-infer label behavior, deletion support or authoring mode from the inbox type.
-The [shared contract and capability matrix](API.md#shared-contract-and-provider-capabilities)
+Read `/v1/inboxes/{id}` for the mailbox `capabilities`: `folders`, `move`,
+`create_folders`, `rename_folders`, `delete_folders`, `labels`,
+`create_labels`, `rename_labels` and `delete_labels`. They say what the
+mailbox supports; do not infer it from the inbox type. A message's location
+is its `folder_id` (one MailMoose folder id, or `null`) and its labels are
+the additive `label_ids` (`tag:Name`, empty for IMAP) — a folder is never a
+label. `/v1/inboxes/{id}/label-catalog` lists the labels themselves and
+repeats the label half of the capabilities. The
+[shared contract and capability matrix](API.md#shared-contract-and-provider-capabilities)
 records deliberate provider differences. `/examples/python`, `/examples/bash`
 and `/examples/curl` provide runnable examples; Python uses only the standard
 library, while Bash needs `curl` and `jq`.

@@ -8,14 +8,59 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
-- Restored the label-first mailbox contract: the catalogue exposes supported
-  system classifications, `label_ids` includes canonical Inbox/Sent/Spam/Trash
-  membership, and `label_id` resolves catalogue IDs across domain, Gmail,
-  Outlook and IMAP list/search routes. Capabilities describe supported apply/remove
-  operations; system actions use the label API, while Gmail and native additive
-  labels retain multiple membership. The reader shares membership resolution.
-  Existing folder filters/endpoints and `/move` remain compatible (D131 amendment;
-  API change explicitly approved).
+- **API Beta 3 — folders and labels are now two separate things (API change
+  explicitly approved).** A message's location is its `folder_id`: one stable
+  MailMoose folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its
+  labels are the additive `label_ids` (`tag:Name` only). A folder id is no
+  longer a label id: the `folder:<id>` catalogue identity is removed, the
+  exclusive/system label classification is gone, and `label_ids` no longer
+  carries Inbox, Sent, Spam or Trash as labels — those are folders again. The
+  legacy `labels`, `mailbox_id` and `folder_path` fields stay, and now
+  describe the same canonical folder. Clients that filtered by a
+  `folder:<id>` label must scope the folder with `folder=` instead; clients
+  that read system classifications out of `label_ids` must read `folder_id`.
+  This supersedes the unreleased label-first contract; the final model is
+  recorded as **D151** in `docs/DECISIONS.md` and documented in
+  `docs/API.md` §3b.
+
+- Capability discovery is one surface: the inbox. `GET /v1/inboxes/{id}` now
+  reports `create_folders`, `rename_folders`, `delete_folders`,
+  `create_labels`, `rename_labels` and `delete_labels` beside the existing
+  folder, move and label flags. A domain or Gmail inbox has system folders
+  only and refuses folder creation, rename and delete; Outlook and IMAP
+  inboxes keep their physical custom folders; an IMAP inbox has no canonical
+  labels and refuses every label operation and label filter; Outlook
+  categories can be created but not renamed or deleted. The label catalogue
+  keeps its `capabilities` block for compatibility and still reports the
+  label half of the same surface, including on an empty catalogue.
+
+- Gmail mail now reports one canonical folder — the first of Trash, Spam,
+  Drafts, Inbox, Sent that the message carries — instead of a set of overlapping
+  system labels. A Gmail inbox's folder list is exactly those five system
+  destinations: there is no virtual folder, no All Mail and no derived Archive
+  view. `{"folder_id":null}` on a move means **archive**: a domain inbox files
+  the message in its internal archive, which is not a canonical folder, so the
+  message then reports `folder_id: null`; a Gmail inbox removes `INBOX` and
+  keeps `SENT`, so an archived message still projects the Sent folder. An
+  Outlook or IMAP message always lives in exactly one physical folder, so a
+  null move is refused there. System folders stay protected, and Sent, Drafts
+  and Outbox are never move destinations.
+
+- A domain mailbox's legacy custom folders are mapped to additive labels
+  without being flattened: the folder records keep their original full paths
+  and the message relations that point at them, so the organisation can be
+  restored, and the label mapping is deterministic, collision-safe (a taken
+  name takes the first free numeric suffix) and idempotent through a mapping
+  table. Mail in a legacy custom folder has no canonical folder — it reports
+  `folder_id: null` and carries the folder's name as a label.
+
+- The Microsoft connector now requests the `MailboxSettings.ReadWrite`
+  delegated permission and creates an Outlook label as a native master
+  category, recording it locally only after Graph accepts it. Renaming and
+  deleting a category stay unsupported. **A Microsoft mailbox connected
+  before this permission was added must be reconnected once** from its
+  settings; a grant without the new permission is refused with `Microsoft
+  mailbox permissions were not granted`. See decision **D152**.
 
 - The domain Receiving dialog now keeps the two SMTP receivers apart. The
   bundled receiver's tuning — SMTP greeting hostname, limits, verification,
@@ -56,6 +101,16 @@ All notable changes to MailMoose are documented here. This project follows
   threads, the local Inbox listing, its counts and its bulk actions. Outbound,
   spam and trashed mail stay out of the Inbox. An account-wide Inbox filter
   still does not reach another inbox's mail.
+
+- The mailbox sidebar now separates the two. A **Folders** heading covers the
+  system views, a **Custom folders** section lists the mailbox's physical
+  custom folders with the native create, rename and delete controls, and a
+  **Labels** section lists the additive classifications. A label never moves a
+  message, so a mailbox without additive labels (IMAP) shows no label control
+  at all, and a mailbox without custom folders (domain, Gmail) shows no folder
+  control. The message reader gained a **Move to** control that files a
+  message through the same folder action the API uses, so an archived message
+  can be moved back to the Inbox.
 
 ### Fixed
 

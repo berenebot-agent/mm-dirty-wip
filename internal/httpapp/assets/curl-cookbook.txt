@@ -291,14 +291,32 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
 
 # List an inbox's folder tree (hierarchical). `errors` carries a per-inbox
 # failure and `completeness` is "unknown" when a remote server is unreachable but
-# the last-known folders are still served.
+# the last-known folders are still served. Domain and Gmail inboxes list their
+# system folders only (a Gmail inbox lists exactly Trash, Spam, Drafts, Inbox
+# and Sent); Outlook and IMAP inboxes also list their custom folders.
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/folders" | jq '{folders: [.items[].path], completeness, errors}'
 
-# Create a folder (Assistant or Owner). A standalone inbox creates it on the
-# live server; a domain inbox creates it locally.
+# What this mailbox supports: folders, move, create_folders, rename_folders,
+# delete_folders, labels, create_labels, rename_labels, delete_labels. The
+# capability block on the inbox is the authoritative discovery surface.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX" | jq '{capabilities}'
+
+# Create a folder (Assistant or Owner). Only an Outlook or IMAP inbox accepts a
+# new folder; a domain or Gmail inbox has no custom folders and refuses it.
 curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"path":"Archive/2026"}' "$BASE/v1/inboxes/$INBOX/folders" | jq .
+
+# Move a message into a folder. The destination is a folder id from
+# GET /v1/inboxes/$INBOX/folders and must belong to the same inbox. Sent,
+# Drafts and Outbox are never move destinations. Use {"folder_id":null} to
+# archive the message — a domain or Gmail inbox only; an Outlook or IMAP
+# message always lives in one physical folder.
+FOLDER=$(curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/folders" | jq -r '.items[] | select(.role=="spam") | .id')
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "{\"folder_id\":\"$FOLDER\"}" "$BASE/v1/inboxes/$INBOX/messages/$MSG/move?wait=true" | jq .
 
 # List messages in one folder (a folder path for a standalone inbox, a folder id
 # for a domain inbox). `before` is the opaque cursor from the previous page.
@@ -385,11 +403,17 @@ curl -sS -G -H "Authorization: Bearer $KEY" \
   --data-urlencode 'q=invoice' --data-urlencode "before=$CURSOR" \
   --data-urlencode 'limit=50' "$BASE/v1/inboxes/$INBOX/search"
 
-# Labels: inspect capabilities even if items is empty. An exclusive folder-backed
-# label is a move destination, not an additive tag. Use returned IDs verbatim.
+# Labels are additive metadata: a name attached to a message, never a folder.
+# The catalogue lists the labels themselves (id tag:Name) and repeats the label
+# half of the inbox capabilities; an IMAP inbox has no labels and returns an
+# empty catalogue. Use returned ids verbatim.
 curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/inboxes/$INBOX/label-catalog"
 curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"label_id":"tag:Invoices","operation":"add"}' \
+  "$BASE/v1/inboxes/$INBOX/messages/$MSG/labels?wait=true"
+# Remove one again (additive labels are independent of the folder).
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"label_id":"tag:Invoices","operation":"remove"}' \
   "$BASE/v1/inboxes/$INBOX/messages/$MSG/labels?wait=true"
 
 # ===========================================================================

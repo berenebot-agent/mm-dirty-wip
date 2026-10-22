@@ -677,10 +677,8 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	}
 	for n := range out {
 		redactInbox(p, &out[n])
-		if out[n].Kind == model.InboxKindStandalone {
-			caps := s.MailboxCapabilities(ctx, out[n])
-			out[n].Capabilities = &caps
-		}
+		caps := s.MailboxCapabilities(ctx, out[n])
+		out[n].Capabilities = &caps
 	}
 	return out, nil
 }
@@ -714,6 +712,10 @@ func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (mod
 		return model.Inbox{}, ErrForbidden
 	}
 	i, err := s.GetInboxInternal(ctx, p.AccountID, id)
+	if err == nil {
+		caps := s.MailboxCapabilities(ctx, i)
+		i.Capabilities = &caps
+	}
 	redactInbox(p, &i)
 	return i, err
 }

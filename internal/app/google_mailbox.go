@@ -154,8 +154,12 @@ func (m *RemoteMailboxService) googleView(ctx context.Context, r store.RemoteMes
 	}
 	_, _, labels, e := m.Service.Store.GoogleMessage(ctx, r.AccountID, r.InboxID, r.ID)
 	if e == nil {
-		v.FolderPath = "ARCHIVE"
-		for _, l := range []string{"INBOX", "SENT", "DRAFT", "SPAM", "TRASH"} {
+		// A message can carry several system labels; its folder is the first
+		// one it carries in the precedence order Trash, Spam, Drafts, Inbox,
+		// Sent. A message with none of them has no folder: there is no derived
+		// Archive view.
+		v.FolderPath = ""
+		for _, l := range []string{"SENT", "INBOX", "DRAFT", "SPAM", "TRASH"} {
 			if containsFoldApp(labels, l) {
 				v.FolderPath = l
 			}
@@ -184,7 +188,11 @@ func (m *RemoteMailboxService) googleFolders(ctx context.Context, account, inbox
 		}
 		out = append(out, store.RemoteFolderSync{Path: l.ID, Name: l.Name, Role: role, Selectable: true, UIDValidity: 1, IndexedAt: time.Now()})
 	}
-	out = append(out, store.RemoteFolderSync{Path: "ARCHIVE", Name: "Archive", Role: model.FolderRoleArchive, Selectable: true, UIDValidity: 1, IndexedAt: time.Now()})
+	// Gmail has no Archive label. The record is kept as a non-selectable
+	// internal row so an existing index is never pruned by a projection
+	// change; it is never listed, never a move destination and never a folder
+	// scope. The archive operation itself removes the Inbox label.
+	out = append(out, store.RemoteFolderSync{Path: googleArchiveDestination, Name: "Archive", Role: model.FolderRoleArchive, Selectable: false, UIDValidity: 1, IndexedAt: time.Now()})
 	_, e = m.Service.Store.ReconcileRemoteFolders(ctx, account, inbox, out)
 	if e == nil {
 		e = m.Service.Store.RefreshGoogleLabelNames(ctx, account, inbox)
@@ -432,13 +440,44 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")
 	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, e
 }
+
+// googleArchiveDestination is the internal handle of the Gmail archive
+// operation: it removes the Inbox label. It is not a folder and never appears
+// in a folder list or a folder filter.
+const googleArchiveDestination = "ARCHIVE"
+
+// googleFolderScope resolves a folder scope to the Gmail system folder it
+// names. A client may address a folder by its stable id or by the provider's
+// label id; a user label is an additive label, not a folder, and selects
+// nothing.
+func (m *RemoteMailboxService) googleFolderScope(ctx context.Context, accountID, inboxID, scope string) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return ""
+	}
+	for _, label := range store.GoogleFolderPrecedence {
+		if label == scope {
+			return scope
+		}
+	}
+	if f, e := m.Service.Store.GetFolderByID(ctx, accountID, inboxID, scope); e == nil {
+		return f.Path
+	}
+	if f, e := m.Service.Store.GetFolder(ctx, accountID, inboxID, scope); e == nil {
+		return f.Path
+	}
+	// An unknown scope selects nothing rather than widening the query.
+	return "none:"
+}
+
 func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal, inbox, folder string, limit int, before string, cached bool) (RemoteListResult, error) {
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
 		return RemoteListResult{}, e
 	}
-	if folder == "" {
-		folder = "INBOX"
-	}
+	// An empty scope is the whole mailbox, including the mail that carries no
+	// system label. A folder scope is a system folder view; a user label is an
+	// additive label and selects no folder.
+	folder = m.googleFolderScope(ctx, p.AccountID, inbox, folder)
 	if cached {
 		// UI navigation serves the cache. Advance an initial or partial index
 		// in the background, but do not start a deep reconcile on every folder
@@ -542,15 +581,21 @@ func (m *RemoteMailboxService) moveGoogle(ctx context.Context, p model.Principal
 	if _, e := m.authorizeAssist(ctx, p, inbox); e != nil {
 		return RemoteMessageView{}, e
 	}
+	// The archive is an operation, not a folder: it removes the Inbox label.
+	if dest == googleArchiveDestination {
+		return m.modifyGoogle(ctx, p, inbox, id, nil, []string{"INBOX"})
+	}
 	f, e := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, dest)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	if dest == "ARCHIVE" {
-		return m.modifyGoogle(ctx, p, inbox, id, nil, []string{"INBOX"})
-	}
-	if f.Role == model.FolderRoleSent || f.Role == model.FolderRoleDrafts {
+	switch f.Role {
+	case model.FolderRoleInbox, model.FolderRoleTrash, model.FolderRoleSpam:
+	case model.FolderRoleSent, model.FolderRoleDrafts:
 		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindUnsupported, "Gmail Sent and Drafts are managed by Google", false, nil)
+	default:
+		// A user label is an additive label, not a location.
+		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindUnsupported, "a Gmail user label is a label, not a move destination", false, nil)
 	}
 	remove := []string{"INBOX"}
 	if dest == "INBOX" {

@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 
@@ -9,28 +10,19 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// labelFilter is the resolved form of a repeatable label query. Names are
-// additive tag matches that AND together; Scope is the backend's first membership
-// scope and MembershipIDs retains every requested classification for intersection.
+// labelFilter keeps additive names separate from folder placement.
 type labelFilter struct {
-	Names         []string
-	Scope         string
-	FolderID      string
-	Role          string
-	MembershipIDs []string
-	// ScopePaths preserves every provider-native membership selector for
-	// indexed thread aggregation, including intersected Gmail system labels.
-	ScopePaths []string
+	Names    []string
+	FolderID string
+	Role     string
 }
 
 // labelFilterFromQuery reads the repeatable "label" and "label_id" parameters.
 // It is the single entry point every list and search handler uses; a raw
 // "label" value is still accepted so existing clients keep working, and a
-// tag:<Name> or folder:<ID> catalogue id resolves to the same thing.
+// tag:<Name> catalogue id resolves to the same additive classification.
 func (s *Server) labelFilterFromQuery(ctx context.Context, p model.Principal, box model.Inbox, q url.Values) (labelFilter, string) {
 	var out labelFilter
-	var catalog []mailLabel
-	var exclusive string
 	raw := append([]string{}, q["label"]...)
 	raw = append(raw, q["label_id"]...)
 	for _, v := range raw {
@@ -42,42 +34,15 @@ func (s *Server) labelFilterFromQuery(ctx context.Context, p model.Principal, bo
 		case strings.HasPrefix(v, "tag:"):
 			out.Names = appendUniqueFold(out.Names, strings.TrimPrefix(v, "tag:"))
 		case strings.HasPrefix(v, "folder:"):
-			if catalog == nil {
-				var err error
-				catalog, err = s.mailboxLabels(ctx, p, box)
-				if err != nil {
-					return labelFilter{}, "label catalogue unavailable"
-				}
-			}
-			var target *mailLabel
-			for i := range catalog {
-				if catalog[i].ID == v {
-					target = &catalog[i]
-					break
-				}
-			}
-			if target == nil {
-				return labelFilter{}, "label not found"
-			}
-			if target.Membership == "exclusive" {
-				if exclusive != "" && exclusive != target.ID {
-					return labelFilter{}, "only one exclusive label may be requested"
-				}
-				exclusive = target.ID
-			}
-			out.MembershipIDs = appendUniqueFold(out.MembershipIDs, target.ID)
-			out.ScopePaths = appendUniqueFold(out.ScopePaths, target.FolderPath)
-			if out.Scope == "" {
-				out.Scope, out.FolderID, out.Role = target.FolderPath, target.FolderID, target.Role
-				if box.Kind == model.InboxKindDomain {
-					out.Scope = target.FolderID
-				}
-			}
+			return labelFilter{}, "folders are not labels; use folder= instead"
 		default:
 			// A bare name is an additive label (matching the action API, where a
 			// plain name prefers a tag when a folder shares the display name).
 			out.Names = appendUniqueFold(out.Names, v)
 		}
+	}
+	if len(out.Names) > 0 && box.Kind == model.InboxKindStandalone && !s.providerLabelInbox(ctx, p, box) {
+		return labelFilter{}, "IMAP does not support additive label filters"
 	}
 	return out, ""
 }
@@ -88,8 +53,7 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 	}
 	switch labels.Role {
 	case model.FolderRoleInbox:
-		f.FolderScoped, f.InboxRole = true, model.FolderRoleInbox
-		f.Direction = "inbound"
+		f.FolderScoped, f.MailboxID = true, labels.FolderID
 	case model.FolderRoleSpam:
 		f.SpamOnly = true
 	case model.FolderRoleTrash:
@@ -97,22 +61,55 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 	case model.FolderRoleSent:
 		f.Direction = "outbound"
 		f.SentOnly = true
+		f.FolderScoped, f.InboxRole = true, model.FolderRoleSent
 	default:
 		f.FolderScoped, f.MailboxID = true, labels.FolderID
 	}
 }
 
-func (labels labelFilter) matchesMembership(m model.Message, id inboxIdentity) bool {
-	if len(labels.MembershipIDs) == 0 {
-		return true
+func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox, folder string, f *store.MessageFilter) error {
+	if folder == "" {
+		return nil
 	}
-	memberships := labelIDsFor(m, id)
-	for _, want := range labels.MembershipIDs {
-		if !containsLabel(memberships, want) {
-			return false
+	f.FolderScoped, f.MailboxID = true, folder
+	if inbox == "" {
+		return nil
+	}
+	item, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, inbox, folder)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch item.Role {
+	case model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash:
+		f.FolderScoped, f.MailboxID = false, ""
+		(labelFilter{FolderID: item.ID, Role: item.Role}).applyLocal(f)
+	default:
+		// Legacy domain custom folders and Archive have no canonical location.
+		f.MailboxID = "unsupported:" + folder
+	}
+	return nil
+}
+
+// A stable folder ID already identifies its inbox, including on account-wide routes.
+func (s *Server) folderInboxScope(ctx context.Context, p model.Principal, inbox, folder string) (string, error) {
+	if inbox != "" || folder == "" {
+		return inbox, nil
+	}
+	boxes, err := s.Service.Store.ListInboxes(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	for _, box := range boxes {
+		if _, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, box.ID, folder); err == nil {
+			return box.ID, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return "", err
 		}
 	}
-	return true
+	return "", nil
 }
 
 // Unselectable hierarchy nodes are not message classifications.
