@@ -344,12 +344,33 @@ func splitStableKey(k string) (time.Time, string) {
 	return t, k[i+1:]
 }
 
+// labelFilteredRemoteThreads uses the cached provider index for both filtering
+// and per-thread counts. The warm-up keeps the existing initial-sync behaviour.
+func (s *Server) labelFilteredRemoteThreads(ctx context.Context, p model.Principal, mb mailboxBackend, folders, labels []string, limit int, before string) ([]model.Thread, error) {
+	if _, err := mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, "", 1, ""); err != nil {
+		return nil, err
+	}
+	records, err := s.Service.Store.ListRemoteThreadsFiltered(ctx, p.AccountID, mb.inbox.ID, folders, labels, limit, before)
+	if err != nil {
+		return nil, normalizeMailboxStoreError(err)
+	}
+	out := make([]model.Thread, 0, len(records))
+	for _, th := range records {
+		v := model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount}
+		if at := remoteTimestamp(th.LatestAt); at != nil {
+			v.LastMessageAt = *at
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 // mergeThreads merges the local thread listing with every authorized remote
 // inbox's threads into one date-sorted page. Each source is asked for exactly the
 // threads strictly after its own cursor (a keyset on the source's
 // (last_message_at, id) ordering), so a merged page never loses a thread that
 // sorts below the global key, and the per-source progress travels in the cursor.
-func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder string, cur commonCursor, limit int) ([]model.Thread, string, []model.InboxFailure, error) {
+func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder string, labels labelFilter, cur commonCursor, limit int) ([]model.Thread, string, []model.InboxFailure, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -362,7 +383,18 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		source string
 	}
 	var entries []tentry
-	local, lerr := s.Service.Store.ListThreadsInFolderBefore(ctx, p, "", pageLookahead(limit), cur.sourceCursor("local"), folder)
+	var local []model.Thread
+	var lerr error
+	if len(labels.Names) > 0 || len(labels.MembershipIDs) > 0 {
+		filter := store.MessageFilter{Labels: labels.Names}
+		if folder != "" {
+			filter.MailboxID, filter.FolderScoped = folder, true
+		}
+		labels.applyLocal(&filter)
+		local, lerr = s.Service.Store.ListThreadsFilteredBefore(ctx, p, filter, pageLookahead(limit), cur.sourceCursor("local"))
+	} else {
+		local, lerr = s.Service.Store.ListThreadsInFolderBefore(ctx, p, "", pageLookahead(limit), cur.sourceCursor("local"), folder)
+	}
 	if lerr != nil {
 		return nil, "", nil, normalizeMailboxStoreError(lerr)
 	}
@@ -380,14 +412,28 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 			continue
 		}
 		s.demandDetection(ctx, []mailboxBackend{mb})
-		threads, rerr := mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, folder, pageLookahead(limit), cur.sourceCursor(mb.inbox.ID))
+		var threads []model.Thread
+		var rerr error
+		if len(labels.Names) > 0 || len(labels.MembershipIDs) > 0 {
+			paths := append([]string{}, labels.ScopePaths...)
+			if folder != "" {
+				paths = append(paths, folder)
+			}
+			threads, rerr = s.labelFilteredRemoteThreads(ctx, p, mb, paths, labels.Names, pageLookahead(limit), cur.sourceCursor(mb.inbox.ID))
+		} else {
+			var remoteThreads []app.RemoteThreadView
+			remoteThreads, rerr = mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, folder, pageLookahead(limit), cur.sourceCursor(mb.inbox.ID))
+			for _, th := range remoteThreads {
+				threads = append(threads, model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount, LastMessageAt: th.LastMessageAt})
+			}
+		}
 		if rerr != nil {
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 			continue
 		}
 		for _, th := range threads {
 			ts := th.LastMessageAt.UTC()
-			entries = append(entries, tentry{th: model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount, LastMessageAt: th.LastMessageAt}, ts: ts, key: stableKey(ts, th.Key), cursor: th.Key, source: mb.inbox.ID})
+			entries = append(entries, tentry{th: th, ts: ts, key: stableKey(ts, th.ID), cursor: th.ID, source: mb.inbox.ID})
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
