@@ -92,6 +92,7 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 		f.Trashed, f.IncludeSpam = true, true
 	case model.FolderRoleSent:
 		f.Direction = "outbound"
+		f.SentOnly = true
 	default:
 		f.FolderScoped, f.MailboxID = true, labels.FolderID
 	}
