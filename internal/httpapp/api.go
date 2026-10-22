@@ -1177,6 +1177,12 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
+	labels, problem := s.accountLabelFilter(r.Context(), p, inbox, r.URL.Query())
+	if problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+	filtered := len(labels.Names) > 0 || len(labels.MembershipIDs) > 0
 	if inbox == "" {
 		// Account-wide: one globally date-sorted thread stream across the local
 		// store and every authorized remote inbox, resumed through one cursor.
@@ -1185,7 +1191,7 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid cursor")
 			return
 		}
-		items, cursor, failures, err := s.mergeThreads(r.Context(), p, r.URL.Query().Get("folder"), cur, limit)
+		items, cursor, failures, err := s.mergeThreads(r.Context(), p, r.URL.Query().Get("folder"), labels, cur, limit)
 		if err != nil {
 			mapMailboxError(w, err)
 			return
@@ -1204,18 +1210,40 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 	completeness := model.CompletenessComplete
 	if mb.routed {
 		s.demandDetection(r.Context(), []mailboxBackend{mb})
-		threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), pageLookahead(limit), before)
-		if rerr != nil {
-			mapMailboxError(w, rerr)
-			return
-		}
-		for _, t := range threads {
-			items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
+		if filtered {
+			paths := append([]string{}, labels.ScopePaths...)
+			if folder := strings.TrimSpace(r.URL.Query().Get("folder")); folder != "" {
+				paths = append(paths, folder)
+			}
+			var rerr error
+			items, rerr = s.labelFilteredRemoteThreads(r.Context(), p, mb, paths, labels.Names, pageLookahead(limit), before)
+			if rerr != nil {
+				mapMailboxError(w, rerr)
+				return
+			}
+		} else {
+			threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), pageLookahead(limit), before)
+			if rerr != nil {
+				mapMailboxError(w, rerr)
+				return
+			}
+			for _, t := range threads {
+				items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
+			}
 		}
 		completeness = s.remoteIndexCompleteness(r.Context(), p.AccountID, inbox)
 	} else {
 		var lerr error
-		items, lerr = s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, inbox, pageLookahead(limit), before, strings.TrimSpace(r.URL.Query().Get("folder")))
+		if filtered {
+			filter := store.MessageFilter{InboxID: inbox, Labels: labels.Names}
+			labels.applyLocal(&filter)
+			if folder := strings.TrimSpace(r.URL.Query().Get("folder")); folder != "" && filter.MailboxID == "" && !filter.FolderScoped {
+				filter.MailboxID, filter.FolderScoped = folder, true
+			}
+			items, lerr = s.Service.Store.ListThreadsFilteredBefore(r.Context(), p, filter, pageLookahead(limit), before)
+		} else {
+			items, lerr = s.Service.Store.ListThreadsInFolderBefore(r.Context(), p, inbox, pageLookahead(limit), before, strings.TrimSpace(r.URL.Query().Get("folder")))
+		}
 		if lerr != nil {
 			mapStoreError(w, lerr)
 			return
