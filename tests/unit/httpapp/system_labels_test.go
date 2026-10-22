@@ -221,8 +221,8 @@ func TestSentLabelExcludesPendingAndFailedOutbound(t *testing.T) {
 		m, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
 			Inbox: box, Provider: "smtp",
 			RFCMessageID: "<" + subject + "@example.test>",
-			From: model.Address{Address: box.Address},
-			To: []string{"recipient@example.test"}, Subject: subject, Text: subject,
+			From:         model.Address{Address: box.Address},
+			To:           []string{"recipient@example.test"}, Subject: subject, Text: subject,
 			RawPath: "messages/" + subject + ".eml", SizeBytes: 5,
 		})
 		if err != nil {
