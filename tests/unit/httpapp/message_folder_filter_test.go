@@ -113,7 +113,9 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 	} {
 		rr := apiGet(t, h, path, key)
 		var page struct {
-			Items []struct{ ID string `json:"id"` } `json:"items"`
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
 		}
 		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
 			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
@@ -152,8 +154,8 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 	// Thread pagination must use the same Inbox predicate to resolve before.
 	first := apiGet(t, h, "/v1/inboxes/"+box.ID+"/threads?"+param+"&limit=1", key)
 	var page1 struct {
-		Items []model.Thread `json:"items"`
-		NextCursor string `json:"next_cursor"`
+		Items      []model.Thread `json:"items"`
+		NextCursor string         `json:"next_cursor"`
 	}
 	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &page1) != nil || len(page1.Items) != 1 || page1.NextCursor == "" {
 		t.Fatalf("first Inbox thread page: %d %s", first.Code, first.Body.String())
@@ -180,7 +182,10 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 	if bulk.Code != http.StatusSeeOther {
 		t.Fatalf("Inbox bulk mark read: %d %s", bulk.Code, bulk.Body.String())
 	}
-	for _, tc := range []struct{ msg model.Message; read bool }{
+	for _, tc := range []struct {
+		msg  model.Message
+		read bool
+	}{
 		{implicit, true}, {explicit, true}, {moved, false}, {other, false},
 	} {
 		got, err := svc.Store.GetMessage(ctx, p, tc.msg.ID)
