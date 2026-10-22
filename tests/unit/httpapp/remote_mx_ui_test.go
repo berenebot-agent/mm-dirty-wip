@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/dellarb/mailmoose/internal/app"
 )
 
 func TestRemoteMXUIExplainsOutboundConnectionAndShowsReceiverSettings(t *testing.T) {
@@ -86,6 +88,13 @@ func TestRemoteMXSingleSaveAndRemove(t *testing.T) {
 	receiver, err := svc.GetAccountMXReceiver(ctx, u.AccountID)
 	if err != nil || receiver.URL != "https://mx.example.test" || !receiver.KeyConfigured {
 		t.Fatalf("receiver not saved: %+v %v", receiver, err)
+	}
+	// A refusal already returned by the account receiver API must also be visible
+	// in the domain Receiving dialog, not only in the Antler status list.
+	svc.RemoteMXRuntime = uatRemoteMXStatus{}
+	panel := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=remotemx").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	if !strings.Contains(panel, `data-remote-mx-status`) || !strings.Contains(panel, "receiver refused the session (HTTP 405)") {
+		t.Fatalf("Remote MX receiver HTTP status missing from dialog: %s", panel)
 	}
 	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, domain.ID)
 	if err != nil || cfg.Provider != "remotemx" {
@@ -223,4 +232,13 @@ func TestRemoteMXViewHidesDirectMXReceiverSettings(t *testing.T) {
 	if gate < 0 || strings.HasPrefix(direct[gate:hostname], "data-mx-panel hidden") {
 		t.Fatal("Direct MX receiver editor must be visible while Direct MX is selected")
 	}
+}
+
+// uatRemoteMXStatus supplies the same HTTP refusal the account API exposes.
+type uatRemoteMXStatus struct{}
+
+func (uatRemoteMXStatus) WakeRemoteMX() {}
+
+func (uatRemoteMXStatus) RemoteMXStatus(context.Context, string) app.AccountMXReceiverStatus {
+	return app.AccountMXReceiverStatus{Configured: true, State: app.MXStateUnavailable, Detail: "receiver refused the session (HTTP 405)", HTTPCode: 405}
 }

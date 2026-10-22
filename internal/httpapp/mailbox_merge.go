@@ -517,6 +517,28 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q 
 		if labels.Scope != "" {
 			searchFolder = labels.Scope
 		}
+		// Match the connected message listing: an unknown folder has no rows.
+		// Do not pass a nonexistent folder to a live provider search, where Gmail
+		// in particular would expose its own invalid-label error to API clients.
+		// When folders have not been discovered yet, leave the search alone.
+		if folder != "" && labels.Scope == "" {
+			knownFolders, ferr := s.Service.Store.ListFolders(ctx, p.AccountID, mb.inbox.ID)
+			if ferr != nil {
+				return nil, "", model.CompletenessUnknown, nil, normalizeMailboxStoreError(ferr)
+			}
+			if len(knownFolders) > 0 {
+				found := false
+				for _, f := range knownFolders {
+					if f.Path == folder {
+						found = true
+						break
+					}
+				}
+				if !found {
+					continue
+				}
+			}
+		}
 		collected := 0
 		exhausted := false
 		var rerr error
