@@ -106,13 +106,17 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		"/v1/inboxes/" + box.ID + "/messages?folder=NoSuchFolder",
 	} {
 		rr := apiGet(t, srv.Handler(), path, key)
-		var env struct { Items []json.RawMessage `json:"items"` }
+		var env struct {
+			Items []json.RawMessage `json:"items"`
+		}
 		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &env) != nil || len(env.Items) != 0 {
 			t.Fatalf("unknown Google folder %s: %d %s", path, rr.Code, rr.Body.String())
 		}
 	}
 	valid := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/search?q=Hello&folder=INBOX", key)
-	var validEnv struct { Items []json.RawMessage `json:"items"` }
+	var validEnv struct {
+		Items []json.RawMessage `json:"items"`
+	}
 	if valid.Code != http.StatusOK || json.Unmarshal(valid.Body.Bytes(), &validEnv) != nil || len(validEnv.Items) != 1 {
 		t.Fatalf("valid Google folder search must still reach provider: %d %s", valid.Code, valid.Body.String())
 	}
