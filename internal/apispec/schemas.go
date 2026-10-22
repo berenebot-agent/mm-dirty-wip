@@ -512,6 +512,7 @@ var schemas = map[string]any{
 		"inbox_id":        str("Owning inbox id."),
 		"subject":         str("Thread subject."),
 		"message_count":   integer("Number of messages."),
+		"unread_count":    integer("Unread messages among the messages counted for this thread, respecting list filters. Always present, including zero."),
 		"last_message_at": ts("Newest message time."),
 	}),
 	"ThreadList": arrayOf("Thread", "Threads, newest activity first."),
@@ -520,6 +521,7 @@ var schemas = map[string]any{
 		"inbox_id":      str("Owning inbox id."),
 		"subject":       str("Thread subject."),
 		"message_count": integer("Number of messages."),
+		"unread_count":  integer("Unread messages in the returned messages array. Always present, including zero."),
 		"messages":      arrayOf("Message", "Messages in the thread."),
 	}),
 

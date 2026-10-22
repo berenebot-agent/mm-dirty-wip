@@ -92,6 +92,7 @@ type fakeIMAPMsg struct {
 	subject          string
 	from             imap.Address
 	internalDate     time.Time
+	flags            []string
 }
 
 func fakMsgDate(m *fakeIMAPMsg) time.Time {
@@ -221,6 +222,12 @@ func (f *fakeIMAP) FetchHeader(_ context.Context, loc imap.Locator) (imap.Messag
 // raw MIME so an attachment filter can be exercised.
 func fakeMessageHeader(m *fakeIMAPMsg) imap.MessageHeader {
 	h := imap.MessageHeader{FolderPath: m.folder, UIDValidity: m.uidValidity, UID: m.uid, MessageID: m.messageID, Subject: m.subject, From: m.from, InternalDate: fakMsgDate(m), Size: int64(len(m.raw))}
+	h.Flags = append([]string(nil), m.flags...)
+	for _, flag := range h.Flags {
+		if flag == imap.FlagSeen {
+			h.Read = true
+		}
+	}
 	if strings.Contains(strings.ToLower(m.raw), "content-disposition: attachment") {
 		h.HasAttach = true
 	}

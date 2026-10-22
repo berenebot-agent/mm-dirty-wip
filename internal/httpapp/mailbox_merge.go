@@ -356,7 +356,7 @@ func (s *Server) labelFilteredRemoteThreads(ctx context.Context, p model.Princip
 	}
 	out := make([]model.Thread, 0, len(records))
 	for _, th := range records {
-		v := model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount}
+		v := model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount, UnreadCount: th.UnreadCount}
 		if at := remoteTimestamp(th.LatestAt); at != nil {
 			v.LastMessageAt = *at
 		}
@@ -424,7 +424,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 			var remoteThreads []app.RemoteThreadView
 			remoteThreads, rerr = mb.remote.ListRemoteThreads(ctx, p, mb.inbox.ID, folder, pageLookahead(limit), cur.sourceCursor(mb.inbox.ID))
 			for _, th := range remoteThreads {
-				threads = append(threads, model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount, LastMessageAt: th.LastMessageAt})
+				threads = append(threads, model.Thread{ID: th.Key, InboxID: th.InboxID, Subject: th.Subject, MessageCount: th.MessageCount, UnreadCount: th.UnreadCount, LastMessageAt: th.LastMessageAt})
 			}
 		}
 		if rerr != nil {

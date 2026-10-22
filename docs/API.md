@@ -1548,6 +1548,15 @@ Generated from `internal/apispec`; do not edit by hand.
 
 ### Threads
 
+Thread list items and thread detail responses include integer `unread_count`,
+including an explicit `0` when all counted messages are read. This applies to
+domain and standalone inboxes (IMAP, Gmail and Outlook), both inbox-scoped and
+account-wide routes. List counts respect the same folder/label filters and
+visibility rules as `message_count`; hidden Spam, Trash and internal local mail
+do not inflate ordinary thread counts. Detail `unread_count` counts unread
+messages in the returned `messages` array, matching the detail's `message_count`.
+The `/messages` subroute remains a message array, not a thread summary.
+
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
 | GET | /v1/threads | List threads | read |
