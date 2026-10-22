@@ -634,8 +634,11 @@ schema: a binary downgrade requires restoring a compatible backup.
 - **IMAP mail with legacy local tags.** The tags are preserved in the legacy
   `labels` field. They are not canonical `label_ids`, are not in the label
   catalogue, and cannot be applied or removed through the canonical Labels API.
-  The legacy PATCH `labels` field remains a local-tag compatibility interface;
-  it does not add canonical IMAP label support.
+  The legacy message PATCH `labels` field is now **read-only for IMAP**:
+  attempts to set or clear it (including an empty array) return
+  `unsupported_operation` without changing message state. Existing local
+  tags remain readable in `labels` but no longer have a public write path.
+  This is a deliberate Beta 3 compatibility change.
 
 ## 4. Messages
 

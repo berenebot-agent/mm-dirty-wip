@@ -1413,7 +1413,7 @@ func (s *Store) googleFolderViewCounts(ctx context.Context, accountID, inboxID s
 				WHEN MAX(CASE WHEN g.label_id='INBOX' THEN 1 ELSE 0 END)=1 THEN 'INBOX'
 				WHEN MAX(CASE WHEN g.label_id='SENT' THEN 1 ELSE 0 END)=1 THEN 'SENT'
 				ELSE '' END`
-	q := `SELECT view, count(*), sum(CASE WHEN unread=0 THEN 1 ELSE 0 END) FROM (
+	q := `SELECT view, count(*), sum(CASE WHEN unread=1 THEN 1 ELSE 0 END) FROM (
 		SELECT m.id, ` + view + ` AS view, MAX(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) AS unread
 		FROM inbox_remote_messages m
 		LEFT JOIN google_label_memberships g ON g.inbox_id=? AND g.message_id=m.id AND g.label_id IN (` + googleLabelList(GoogleFolderPrecedence) + `)
