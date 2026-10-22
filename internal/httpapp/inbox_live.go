@@ -127,6 +127,7 @@ func mailboxFilter(id, folder, label string) (f store.MessageFilter, basePath st
 		f.InboxRole = model.FolderRoleInbox
 	case "sent":
 		f.Direction = "outbound"
+		f.SentOnly = true
 		basePath += "/sent"
 	case "spam":
 		f.SpamOnly = true
