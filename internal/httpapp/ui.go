@@ -2121,6 +2121,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
 <p class="muted small">Set up a receiver you run separately. MailMoose connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mailmoose/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
 <p class="muted small">The receiver's SMTP hostname, limits, verification and TLS are configured on the receiver itself, not here. Point the MX records for <code>{{$d.Name}}</code> at that hostname; no per-domain DNS proof or key is needed.</p>
+<p class="muted small" data-remote-mx-status>Receiver status: {{if $r.Configured}}{{if $r.State}}{{$r.State}}{{else}}unknown{{end}}{{if $r.Detail}} — {{$r.Detail}}{{end}}{{else}}Not configured{{end}}</p>
 {{if $.Principal.Admin}}<div class="remote-mx-editor">
 <p class="muted small">The receiver connection is shared by this account's Remote MX domains. Save updates the connection and this domain's receiving settings together.</p>
 {{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
