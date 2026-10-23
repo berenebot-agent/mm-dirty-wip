@@ -23,10 +23,12 @@ import (
 // folderEnvelope is the shared listing envelope the folder routes return.
 type folderEnvelope struct {
 	Items []struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
-		Name string `json:"name"`
-		Role string `json:"role"`
+		ID           string `json:"id"`
+		Path         string `json:"path"`
+		Name         string `json:"name"`
+		Role         string `json:"role"`
+		MessageCount int64  `json:"message_count"`
+		UnreadCount  int64  `json:"unread_count"`
 	} `json:"items"`
 }
 
@@ -318,4 +320,65 @@ func TestGmailSearchUsesSingleFolderPrecedence(t *testing.T) {
 		t.Fatalf("user label search = %+v, want no rows", res.Items)
 	}
 	_ = time.Now
+}
+
+// TestDomainFolderCountsMatchTheListing proves a domain inbox's folders report
+// the size of the view a reader gets. The counts were only ever fed from the
+// remote index, which holds nothing for a local mailbox, so every folder of a
+// domain inbox reported 0 while its listing returned rows.
+func TestDomainFolderCountsMatchTheListing(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	key := adminKey(t, svc, u)
+	// One inbox message, and one classified into Spam.
+	seedInbound(t, svc, box, "counts-inbox", "<counts-inbox@test>", "Inbox mail", "body")
+	spammed := seedInbound(t, svc, box, "counts-spam", "<counts-spam@test>", "Spam mail", "body")
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, spammed.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() map[string]struct{ total, unread int64 } {
+		t.Helper()
+		listed := apiGet(t, h, "/v1/inboxes/"+box.ID+"/folders", key)
+		if listed.Code != http.StatusOK {
+			t.Fatalf("folder list = %d %s", listed.Code, listed.Body.String())
+		}
+		var env folderEnvelope
+		if err := json.Unmarshal(listed.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]struct{ total, unread int64 }{}
+		for _, f := range env.Items {
+			out[f.Role] = struct{ total, unread int64 }{f.MessageCount, f.UnreadCount}
+		}
+		return out
+	}
+	got := counts()
+	if got[model.FolderRoleInbox].total != 1 {
+		t.Fatalf("Inbox count = %d want 1 (the Spam-flagged mail is not Inbox mail)", got[model.FolderRoleInbox].total)
+	}
+	if got[model.FolderRoleInbox].unread != 1 {
+		t.Fatalf("Inbox unread = %d want 1", got[model.FolderRoleInbox].unread)
+	}
+	if got[model.FolderRoleSpam].total != 1 {
+		t.Fatalf("Spam count = %d want 1", got[model.FolderRoleSpam].total)
+	}
+	// The count is the size of the folder's listing, not an independent guess.
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	inboxFolder, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?folder="+inboxFolder.ID, key)
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &page) != nil {
+		t.Fatalf("inbox listing = %d %s", listed.Code, listed.Body.String())
+	}
+	if int64(len(page.Items)) != got[model.FolderRoleInbox].total {
+		t.Fatalf("Inbox listing has %d rows, folder count says %d", len(page.Items), got[model.FolderRoleInbox].total)
+	}
 }
