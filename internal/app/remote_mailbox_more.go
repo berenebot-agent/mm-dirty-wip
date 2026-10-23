@@ -59,14 +59,14 @@ func (m *RemoteMailboxService) ListRemoteThreads(ctx context.Context, p model.Pr
 
 // GetRemoteThread returns a thread's cached messages, oldest first, scoped to the
 // account and inbox.
-func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Principal, inboxID, threadKey string) (RemoteThreadView, []RemoteMessageView, error) {
+func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Principal, inboxID, threadKey string, limit ...int) (RemoteThreadView, []RemoteMessageView, error) {
 	if _, err := m.authorizeRead(ctx, p, inboxID); err != nil {
 		return RemoteThreadView{}, nil, err
 	}
 	if err := m.ensureIndexed(ctx, p.AccountID, inboxID); err != nil {
 		return RemoteThreadView{}, nil, err
 	}
-	msgs, err := m.Service.Store.ListRemoteThreadMessages(ctx, p.AccountID, inboxID, threadKey)
+	msgs, err := m.Service.Store.ListRemoteThreadMessages(ctx, p.AccountID, inboxID, threadKey, limit...)
 	if err != nil {
 		return RemoteThreadView{}, nil, mapStoreError(err)
 	}
@@ -99,6 +99,48 @@ func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Prin
 		view.LastMessageAt = parseStoreTime(*msgs[len(msgs)-1].ReceivedAt)
 	}
 	return view, views, nil
+}
+
+// ListRemoteThreadPage spans indexed folders instead of silently restricting a
+// thread to the default Inbox view. Provider bodies are never fetched here.
+func (m *RemoteMailboxService) ListRemoteThreadPage(ctx context.Context, p model.Principal, inboxID, threadKey, folder, before string, limit int) (RemoteListResult, error) {
+	inbox, err := m.authorizeRead(ctx, p, inboxID)
+	if err != nil {
+		return RemoteListResult{}, err
+	}
+	if err := m.ensureIndexed(ctx, p.AccountID, inboxID); err != nil {
+		return RemoteListResult{}, err
+	}
+	folder = m.remoteFolderScope(ctx, p.AccountID, inboxID, folder)
+	if folder != "" && !m.folderInScope(inbox, folder) {
+		return RemoteListResult{}, model.NewMailboxError(model.ErrKindNotFound, "folder is not in this mailbox's scope", false, nil)
+	}
+	rows, err := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inboxID, store.RemoteMessageFilter{ThreadKey: threadKey, FolderPath: folder, Before: before, Limit: limit})
+	if err != nil {
+		return RemoteListResult{}, mapStoreError(err)
+	}
+	out := RemoteListResult{Items: []RemoteMessageView{}}
+	for _, row := range rows {
+		if !m.folderInScope(inbox, row.FolderPath) {
+			continue
+		}
+		v := m.remoteView(ctx, row)
+		if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+			v.FolderPath, _ = m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inboxID, row.ID)
+		}
+		if m.IsGoogle(ctx, p.AccountID, inboxID) {
+			v = m.googleView(ctx, row)
+		}
+		v.Labels, err = m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inboxID, row.ID)
+		if err != nil {
+			return RemoteListResult{}, mapStoreError(err)
+		}
+		out.Items = append(out.Items, v)
+	}
+	if len(rows) == limit && limit > 0 {
+		out.NextCursor = rows[len(rows)-1].ID
+	}
+	return out, nil
 }
 
 // ensureIndexed reconciles the remote index once if it has never been built.
