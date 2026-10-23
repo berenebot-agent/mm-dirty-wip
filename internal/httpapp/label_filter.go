@@ -93,7 +93,9 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 	if inbox == "" {
 		return nil
 	}
-	item, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, inbox, folder)
+	// A legacy path form must reach the same role mapping as the id form, so
+	// the lookup accepts either (ids are unique and are never a valid path).
+	item, err := s.Service.Store.GetFolderDestination(ctx, p.AccountID, inbox, folder)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
@@ -142,7 +144,10 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 	return nil
 }
 
-// A stable folder ID already identifies its inbox, including on account-wide routes.
+// A stable folder ID or a legacy path already identifies its inbox, including
+// on account-wide routes. A path is ambiguous when several inboxes hold a
+// folder of that name (every mailbox has a "Spam"), so only a unique match
+// scopes the query; anything else keeps the caller's unscoped value.
 func (s *Server) folderInboxScope(ctx context.Context, p model.Principal, inbox, folder string) (string, error) {
 	if inbox != "" || folder == "" {
 		return inbox, nil
@@ -151,12 +156,18 @@ func (s *Server) folderInboxScope(ctx context.Context, p model.Principal, inbox,
 	if err != nil {
 		return "", err
 	}
+	matches := 0
+	owner := ""
 	for _, box := range boxes {
-		if _, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, box.ID, folder); err == nil {
-			return box.ID, nil
+		if _, err := s.Service.Store.GetFolderDestination(ctx, p.AccountID, box.ID, folder); err == nil {
+			matches++
+			owner = box.ID
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return "", err
 		}
+	}
+	if matches == 1 {
+		return owner, nil
 	}
 	return "", nil
 }

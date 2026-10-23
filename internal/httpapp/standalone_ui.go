@@ -302,6 +302,16 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// The legacy path form reaches the same folder, so a typed or hand-built
+	// link answers the same listing the id form does.
+	if target == nil {
+		for i := range folders {
+			if folders[i].Path == folderID {
+				target = &folders[i]
+				break
+			}
+		}
+	}
 	if target == nil {
 		http.Error(w, "folder not found", 404)
 		return
