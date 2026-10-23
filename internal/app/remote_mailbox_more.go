@@ -440,28 +440,46 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 	if err := sess.CreateFolder(ctx, path); err != nil {
 		return model.Folder{}, normalizeRemoteError(err)
 	}
-	// Mirror the new folder locally so it is immediately addressable.
-	display := strings.TrimSpace(name)
-	if display == "" {
-		display = lastRemoteSegment(path)
+	// Mirror the whole discovered tree, not just the new path: the reconcile
+	// replaces the remote folder set and prunes whatever it is not given, so a
+	// one-item call would drop an existing parent folder and every sibling.
+	if err := m.syncFolderTree(ctx, sess, inbox, p.AccountID, inboxID); err != nil {
+		return model.Folder{}, err
 	}
-	parent := ""
-	delim := m.scopeDelimiter(inbox)
-	if delim != 0 {
-		parent = parentOf(path, delim)
+	got, gerr := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, path)
+	if gerr != nil {
+		return model.Folder{}, mapStoreError(gerr)
 	}
-	folders, err := m.Service.Store.ReconcileRemoteFolders(ctx, p.AccountID, inboxID, []store.RemoteFolderSync{{
-		Path: path, Name: display, ParentPath: parent, Role: model.FolderRoleFolder, Selectable: true, IndexedAt: time.Now().UTC(),
-	}})
+	return got, nil
+}
+
+// syncFolderTree re-reads the inbox's folder tree from the live server and
+// reconciles it into the cached index. It is the post-mutation mirror: a folder
+// create or rename changes the tree, and a partial reconcile would prune the
+// siblings the mutation did not mention.
+func (m *RemoteMailboxService) syncFolderTree(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID string) error {
+	folders, scope, err := sess.DiscoverFolders(ctx, inbox.Namespace)
 	if err != nil {
-		return model.Folder{}, mapStoreError(err)
+		return normalizeRemoteError(err)
 	}
+	now := time.Now().UTC()
+	sync := make([]store.RemoteFolderSync, 0, len(folders))
 	for _, f := range folders {
-		if f.Path == path {
-			return f, nil
-		}
+		sync = append(sync, store.RemoteFolderSync{
+			Path:        f.Path,
+			Name:        f.Name,
+			ParentPath:  parentOf(f.Path, scope.Delimiter),
+			Role:        f.Role,
+			Selectable:  f.Selectable,
+			HasChildren: f.HasChildren,
+			SpecialUse:  f.SpecialUse,
+			IndexedAt:   now,
+		})
 	}
-	return model.Folder{InboxID: inboxID, Path: path, Name: display, Role: model.FolderRoleFolder, Selectable: true}, nil
+	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, accountID, inboxID, sync); err != nil {
+		return mapStoreError(err)
+	}
+	return nil
 }
 
 // RenameRemoteFolder renames a remote folder on the live server and re-mirrors the
@@ -518,20 +536,19 @@ func (m *RemoteMailboxService) RenameRemoteFolder(ctx context.Context, p model.P
 	} else {
 		newPath = newName
 	}
-	if !m.folderInScope(inbox, newPath) {
+	// A rename proposes a name that exists nowhere yet, so it is admitted by the
+	// same rule as a create: in scope already, a child of an in-scope folder, or a
+	// new top-level personal folder.
+	if !m.folderInScopeCreate(inbox, newPath) {
 		return model.Folder{}, model.NewMailboxError(model.ErrKindInvalid, "renamed folder would leave the mailbox scope", false, nil)
 	}
 	if err := sess.RenameFolder(ctx, oldPath, newPath); err != nil {
 		return model.Folder{}, normalizeRemoteError(err)
 	}
-	// Re-mirror: drop the old path and index the new one. A reconcile will pick
-	// up children whose paths the server moved with the parent.
-	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, p.AccountID, inboxID, []store.RemoteFolderSync{{
-		Path: newPath, Name: newName, ParentPath: parentOf(newPath, delim), Role: model.FolderRoleFolder, Selectable: true, IndexedAt: time.Now().UTC(),
-	}}); err != nil {
-		return model.Folder{}, mapStoreError(err)
-	}
-	if _, err := m.ReconcileRemote(ctx, p.AccountID, inboxID); err != nil {
+	// Re-mirror the whole tree: the rename changes the path of the folder and of
+	// every child the server moves with it, so a one-item reconcile would prune
+	// the rest of the set.
+	if err := m.syncFolderTree(ctx, sess, inbox, p.AccountID, inboxID); err != nil {
 		return model.Folder{}, err
 	}
 	got, err := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, newPath)
