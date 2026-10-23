@@ -1546,7 +1546,13 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 	}
 	destUIDValidity := res.UIDValidity
 	if destUIDValidity == 0 {
-		if v, verr := sess.EnsureFolderExists(ctx, destPath); verr == nil {
+		// The move does not report the destination UIDVALIDITY when it is already
+		// known to the cached tree: another SELECT on the destination is the most
+		// expensive step of a move against a big mailbox, so it is only paid when
+		// the tree has never seen that folder.
+		if v, ok := m.cachedUIDValidity(ctx, p.AccountID, inboxID, destPath); ok {
+			destUIDValidity = v
+		} else if v, verr := sess.EnsureFolderExists(ctx, destPath); verr == nil {
 			destUIDValidity = v
 		}
 	}
@@ -1556,10 +1562,7 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 		// stale source row and let the next reconcile re-index the destination.
 		if strings.TrimSpace(rec.RFCMessageID) != "" {
 			if found, ferr := sess.FindByMessageID(ctx, destPath, rec.RFCMessageID); ferr == nil && found.UID != 0 {
-				updated, merr := m.Service.Store.MoveRemoteMessageMetadata(ctx, p.AccountID, inboxID, rec.ID, destPath, found.UIDValidity, found.UID)
-				if merr == nil {
-					return m.GetRemoteMessage(ctx, p, inboxID, updated.ID)
-				}
+				return m.movedRemoteView(ctx, p.AccountID, inboxID, rec.ID, destPath, found.UIDValidity, found.UID)
 			}
 		}
 		if derr := m.Service.Store.DeleteRemoteMessage(ctx, p.AccountID, inboxID, rec.ID); derr != nil {
@@ -1572,11 +1575,33 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 		view.FolderPath = destPath
 		return view, nil
 	}
-	updated, err := m.Service.Store.MoveRemoteMessageMetadata(ctx, p.AccountID, inboxID, rec.ID, destPath, destUIDValidity, res.DestinationUID)
+	return m.movedRemoteView(ctx, p.AccountID, inboxID, rec.ID, destPath, destUIDValidity, res.DestinationUID)
+}
+
+// cachedUIDValidity reports the UIDVALIDITY the last sync pass observed for a
+// folder, so a move that already knows it does not pay another SELECT.
+func (m *RemoteMailboxService) cachedUIDValidity(ctx context.Context, accountID, inboxID, path string) (uint32, bool) {
+	validity, ok, err := m.Service.Store.RemoteFolderUIDValidity(ctx, accountID, inboxID, path)
+	if err != nil {
+		return 0, false
+	}
+	return validity, ok
+}
+
+// movedRemoteView returns the view of a message the service itself just moved.
+// The cached row already carries every header field the move touched, and the
+// live header refresh would open a second connection and SELECT another large
+// folder only to re-assert them, so the move's own write is the durable answer.
+func (m *RemoteMailboxService) movedRemoteView(ctx context.Context, accountID, inboxID, messageID, destPath string, uidValidity, uid uint32) (RemoteMessageView, error) {
+	updated, err := m.Service.Store.MoveRemoteMessageMetadata(ctx, accountID, inboxID, messageID, destPath, uidValidity, uid)
 	if err != nil {
 		return RemoteMessageView{}, mapStoreError(err)
 	}
-	return m.GetRemoteMessage(ctx, p, inboxID, updated.ID)
+	got, gerr := m.Service.Store.GetRemoteMessageWithLabels(ctx, accountID, inboxID, updated.ID)
+	if gerr != nil {
+		return RemoteMessageView{}, mapStoreError(gerr)
+	}
+	return m.remoteView(ctx, got), nil
 }
 
 // ArrivalBodyPreview fetches a short plain-text preview of a detected arrival

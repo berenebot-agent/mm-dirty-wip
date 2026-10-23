@@ -144,6 +144,21 @@ func validFolderRole(role string) bool {
 	}
 }
 
+// RemoteFolderUIDValidity returns the UIDVALIDITY last observed for a folder by
+// a sync pass. ok is false when the folder is unknown or its validity was never
+// resolved, so the caller must ask the server instead of caching a zero.
+func (s *Store) RemoteFolderUIDValidity(ctx context.Context, accountID, inboxID, path string) (uint32, bool, error) {
+	var validity uint32
+	err := s.read.QueryRowContext(ctx, `SELECT remote_uid_validity FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=?`, accountID, inboxID, path).Scan(&validity)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return validity, validity != 0, nil
+}
+
 // GetFolderByPath resolves one folder of an inbox by its stable path.
 func (s *Store) GetFolderByPath(ctx context.Context, accountID, inboxID, path string) (model.Folder, error) {
 	f, err := scanFolder(s.read.QueryRowContext(ctx, `SELECT `+folderColumns+` FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=?`, accountID, inboxID, path))
