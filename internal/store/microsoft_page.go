@@ -150,7 +150,7 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			}
 		}
 		if e.Cache != nil {
-			id, err := microsoftResolveRowTx(ctx, tx, page.AccountID, page.InboxID, e.Cache)
+			id, retargeted, err := microsoftResolveRowTx(ctx, tx, page.AccountID, page.InboxID, e.Cache)
 			if err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
@@ -176,7 +176,7 @@ func (s *Store) ApplyMicrosoftDeltaPage(ctx context.Context, page MicrosoftDelta
 			if err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
-			if err := upsertMicrosoftMessageTx(ctx, tx, page.AccountID, page.InboxID, id, e.Cache); err != nil {
+			if err := upsertMicrosoftMessageTx(ctx, tx, page.AccountID, page.InboxID, id, retargeted, e.Cache); err != nil {
 				return MicrosoftDeltaPageResult{}, err
 			}
 			// Labels are the entry's full current set, exactly as the provider
@@ -306,54 +306,53 @@ func microsoftMessageID(provider, inbox string) string {
 }
 
 // microsoftResolveRowTx returns the local metadata row id a provider message must
-// be written under. Microsoft can serve one message under two id forms — the
-// folder delta and a move/draft response disagree — and the id the feed gave stops
-// resolving once the message moves, so a cache keyed only on the provider id grows
-// a second row for the same message. When the incoming provider id is unseen and
-// exactly one cached row carries the same stable identity, that row takes the new
-// provider id instead of a duplicate row appearing.
-func microsoftResolveRowTx(ctx context.Context, tx *sql.Tx, account, inbox string, c *MicrosoftDeltaCache) (string, error) {
+// be written under, and whether that row is being retargeted to a new provider
+// id. Microsoft can serve one message under two id forms — the folder delta and a
+// move/draft response disagree — and the id the feed gave stops resolving once the
+// message moves, so a cache keyed only on the provider id grows a second row for
+// the same message. When the incoming provider id is unseen and exactly one cached
+// row carries the same stable identity, that row is written under the new provider
+// id instead of a duplicate row appearing.
+//
+// The mapping move is upsertMicrosoftMessageTx's job: microsoft_message_ids allows
+// a row exactly one provider id, and its UNIQUE(message_id) is not the insert's
+// ON CONFLICT target, so a mapping left in place made that insert fail and roll
+// the whole page back, stalling the folder's cursor on it forever.
+func microsoftResolveRowTx(ctx context.Context, tx *sql.Tx, account, inbox string, c *MicrosoftDeltaCache) (string, bool, error) {
 	id := microsoftMessageID(c.ProviderID, inbox)
 	exists, err := microsoftMessageRowExistsTx(ctx, tx, account, inbox, id)
 	if err != nil || exists || strings.TrimSpace(c.Input.RFCMessageID) == "" {
-		return id, err
+		return id, false, err
 	}
 	// Only an unambiguous match is retargeted: resent mail can share a Message-ID,
 	// and two candidates mean the cache cannot tell the copies apart.
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id<>? AND rfc_message_id=? AND received_at IS ? AND subject=? AND from_address=? LIMIT 2`, account, inbox, id, c.Input.RFCMessageID, nullStringPtr(c.Input.ReceivedAt), c.Input.Subject, c.Input.FromAddress)
 	if err != nil {
-		return id, err
+		return id, false, err
 	}
 	defer rows.Close()
 	var candidates []string
 	for rows.Next() {
 		var candidate string
 		if err = rows.Scan(&candidate); err != nil {
-			return id, err
+			return id, false, err
 		}
 		candidates = append(candidates, candidate)
 	}
 	if err = rows.Err(); err != nil || len(candidates) != 1 {
-		return id, err
+		return id, false, err
 	}
-	// The mapping carries the provider id; a row without one is not ours to
-	// retarget, and the usual insert then handles it.
-	res, err := tx.ExecContext(ctx, `UPDATE microsoft_message_ids SET provider_id=? WHERE inbox_id=? AND message_id=?`, c.ProviderID, inbox, candidates[0])
-	if err != nil {
-		return id, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return id, nil
-	}
-	return candidates[0], nil
+	return candidates[0], true, nil
 }
 
 // upsertMicrosoftMessageTx writes one Microsoft message's metadata row and its
 // provider-id mapping inside the caller's transaction, under the row id
-// microsoftResolveRowTx chose. The caller owns the metadata cap check and the
+// microsoftResolveRowTx chose. A retargeted row has its old mapping dropped here
+// first, because microsoft_message_ids allows a row exactly one provider id. The
+// caller owns the metadata cap check and the
 // storage-counter reconciliation, because a delta page charges both once for the
 // whole page.
-func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox, id string, c *MicrosoftDeltaCache) error {
+func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox, id string, retargeted bool, c *MicrosoftDeltaCache) error {
 	// The cache row is created only for a connected inbox. The caller has already
 	// verified the connection, so a missing row here is a real fault rather than
 	// an acceptable partial write, and a silent failure would leave the UPDATE
@@ -370,7 +369,21 @@ func upsertMicrosoftMessageTx(ctx context.Context, tx *sql.Tx, account, inbox, i
 	}
 	in := c.Input
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET rfc_message_id=?,in_reply_to=?,references_json=?,thread_key=?,from_name=?,from_address=?,to_json=?,cc_json=?,subject=?,snippet=?,size_bytes=?,has_attachments=?,is_read=?,is_flagged=?,is_draft=?,received_at=?,internal_date=?,indexed_at=?,updated_at=? WHERE id=? AND account_id=? AND inbox_id=?`, in.RFCMessageID, in.InReplyTo, jsonString(in.References), "microsoft:"+inbox+":"+c.Thread, in.FromName, in.FromAddress, jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, in.SizeBytes, in.HasAttach, in.Read, in.Flagged, in.Draft, nullStringPtr(in.ReceivedAt), nullStringPtr(in.InternalDate), now, now, id, account, inbox); err != nil {
+	// A retargeted row is still filed under the provider id it was written with,
+	// and resolution finds a row by that path, so it moves with the mapping.
+	folder := ""
+	if retargeted {
+		folder = "microsoft:" + c.ProviderID
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET folder_path=CASE WHEN ?='' THEN folder_path ELSE ? END,rfc_message_id=?,in_reply_to=?,references_json=?,thread_key=?,from_name=?,from_address=?,to_json=?,cc_json=?,subject=?,snippet=?,size_bytes=?,has_attachments=?,is_read=?,is_flagged=?,is_draft=?,received_at=?,internal_date=?,indexed_at=?,updated_at=? WHERE id=? AND account_id=? AND inbox_id=?`, folder, folder, in.RFCMessageID, in.InReplyTo, jsonString(in.References), "microsoft:"+inbox+":"+c.Thread, in.FromName, in.FromAddress, jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, in.SizeBytes, in.HasAttach, in.Read, in.Flagged, in.Draft, nullStringPtr(in.ReceivedAt), nullStringPtr(in.InternalDate), now, now, id, account, inbox); err != nil {
+		return err
+	}
+	// The row's old mapping must go before the new one lands: the insert's
+	// ON CONFLICT target is (inbox_id,provider_id), so a clash on the separate
+	// UNIQUE(message_id) is not caught and the insert fails instead. Left in
+	// place, a retargeted message failed that insert and rolled the whole page
+	// back, stalling the folder's cursor on the page forever.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM microsoft_message_ids WHERE inbox_id=? AND message_id=? AND provider_id<>?`, inbox, id, c.ProviderID); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO microsoft_message_ids(inbox_id,message_id,provider_id,folder_id,generation) VALUES(?,?,?,?,COALESCE((SELECT generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?),'')) ON CONFLICT(inbox_id,provider_id) DO UPDATE SET folder_id=excluded.folder_id,generation=excluded.generation`, inbox, id, c.ProviderID, c.FolderID, inbox, c.FolderID)
