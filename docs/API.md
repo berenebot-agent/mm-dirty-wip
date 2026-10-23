@@ -429,7 +429,7 @@ push detection, not access to MailMoose's SSE/event endpoints.
 | `folder_id` | one canonical folder, may be `null` | one canonical folder, may be `null` | one physical folder, always present once indexed | one physical folder, always present once indexed |
 | Labels | MailMoose tags | Gmail user labels | Outlook categories | **none** |
 | `label_ids` | `tag:Name` | `tag:Name` | `tag:Name` | `[]` |
-| Label create / rename / delete | yes / yes / yes | yes / yes / yes | yes / no / no | no / no / no |
+| Label create / rename / delete | yes / yes / yes | yes / yes / yes | yes / yes / yes | no / no / no |
 | Move a message | yes | yes | yes | yes |
 | Move with `folder_id: null` (archive) | yes | yes | no | no |
 
@@ -442,12 +442,14 @@ Spam or Trash; mail in a legacy custom folder has no canonical folder
 either, and carries the folder's name as a label instead (see
 [Existing mail](#existing-mail)).
 
-Outlook categories can be created, but the connector does not implement native
-category rename or deletion and advertises those operations as unsupported.
-Creating a category requires `MailboxSettings.ReadWrite` and uses the
-native master-category endpoint (see
-[Microsoft / Outlook](EMAIL_PROVIDERS.md#microsoft--outlook)); a mailbox
-connected before that grant was added must be reconnected once. A MailMoose
+Outlook categories are created, renamed and deleted natively on the provider,
+through the master-category endpoint (see
+[Microsoft / Outlook](EMAIL_PROVIDERS.md#microsoft--outlook)). A rename or a
+delete is applied to the category Graph has, so a client is never told a
+category changed when only a local copy did; deleting a category also removes it
+from every message carrying it. All three operations require
+`MailboxSettings.ReadWrite`, so a mailbox connected before that grant was added
+must be reconnected once. A MailMoose
 domain inbox and a Gmail inbox have no custom folders at all, so folder
 creation, rename and delete are refused for them.
 

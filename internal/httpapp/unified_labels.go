@@ -46,8 +46,7 @@ func (s *Server) labelCapabilities(ctx context.Context, p model.Principal, box m
 	case box.Kind == model.InboxKindDomain:
 		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple", CanRename: true, CanDelete: true}
 	case s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID):
-		// Graph categories are additive; category rename/delete are not exposed.
-		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple"}
+		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple", CanRename: true, CanDelete: true}
 	case s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID):
 		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple", CanRename: true, CanDelete: true}
 	default:
@@ -109,7 +108,9 @@ func (s *Server) mailboxLabels(ctx context.Context, p model.Principal, box model
 		}
 		seen[key] = true
 		source := "local"
-		editable := box.Kind == model.InboxKindDomain
+		// A provider category is edited on the provider, which is why it is
+		// editable too; a raw IMAP tag is neither.
+		editable := box.Kind == model.InboxKindDomain || microsoft || google
 		if microsoft || google {
 			source = "provider"
 		}

@@ -17,6 +17,8 @@ func (s *Store) MailboxCapabilities(ctx context.Context, inbox model.Inbox) mode
 	caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
 	if s.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
 		caps.Labels, caps.CreateLabels = true, true
+		// Graph master categories can be renamed and deleted natively.
+		caps.RenameLabels, caps.DeleteLabels = true, true
 		caps.Outbound = true
 		caps.Realtime = s.MicrosoftPushActive(ctx, inbox.AccountID, inbox.ID)
 	}
