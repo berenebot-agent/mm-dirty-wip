@@ -2124,6 +2124,17 @@ func (s *Service) replayDraftSend(ctx context.Context, p model.Principal, draftI
 	if !p.CanOwn(m.InboxID) {
 		return nil, store.ErrForbidden
 	}
+	// The fingerprint below is built from the message that was sent, so it proves
+	// the key belongs to this draft but not that the retry repeats the request.
+	// The sent message carries no forward source, so a retry that names one is a
+	// different request: replaying would silently mark a new draft sent.
+	//
+	// shortcut: every other changed field still replays the original message with
+	// 200 instead of 409; upgrade by hashing the caller's in as well, but that
+	// makes a mismatched retry fail visibly and needs the decision first.
+	if in.ForwardOfMessageID != "" {
+		return nil, store.ErrConflict
+	}
 	in.DraftID = draftID
 	replayIn := in
 	replayIn.InboxID = m.InboxID
