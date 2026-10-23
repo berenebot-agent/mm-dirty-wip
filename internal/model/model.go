@@ -501,9 +501,10 @@ type MessageDelivery struct {
 	DeliveredAt time.Time `json:"delivered_at"`
 }
 
-// BlockedMessage is a metadata-only record of inbound mail rejected by an
-// inbox's allowed-senders list. It is deliberately separate from Message so it
-// can never be reached by the API, relay or inbox views.
+// BlockedMessage is a metadata-only record of inbound mail that was not
+// stored: rejected by an inbox's allowed-senders list, or refused because the
+// account or the inbox storage quota is full. It is deliberately separate from
+// Message so it can never be reached by the API, relay or inbox views.
 type BlockedMessage struct {
 	ID         string     `json:"id"`
 	AccountID  string     `json:"-"`
@@ -522,6 +523,7 @@ type Thread struct {
 	InboxID       string    `json:"inbox_id"`
 	Subject       string    `json:"subject"`
 	MessageCount  int       `json:"message_count"`
+	UnreadCount   int       `json:"unread_count"`
 	LastMessageAt time.Time `json:"last_message_at"`
 }
 
@@ -757,7 +759,7 @@ type APIKey struct {
 	// DomainSend lists the inbox ids (a domain's catch-all) where this key holds
 	// the domain-wide sending grant, keyed to whether the grant is currently
 	// live (the inbox is still the enabled catch-all). It is never set for an
-	// Admin key, which already may send as anything.
+	// Admin key, which holds the grant implicitly.
 	DomainSend map[string]bool `json:"domain_send,omitempty"`
 }
 
@@ -773,11 +775,11 @@ type Principal struct {
 	SystemAdmin  bool
 	MailboxRoles map[string]string
 	ViaSession   bool
-	// DomainSend lists the inbox ids where this principal holds a live
+	// DomainSend lists the inbox ids where this principal holds an explicit
 	// domain-wide sending grant: it may put any address on that inbox's domain in
 	// the From of a message it sends from that inbox. It is the send-authority
 	// counterpart to MailboxRoles and is empty for an account Admin (which holds
-	// the capability implicitly) and for sessions.
+	// the grant implicitly, on each domain's enabled catch-all) and for sessions.
 	DomainSend map[string]bool
 	// Timezone is the effective display time zone (IANA name) for this session,
 	// resolved from the user override then the account default. Empty means UTC.

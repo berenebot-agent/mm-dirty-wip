@@ -201,14 +201,29 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 		// Resolve label membership when executing the queued action, not when
 		// accepting it. Concurrent adds must not overwrite one another.
 		if in.Kind == "label" {
-			if in.LabelOp == "add" {
-				_, err = w.remote.AddRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
-			} else {
-				_, err = w.remote.RemoveRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
+			if in.Destination != "" {
+				// A legacy exclusive label action: placement is a move, never a
+				// label. It is refused, never executed.
+				return model.NewMailboxError(model.ErrKindUnsupported, "a label action cannot change the message's folder", false, nil)
 			}
-			return err
+			var view RemoteMessageView
+			if in.LabelOp == "add" {
+				view, err = w.remote.AddRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
+			} else {
+				view, err = w.remote.RemoveRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
+			}
+			if err != nil {
+				return err
+			}
+			w.recordRemoteLabels(ctx, p, box.ID, a.MessageID, view)
+			return nil
 		}
 		if in.Kind == "patch" {
+			// Legacy IMAP tags are retained for read compatibility, but are no
+			// longer writable. Check before read/spam changes to avoid partial PATCH.
+			if in.Labels != nil && !w.remote.IsGoogle(ctx, p.AccountID, box.ID) && !w.remote.IsMicrosoft(ctx, p.AccountID, box.ID) {
+				return model.NewMailboxError(model.ErrKindUnsupported, "IMAP does not support labels; use folders", false, nil)
+			}
 			if in.Read != nil {
 				if _, err = w.remote.SetRemoteRead(ctx, p, box.ID, a.MessageID, *in.Read); err != nil {
 					return err
@@ -255,8 +270,16 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 				return fmt.Errorf("missing remote role folder")
 			}
 		}
-		_, err = w.remote.MoveRemoteMessage(ctx, p, box.ID, a.MessageID, dest)
-		return err
+		oldFolder, e := w.svc.Store.RemoteMessageFolderID(ctx, p.AccountID, box.ID, a.MessageID)
+		if e != nil {
+			return e
+		}
+		view, err := w.remote.MoveRemoteMessage(ctx, p, box.ID, a.MessageID, dest)
+		if err != nil {
+			return err
+		}
+		w.recordRemoteMove(ctx, p, box.ID, a.MessageID, view, oldFolder)
+		return nil
 	}
 	publish := func(ev *model.Event, e error) error {
 		if e == nil && ev != nil {
@@ -266,6 +289,11 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	}
 	switch in.Kind {
 	case "label":
+		if in.Destination != "" {
+			// A legacy exclusive label action: placement is a move, never a
+			// label. It is refused, never executed.
+			return model.NewMailboxError(model.ErrKindUnsupported, "a label action cannot change the message's folder", false, nil)
+		}
 		ev, err := w.svc.Store.ModifyMessageLabel(ctx, p, a.MessageID, in.Label, in.LabelOp, in.ProviderLabel)
 		return publish(ev, err)
 	case "patch":
@@ -297,6 +325,14 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	case "move":
 		_, ev, e := w.svc.Store.MoveMessageToFolder(ctx, p, a.MessageID, in.Destination)
 		return publish(ev, e)
+	case "classify":
+		events, e := w.svc.Store.ClassifyMessage(ctx, p, a.MessageID, in.Destination)
+		if e == nil {
+			for _, event := range events {
+				w.svc.Hub.Publish(event)
+			}
+		}
+		return e
 	case "purge":
 		path, _, ev, e := w.svc.Store.PurgeMessage(ctx, p, a.MessageID)
 		if e != nil {
@@ -316,6 +352,55 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	return fmt.Errorf("unknown action")
 }
 
+// recordRemoteLabels records the durable label change of a remote message, so
+// the event log describes the change and not only the transient queue
+// notification.
+func (w *ActionWorker) recordRemoteLabels(ctx context.Context, p model.Principal, inboxID, messageID string, view RemoteMessageView) {
+	ev, err := w.svc.Store.RecordRemoteMessageEvent(ctx, p.AccountID, inboxID, messageID, model.EventMessageLabelsChanged, map[string]any{
+		"message_id": messageID, "inbox_id": inboxID, "thread_id": view.ThreadKey, "labels": view.Labels,
+	})
+	if err != nil {
+		w.svc.Log.Error("remote label event", "message_id", messageID, "error", err)
+		return
+	}
+	w.svc.Hub.Publish(ev)
+}
+
+// recordRemoteMove records the durable placement of a remote message. The
+// event carries the canonical folder ids: a message with no canonical folder
+// reports null rather than a folder the reader cannot select.
+func (w *ActionWorker) recordRemoteMove(ctx context.Context, p model.Principal, inboxID, messageID string, view RemoteMessageView, oldFolderID string) {
+	newFolderID, err := w.svc.Store.RemoteMessageFolderID(ctx, p.AccountID, inboxID, messageID)
+	if err != nil {
+		w.svc.Log.Error("remote folder event", "message_id", messageID, "error", err)
+		return
+	}
+	newPath := ""
+	if newFolderID != "" {
+		if f, ferr := w.svc.Store.GetFolderByID(ctx, p.AccountID, inboxID, newFolderID); ferr == nil {
+			newPath = f.Path
+		}
+	}
+	ev, err := w.svc.Store.RecordRemoteMessageEvent(ctx, p.AccountID, inboxID, messageID, model.EventMessageFolderChanged, map[string]any{
+		"message_id": messageID, "inbox_id": inboxID, "thread_id": view.ThreadKey,
+		"old_folder_id": nullableFolderID(oldFolderID), "new_folder_id": nullableFolderID(newFolderID), "new_folder_path": newPath,
+	})
+	if err != nil {
+		w.svc.Log.Error("remote folder event", "message_id", messageID, "error", err)
+		return
+	}
+	w.svc.Hub.Publish(ev)
+}
+
+// nullableFolderID reports a folder id as null when the message has no
+// canonical folder.
+func nullableFolderID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
+
 // EnqueueInboxAction is the single submission surface shared by REST and UI.
 func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inboxID, messageID string, in store.MessageActionInput) (store.MessageAction, error) {
 	if in.TrashTarget != nil {
@@ -324,7 +409,8 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 	if !p.CanAssist(inboxID) {
 		return store.MessageAction{}, store.ErrForbidden
 	}
-	if _, err := s.Store.GetInbox(ctx, p, inboxID); err != nil {
+	box, err := s.Store.GetInbox(ctx, p, inboxID)
+	if err != nil {
 		return store.MessageAction{}, err
 	}
 	m, err := s.Store.GetMessage(ctx, p, messageID)
@@ -361,6 +447,11 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 	}
 	switch in.Kind {
 	case "label":
+		if in.Destination != "" {
+			// A legacy exclusive label action: placement is a move, never a
+			// label. Such an action is refused, and a queued one is cleared.
+			return store.MessageAction{}, store.ErrConflict
+		}
 		if in.LabelOp != "add" && in.LabelOp != "remove" {
 			return store.MessageAction{}, store.ErrConflict
 		}
@@ -372,10 +463,25 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 			return store.MessageAction{}, store.ErrConflict
 		}
 	case "patch":
+		if in.Labels != nil && box.Kind == model.InboxKindStandalone &&
+			!s.Store.IsGoogle(ctx, p.AccountID, inboxID) && !s.Store.IsMicrosoft(ctx, p.AccountID, inboxID) {
+			return store.MessageAction{}, model.NewMailboxError(model.ErrKindUnsupported, "IMAP does not support labels; use folders", false, nil)
+		}
 		if in.Read == nil && in.Spam == nil && in.Labels == nil {
 			return store.MessageAction{}, store.ErrConflict
 		}
 	case "delete", "restore", "purge":
+	case "classify":
+		if err != nil {
+			return store.MessageAction{}, store.ErrConflict
+		}
+		folder, ferr := s.Store.GetFolderByID(ctx, p.AccountID, inboxID, in.Destination)
+		if ferr != nil {
+			return store.MessageAction{}, ferr
+		}
+		if folder.Role != model.FolderRoleInbox && folder.Role != model.FolderRoleSpam && folder.Role != model.FolderRoleTrash && folder.Role != model.FolderRoleArchive {
+			return store.MessageAction{}, store.ErrConflict
+		}
 	case "move":
 		if in.Destination == "" {
 			return store.MessageAction{}, store.ErrNotFound
@@ -469,6 +575,11 @@ func (w *ActionWorker) recheckOne(ctx context.Context, a store.MessageAction) (b
 	// Bulk purge locators can exist without any cache row. Cache absence must
 	// never be mistaken for provider-confirmed deletion; leave these for review.
 	if a.Input.Kind == "empty_trash" || a.Input.TrashTarget != nil {
+		return false, nil
+	}
+	// A legacy exclusive label action is no longer executable. It is cleared,
+	// never retried.
+	if a.Input.Kind == "label" && a.Input.Destination != "" {
 		return false, nil
 	}
 	// A patch that only sets a flag is absolute state: repeating it cannot

@@ -40,21 +40,23 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	}
 	// The status panel is present and reflects the configured receiver. Without a
 	// live runtime the state is not "active", so the honest warning must show.
-	if !strings.Contains(body, "Direct MX receiver") {
-		t.Fatalf("admin receiving dialog missing Direct MX status panel:\n%s", body)
+	if !strings.Contains(body, "Shared receiver") {
+		t.Fatalf("admin receiving dialog missing the Direct MX shared-settings notice:\n%s", body)
 	}
-	// The steps must steer the operator to the Direct MX panel and away from the
-	// receiver's SMTP greeting name, which is not the MX target.
-	if strings.Contains(body, "advertised SMTP hostname (shown below)") {
-		t.Fatal("Direct MX steps still promise the SMTP hostname is always shown below")
+	if strings.Contains(uiGet(t, h, cookie, "/admin").Body.String(), "id=\"mx-settings\"") {
+		t.Fatal("Direct MX settings must not also appear on the Admin page")
 	}
-	if !strings.Contains(body, "Do not use the SMTP greeting hostname") {
-		t.Fatalf("Direct MX steps must distinguish the MX target from the greeting hostname:\n%s", body)
+	if strings.Contains(body, "Direct MX receiver") || strings.Contains(body, "Publish an SPF record") {
+		t.Fatalf("Direct MX setup has duplicate or misleading instructions:\n%s", body)
 	}
-	// The panel names the MX target from the configured hostname even with no
-	// live runtime, rather than showing nothing.
-	if !strings.Contains(body, `Point this domain's MX record at <code>mx.test</code>`) {
-		t.Fatalf("Direct MX panel must name the configured MX target:\n%s", body)
+	// The MX target is named directly; the greeting hostname is a separate
+	// receiver setting below and is not described as the DNS target.
+	if strings.Contains(body, "Do not use the SMTP greeting hostname") {
+		t.Fatal("Direct MX setup retains redundant MX-target guidance")
+	}
+	// The client domain points at MailMoose's URL host, not the mx.test greeting.
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
+		t.Fatalf("Direct MX panel must name the client domain and MailMoose URL host:\n%s", body)
 	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
 		t.Fatal("account admin must see status only, not receiver controls")
@@ -86,8 +88,20 @@ func TestDirectMXPanelFallsBackToReceiverURL(t *testing.T) {
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx")
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
-	if !strings.Contains(body, `Point this domain's MX record at <code>example.test</code>`) {
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
 		t.Fatalf("Direct MX panel must fall back to the public receiver URL host:\n%s", body)
+	}
+}
+
+func TestDirectMXInstructionUsesDedicatedURLNotGreeting(t *testing.T) {
+	t.Parallel()
+	svc, h, u, domain, _ := httpFixture(t)
+	svc.Config.DedicatedReceiverURL = "https://receiving.example.test:8443"
+	configureMXReceiver(t, svc, app.MXModeIncluded)
+	cookie, _ := uiSession(t, svc, u.ID)
+	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>receiving.example.test</code>`) {
+		t.Fatalf("instruction must name the client domain and configured receiving URL hostname:\n%s", body)
 	}
 }
 
@@ -218,11 +232,25 @@ func TestDirectMXUIUnconfiguredReceiverShowsGuidance(t *testing.T) {
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx")
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
 
-	if strings.Contains(body, "not configured") {
-		t.Fatalf("setup must not show an unconfigured flag:\n%s", body)
+	if !strings.Contains(body, "Not receiving mail.") || !strings.Contains(body, "will not start the SMTP receiver") {
+		t.Fatalf("unconfigured Direct MX must clearly warn that no mail is received:\n%s", body)
 	}
 	if !strings.Contains(body, "system administrator") {
 		t.Fatalf("unconfigured receiver must point at the system administrator:\n%s", body)
+	}
+	// A domain may select Direct MX before the installation receiver exists.
+	// The dashboard must show the missing dependency rather than merely "Direct MX".
+	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, domain.ID, "mx", nil, false); err != nil {
+		t.Fatalf("select Direct MX before receiver setup: %v", err)
+	}
+	page = uiGet(t, h, cookie, "/")
+	if !strings.Contains(page.Body.String(), ">Not receiving</span>") {
+		t.Fatalf("domain list must mark Direct MX as not receiving:\n%s", page.Body.String())
+	}
+	configureMXReceiver(t, svc, app.MXModeIncluded)
+	page = uiGet(t, h, cookie, "/")
+	if strings.Contains(page.Body.String(), ">Not receiving</span>") {
+		t.Fatal("domain must not remain flagged after receiver configuration")
 	}
 }
 

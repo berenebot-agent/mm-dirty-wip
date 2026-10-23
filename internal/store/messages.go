@@ -421,8 +421,8 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 }
 
 type MessageFilter struct {
-	InboxID, ThreadID, From, To, Direction string
-	Unread, HasAttachment                  *bool
+	InboxID, ThreadID, From, To, Direction, Subject string
+	Unread, HasAttachment                           *bool
 	// Labels, when non-empty, restricts results to messages carrying every
 	// listed label (AND). Matching is case-insensitive.
 	Labels []string
@@ -434,6 +434,9 @@ type MessageFilter struct {
 	// Trashed selects the Trash view: only messages with deleted_at set. The
 	// default (false) excludes trashed messages from ordinary reads.
 	Trashed bool
+	// SentOnly restricts outbound membership to mail accepted by the provider.
+	// A queued or failed outbound message is not in the Sent classification.
+	SentOnly bool
 	// MailboxID restricts results to one folder within the inbox. An empty value
 	// (with FolderScoped false) matches any folder, preserving the pre-folder
 	// behaviour for callers that do not select a folder explicitly. The system
@@ -497,6 +500,9 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 		q += ` AND m.direction=?`
 		args = append(args, f.Direction)
 	}
+	if f.SentOnly {
+		q += ` AND m.direction='outbound' AND m.status='sent'`
+	}
 	if f.From != "" {
 		q += ` AND m.from_address LIKE ?`
 		args = append(args, "%"+normalizeAddress(f.From)+"%")
@@ -505,6 +511,10 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 		q += ` AND (m.to_json LIKE ? OR m.cc_json LIKE ?)`
 		like := "%" + normalizeAddress(f.To) + "%"
 		args = append(args, like, like)
+	}
+	if f.Subject != "" {
+		q += ` AND instr(lower(m.subject),lower(?)) > 0`
+		args = append(args, strings.TrimSpace(f.Subject))
 	}
 	if f.Unread != nil {
 		q += ` AND m.is_read=?`
@@ -526,11 +536,14 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 	}
 	if f.Before != "" {
 		var beforeCreated string
-		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		err := s.read.QueryRowContext(ctx, `SELECT COALESCE(received_at,created_at) FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
 		if err == nil {
-			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
-			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
-		} else if err != sql.ErrNoRows {
+			q += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
+			args = append(args, beforeCreated, beforeCreated, f.Before)
+		} else if err == sql.ErrNoRows {
+			// Never restart a resumed page at the newest message.
+			return "", nil, ErrInvalidCursor
+		} else {
 			return "", nil, err
 		}
 	}
@@ -548,7 +561,8 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
+	// shortcut: effective-date sorting has no dedicated index; add one if measured large-mailbox latency warrants a migration.
+	q += ` ORDER BY COALESCE(m.received_at,m.created_at) DESC, m.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -929,8 +943,13 @@ func (s *Store) RestoreMessage(ctx context.Context, p model.Principal, id string
 		}
 		return m, nil, nil
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
+	if err = tx.QueryRowContext(ctx, `UPDATE messages SET deleted_at=NULL,
+		mailbox_id=CASE WHEN mailbox_id IN (SELECT id FROM inbox_folders WHERE inbox_id=? AND role='trash') THEN NULL ELSE mailbox_id END
+		WHERE id=? AND account_id=? RETURNING COALESCE(mailbox_id,'')`, m.InboxID, id, p.AccountID).Scan(&m.MailboxID); err != nil {
 		return model.Message{}, nil, err
+	}
+	if m.MailboxID == "" {
+		m.FolderPath = ""
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageRestored, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
 	if err != nil {
@@ -1270,8 +1289,13 @@ func (s *Store) SetMessageSpam(ctx context.Context, p model.Principal, id string
 	if spam {
 		reason = "manual"
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=? WHERE id=? AND account_id=?`, boolInt(spam), reason, id, p.AccountID); err != nil {
+	if err = tx.QueryRowContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=?,
+		mailbox_id=CASE WHEN ?=0 AND mailbox_id IN (SELECT id FROM inbox_folders WHERE inbox_id=? AND role='spam') THEN NULL ELSE mailbox_id END
+		WHERE id=? AND account_id=? RETURNING COALESCE(mailbox_id,'')`, boolInt(spam), reason, boolInt(spam), m.InboxID, id, p.AccountID).Scan(&m.MailboxID); err != nil {
 		return model.Message{}, nil, err
+	}
+	if m.MailboxID == "" {
+		m.FolderPath = ""
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageSpamChanged, id, map[string]any{
 		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
@@ -1353,11 +1377,23 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 // (last_message_at, id) ordering tuple, so a merged account-wide listing can
 // resume one source without losing a thread that sorts below a global key.
 func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID string) ([]model.Thread, error) {
+	return s.ListThreadsInFolderBefore(ctx, p, inboxID, limit, beforeID, "")
+}
+
+// ListThreadsInFolderBefore restricts thread counts and activity to messages in
+// folderID when one is supplied.
+func (s *Store) ListThreadsInFolderBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID, folderID string) ([]model.Thread, error) {
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
-	args := []any{p.AccountID}
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL`
+	var args []any
+	if folderID != "" {
+		q += folderClause("m", folderID, "", true)
+		args = append(args, folderArgs(folderID, "", true)...)
+	}
+	q += ` WHERE t.account_id=?`
+	args = append(args, p.AccountID)
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
 		args = append(args, inboxID)
@@ -1374,11 +1410,20 @@ func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxI
 	q += ` GROUP BY t.id HAVING count(m.id) > 0`
 	if strings.TrimSpace(beforeID) != "" {
 		var last sql.NullString
-		if cerr := s.read.QueryRowContext(ctx, `SELECT MAX(created_at) FROM messages WHERE thread_id=?`, beforeID).Scan(&last); cerr != nil {
+		cursorQuery := `SELECT MAX(m.created_at) FROM messages m WHERE m.thread_id=?`
+		cursorArgs := []any{beforeID}
+		if folderID != "" {
+			cursorQuery += folderClause("m", folderID, "", true)
+			cursorArgs = append(cursorArgs, folderArgs(folderID, "", true)...)
+		}
+		if cerr := s.read.QueryRowContext(ctx, cursorQuery, cursorArgs...).Scan(&last); cerr != nil {
 			return nil, cerr
 		}
+		if !last.Valid {
+			return nil, ErrInvalidCursor
+		}
 		cur := last.String
-		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		q += ` AND (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
 		args = append(args, cur, cur, beforeID)
 	}
 	q += ` ORDER BY MAX(m.created_at) DESC, t.id DESC`
@@ -1396,11 +1441,62 @@ func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxI
 	for rows.Next() {
 		var t model.Thread
 		var last string
-		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &last); err != nil {
+		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &t.UnreadCount, &last); err != nil {
 			return nil, err
 		}
 		t.LastMessageAt = parseTime(last)
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ListThreadsFilteredBefore groups only messages matching the same predicates
+// as message listing/search. Counts, ordering and the cursor all use matching
+// messages, so an older non-matching message never creates a duplicate thread.
+func (s *Store) ListThreadsFilteredBefore(ctx context.Context, p model.Principal, f MessageFilter, limit int, beforeID string) ([]model.Thread, error) {
+	f.Before = ""
+	f.Limit = 0
+	where, args, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT t.id,t.inbox_id,t.subject,COUNT(m.id),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(m.created_at)
+FROM messages m JOIN threads t ON t.id=m.thread_id
+WHERE m.account_id=?` + where + ` GROUP BY t.id`
+	all := append([]any{p.AccountID}, args...)
+	if strings.TrimSpace(beforeID) != "" {
+		cursorSQL := `SELECT MAX(m.created_at) FROM messages m WHERE m.account_id=? AND m.thread_id=?` + where
+		cursorArgs := append([]any{p.AccountID, beforeID}, args...)
+		var latest sql.NullString
+		if err := s.read.QueryRowContext(ctx, cursorSQL, cursorArgs...).Scan(&latest); err != nil {
+			return nil, err
+		}
+		if !latest.Valid {
+			return nil, ErrInvalidCursor
+		}
+		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		all = append(all, latest.String, latest.String, beforeID)
+	}
+	q += ` ORDER BY MAX(m.created_at) DESC,t.id DESC`
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	q += ` LIMIT ?`
+	all = append(all, limit)
+	rows, err := s.read.QueryContext(ctx, q, all...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Thread{}
+	for rows.Next() {
+		var th model.Thread
+		var latest string
+		if err := rows.Scan(&th.ID, &th.InboxID, &th.Subject, &th.MessageCount, &th.UnreadCount, &latest); err != nil {
+			return nil, err
+		}
+		th.LastMessageAt = parseTime(latest)
+		out = append(out, th)
 	}
 	return out, rows.Err()
 }
@@ -1448,7 +1544,8 @@ func spamClause(alias string, spamOnly, includeSpam bool) string {
 // when role is supplied.
 //
 //   - scoped with id="": the implicit Inbox only (mailbox_id IS NULL).
-//   - scoped with id set: exactly that folder id.
+//   - scoped with id set: exactly that folder id, plus implicit Inbox members
+//     when the id names the inbox's system Inbox folder.
 //   - unscoped with id="": no restriction (every folder), the pre-folder default.
 //   - unscoped with id set: mailbox_id = id (an extra restriction on any read).
 //
@@ -1461,7 +1558,10 @@ func folderClause(alias, id, role string, scoped bool) string {
 		prefix = alias + "."
 	}
 	if id != "" {
-		return " AND " + prefix + "mailbox_id=?"
+		// An explicit Inbox folder id also represents the default NULL bucket.
+		// The correlated folder lookup ensures an account-wide filter never pulls
+		// implicit Inbox mail from a different inbox. Other folders remain exact.
+		return " AND (" + prefix + "mailbox_id=? OR (" + prefix + "mailbox_id IS NULL AND " + prefix + "direction='inbound' AND EXISTS (SELECT 1 FROM inbox_folders f WHERE f.id=? AND f.inbox_id=" + prefix + "inbox_id AND f.role='inbox')))"
 	}
 	if scoped {
 		if role != "" {
@@ -1476,7 +1576,7 @@ func folderClause(alias, id, role string, scoped bool) string {
 // the predicate and its parameters can never drift apart. They follow folderClause.
 func folderArgs(id, role string, scoped bool) []any {
 	if id != "" {
-		return []any{id}
+		return []any{id, id}
 	}
 	if scoped && role != "" {
 		return []any{role}
@@ -1526,10 +1626,11 @@ type BlockedRecord struct {
 	ReceivedAt        time.Time
 }
 
-// CommitBlockedInbound records metadata for mail rejected by an inbox's
-// allowed-senders list. It deliberately writes no message row, no raw file, no
-// FTS entry and no event, so the blocked mail can never reach the inbox view,
-// the API or the relay connector.
+// CommitBlockedInbound records metadata for inbound mail that was not stored:
+// rejected by an inbox's allowed-senders list, or refused because the account
+// or the inbox storage quota is full. It deliberately writes no message row, no
+// raw file, no FTS entry and no event, so the blocked mail can never reach the
+// inbox view, the API or the relay connector.
 func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (model.BlockedMessage, bool, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -1593,7 +1694,7 @@ func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxI
 func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q string, f MessageFilter) ([]model.Message, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
-		return []model.Message{}, nil
+		return s.ListMessages(ctx, p, f)
 	}
 	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
 	match, err := ftsQuery(q)
@@ -1611,6 +1712,9 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	sqlq += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
 	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
+	if f.SentOnly {
+		sqlq += ` AND m.direction='outbound' AND m.status='sent'`
+	}
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden
@@ -1636,6 +1740,14 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		like := "%" + normalizeAddress(f.To) + "%"
 		args = append(args, like, like)
 	}
+	if f.Subject != "" {
+		sqlq += ` AND instr(lower(m.subject),lower(?)) > 0`
+		args = append(args, strings.TrimSpace(f.Subject))
+	}
+	if f.Unread != nil {
+		sqlq += ` AND m.is_read=?`
+		args = append(args, boolInt(!*f.Unread))
+	}
 	if f.HasAttachment != nil {
 		if *f.HasAttachment {
 			sqlq += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
@@ -1652,11 +1764,13 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	}
 	if f.Before != "" {
 		var beforeCreated string
-		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		err := s.read.QueryRowContext(ctx, `SELECT COALESCE(received_at,created_at) FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
 		if err == nil {
-			sqlq += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
-			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
-		} else if err != sql.ErrNoRows {
+			sqlq += ` AND (COALESCE(m.received_at,m.created_at) < ? OR (COALESCE(m.received_at,m.created_at) = ? AND m.id < ?))`
+			args = append(args, beforeCreated, beforeCreated, f.Before)
+		} else if err == sql.ErrNoRows {
+			return nil, ErrInvalidCursor
+		} else {
 			return nil, err
 		}
 	}
@@ -1664,7 +1778,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	sqlq += ` ORDER BY m.created_at DESC LIMIT ?`
+	sqlq += ` ORDER BY COALESCE(m.received_at,m.created_at) DESC, m.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, sqlq, args...)
 	if err != nil {

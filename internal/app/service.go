@@ -584,6 +584,9 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, EnvelopeFrom: msg.EnvelopeFrom, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
 	if err != nil {
 		_ = os.Remove(final)
+		if errors.Is(err, store.ErrQuota) {
+			s.recordQuotaRefusal(ctx, provider, msg, inbox, parsed)
+		}
 		return model.Message{}, false, err
 	}
 	if dup {
@@ -593,6 +596,39 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", msg.Source)
 	s.Hub.Publish(ev)
 	return m, false, nil
+}
+
+// quotaRefusalReason is the reason recorded for inbound mail refused because
+// the account or the inbox storage quota is full.
+const quotaRefusalReason = "storage quota exceeded"
+
+// recordQuotaRefusal records a durable, metadata-only trace of inbound mail
+// refused because the account or the inbox storage quota is full. The refusal
+// itself still fails the delivery, so the sender retries and the mail lands
+// once there is room; this only makes the refusal visible in the receiving log
+// instead of leaving it in the container log alone.
+//
+// It deliberately writes no MX receipt: a receipt is the deduplication key, and
+// one for a refused message would make the sender's retry look like a
+// duplicate delivery, so the mail would be acknowledged and never stored.
+func (s *Service) recordQuotaRefusal(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed) {
+	received := parsed.Date
+	if received.IsZero() {
+		received = time.Now().UTC()
+	}
+	bm, _, err := s.Store.CommitBlockedInbound(ctx, store.BlockedRecord{
+		AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
+		Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
+		From: model.Address{Name: parsed.From.Name, Address: parsed.From.Address}, To: parsed.To,
+		Subject: parsed.Subject, Reason: quotaRefusalReason, SizeBytes: msg.Size, ReceivedAt: received,
+	})
+	if err != nil {
+		s.Log.Error("inbound refusal not recorded", "provider", msg.Source, "reason", quotaRefusalReason, "error", err)
+		return
+	}
+	// Logged on every attempt, like the blocked path: a sender that keeps
+	// retrying must not look silent.
+	s.Log.Warn("inbound refused", "message_id", bm.ID, "from", bm.From.Address, "to", bm.To, "provider", msg.Source, "reason", quotaRefusalReason)
 }
 
 // copyFile copies src to dst with 0600 permissions, used to give each
@@ -827,7 +863,7 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 		return s.saveDialMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
 	}
 	if provider == RemoteMXProvider {
-		return s.saveRemoteMXReceivingConfig(ctx, accountID, domainID, provider, existing, exists, regenerate)
+		return s.saveRemoteMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
 	}
 	fields, err := inboundConfigFields(provider)
 	if err != nil {
@@ -947,10 +983,11 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 
 // saveRemoteMXReceivingConfig selects the account-owned Remote MX receiver for a
 // domain. The receiver itself is configured once per account under
-// /v1/admin/account/mx; a domain only references it by selecting the provider, so
-// the stored config is empty. It requires the account to have a receiver
-// configured (otherwise the domain would silently accept nothing).
-func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
+// /v1/admin/account/mx; a domain references it by selecting the provider, plus
+// the core-side spam policy the receiver's auth evidence is graded with. It
+// requires the account to have a receiver configured (otherwise the domain would
+// silently accept nothing).
+func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, cfg map[string]any, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
 	if regenerate {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("Remote MX has no per-domain secret to regenerate")
 	}
@@ -967,7 +1004,25 @@ func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, do
 	if receiver.ReceiverURL == "" {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("configure this account's Remote MX receiver before selecting it for a domain")
 	}
-	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), map[string]any{})
+	fields, err := inboundConfigFields(provider)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	sameProvider := exists && strings.EqualFold(existing.Provider, provider)
+	var old map[string]any
+	if sameProvider {
+		if old, err = s.DecryptDomainReceivingConfig(existing); err != nil {
+			return store.DomainReceivingConfig{}, nil, err
+		}
+	}
+	merged, err := validateConfig(fields, cfg, old, sameProvider)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
@@ -1698,8 +1753,9 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	// Only an API key may carry the domain-wide sending grant; a session or an
-	// Admin principal has no key id and keeps the primary/alias rule.
+	// Only an API key may carry the domain-wide sending grant; a session has no
+	// key id and keeps the primary/alias rule. An account Admin key carries the
+	// grant implicitly, on the same terms as any other key.
 	in.SenderKeyID = p.APIKeyID
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err
@@ -1726,15 +1782,32 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	return s.sendWithLimit(ctx, accountID, in, idem, false)
 }
 
+// idemRequestHash binds an idempotency key to the send inputs. Server-derived
+// fields (the send key's grant and the client identity) are excluded: they
+// follow from the principal, so a replay need not reproduce them.
+func idemRequestHash(in SendInput) string {
+	in.SenderKeyID, in.ClientLabel, in.ClientID = "", "", ""
+	hash := sha256.New()
+	// Hashing cannot fail for these field types; a failure would leave the key
+	// unbound, so it is reported by the empty string instead.
+	if err := json.NewEncoder(hash).Encode(struct {
+		SendInput
+		FromAddress   string
+		FromName      string
+		DraftID       string
+		SendRequestID string
+	}{in, in.FromAddress, in.FromName, in.DraftID, in.SendRequestID}); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendInput, idem string, limited bool) (result SendResult, err error) {
 	if idem != "" {
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
-		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID)
+		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID, idemRequestHash(in))
 		if rerr != nil {
-			if errors.Is(rerr, store.ErrConflict) {
-				return SendResult{}, fmt.Errorf("idempotency key %q is already in flight", idem)
-			}
 			return SendResult{}, rerr
 		}
 		if !claimed {
@@ -1978,15 +2051,27 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 // files are removed afterwards. The caller supplies the message fields (which
 // may include unsaved edits); the draft's saved attachments are added here.
 func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID string, in SendInput, idem string) (SendResult, error) {
+	// Carry the key's domain-wide sending grant into the principal-free core.
+	in.SenderKeyID = p.APIKeyID
 	d, err := s.Store.GetDraft(ctx, p, draftID)
 	if err != nil {
-		return SendResult{}, err
+		// A retry of a send whose response was lost arrives after the draft row
+		// was consumed, so the key is replayed instead of failing the lookup.
+		if !errors.Is(err, store.ErrNotFound) || idem == "" {
+			return SendResult{}, err
+		}
+		replayed, rerr := s.replayDraftSend(ctx, p, draftID, in, idem)
+		if rerr != nil {
+			return SendResult{}, rerr
+		}
+		if replayed == nil {
+			return SendResult{}, err
+		}
+		return *replayed, nil
 	}
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	// Carry the key's domain-wide sending grant into the principal-free core.
-	in.SenderKeyID = p.APIKeyID
 	if in.InboxID == "" {
 		in.InboxID = d.InboxID
 	}
@@ -2012,6 +2097,58 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 		return SendResult{}, err
 	}
 	return s.sendDraftCore(ctx, p.AccountID, d, in, idem)
+}
+
+// replayDraftSend returns the message an identical earlier draft-send request
+// enqueued, or nil when the key is unknown, pending, or unused by this draft.
+// It runs only when the draft lookup failed, so the retry is matched against
+// the stored request fingerprint rebuilt from what that send bound: the caller's
+// fields plus the sent message's own MIME attachments. Ownership is enforced on
+// the replayed message's inbox — the key proves the request repeats, not who
+// may read the result.
+func (s *Service) replayDraftSend(ctx context.Context, p model.Principal, draftID string, in SendInput, idem string) (*SendResult, error) {
+	if idem == "" {
+		return nil, nil
+	}
+	// The key finds the message; the fingerprint check below proves the retry is
+	// the same request. Anything unreadable or mismatched answers "not found",
+	// as a consumed draft did before replay existed.
+	mid, ok, err := s.Store.IdempotentMessage(ctx, p.AccountID, idem)
+	if err != nil || !ok {
+		return nil, nil
+	}
+	m, err := s.Store.GetMessageByID(ctx, p.AccountID, mid)
+	if err != nil {
+		return nil, err
+	}
+	if !p.CanOwn(m.InboxID) {
+		return nil, store.ErrForbidden
+	}
+	in.DraftID = draftID
+	replayIn := in
+	replayIn.InboxID = m.InboxID
+	replayIn.FromAddress = m.From.Address
+	replayIn.FromName = m.From.Name
+	replayIn.To = m.To
+	replayIn.CC = m.CC
+	replayIn.BCC = m.BCC
+	replayIn.Subject = m.Subject
+	replayIn.Text = m.Text
+	replayIn.HTML = m.HTML
+	replayIn.ReplyToMessageID = m.InReplyTo
+	atts, aerr := s.deliveryAttachments(m)
+	if aerr != nil {
+		return nil, nil
+	}
+	replayIn.Attachments = nil
+	for _, a := range atts {
+		replayIn.Attachments = append(replayIn.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: a.Content})
+	}
+	bound, ok, err := s.Store.IdempotentReplay(ctx, p.AccountID, idem, idemRequestHash(replayIn))
+	if err != nil || !ok || bound.ID != m.ID {
+		return nil, nil
+	}
+	return &SendResult{Message: m, ProviderMessageID: m.ProviderMessageID}, nil
 }
 
 // sendDraftCore adds the draft's stored attachments to the send and enqueues it

@@ -22,7 +22,8 @@ func settledActionFixture(t *testing.T, svc *app.Service, rm *app.RemoteMailboxS
 	t.Cleanup(w.Stop)
 	return http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
 		mutation := r.Method == "PATCH" || r.Method == "DELETE" || r.Method == "POST"
-		if mutation && (strings.HasPrefix(r.URL.Path, "/v1/messages/") || strings.HasSuffix(r.URL.Path, "/trash/empty")) {
+		messageSend := strings.HasSuffix(r.URL.Path, "/reply") || strings.HasSuffix(r.URL.Path, "/forward")
+		if mutation && !messageSend && (strings.HasPrefix(r.URL.Path, "/v1/messages/") || strings.HasSuffix(r.URL.Path, "/trash/empty")) {
 			q := r.URL.Query()
 			q.Set("wait", "true")
 			r.URL.RawQuery = q.Encode()

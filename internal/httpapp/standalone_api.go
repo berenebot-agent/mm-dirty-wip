@@ -13,7 +13,6 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
-	"github.com/dellarb/mailmoose/internal/limits"
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
@@ -103,21 +102,13 @@ func (s *Server) remoteMessageWithBody(ctx context.Context, p model.Principal, m
 	return out, nil
 }
 
-// remoteThreadResponse is one thread row in a remote thread listing.
-type remoteThreadResponse struct {
-	ID            string    `json:"id"`
-	InboxID       string    `json:"inbox_id"`
-	Subject       string    `json:"subject"`
-	MessageCount  int       `json:"message_count"`
-	UnreadCount   int       `json:"unread_count"`
-	LastMessageAt time.Time `json:"last_message_at"`
-}
-
 // ---- Folders ----
 
-// apiInboxFolders lists an inbox's folders (domain or standalone) in hierarchical
-// order from the cached tree. Initial discovery is scheduled in the background;
-// POST /remote/refresh is the explicit blocking synchronization operation.
+// apiInboxFolders lists an inbox's folders in hierarchical order from the
+// cached tree. A domain or Gmail mailbox exposes system folders only — its
+// organisation is additive labels — while Outlook and IMAP keep their real
+// folders. Initial discovery is scheduled in the background; POST
+// /remote/refresh is the explicit blocking synchronization operation.
 func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
@@ -125,34 +116,19 @@ func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, err)
 		return
 	}
-	if mb.routed {
-		completeness := model.CompletenessComplete
-		if mb.remoteConfigured() {
-			status, serr := s.Service.Store.GetRemoteIndexStatus(r.Context(), p.AccountID, mb.inbox.ID)
-			if serr != nil {
-				mapStoreError(w, serr)
-				return
-			}
-			if status.Status != store.RemoteIndexComplete {
-				completeness = model.CompletenessPartial
-				mb.remote.ScheduleRefresh(p.AccountID, mb.inbox.ID)
-			}
-		}
-		folders, err := s.Service.Store.ListFolders(r.Context(), p.AccountID, mb.inbox.ID)
-		if err != nil {
-			mapStoreError(w, err)
+	completeness := model.CompletenessComplete
+	if mb.routed && mb.remoteConfigured() {
+		status, serr := s.Service.Store.GetRemoteIndexStatus(r.Context(), p.AccountID, mb.inbox.ID)
+		if serr != nil {
+			mapStoreError(w, serr)
 			return
 		}
-		out := make([]folderListResponse, 0, len(folders))
-		for _, f := range folders {
-			out = append(out, folderResponse(f))
+		if status.Status != store.RemoteIndexComplete {
+			completeness = model.CompletenessPartial
+			mb.remote.ScheduleRefresh(p.AccountID, mb.inbox.ID)
 		}
-		writeJSON(w, 200, newEnvelope(out, "", completeness, nil))
-		return
 	}
-	// A domain inbox uses the local folder tree. Seed the protected system
-	// folders on first access so the folder model is uniform across kinds.
-	folders, err := s.Service.Store.EnsureSystemFolders(r.Context(), p.AccountID, mb.inbox.ID)
+	folders, err := s.mailboxFolderList(r.Context(), p, mb)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -161,7 +137,86 @@ func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 	for _, f := range folders {
 		out = append(out, folderResponse(f))
 	}
-	writeJSON(w, 200, newEnvelope(out, "", model.CompletenessComplete, nil))
+	writeJSON(w, 200, newEnvelope(out, "", completeness, nil))
+}
+
+// mailboxFolderList returns the folders a mailbox exposes through the folder
+// API. A domain mailbox seeds and returns its system folders; a Gmail mailbox
+// returns its system folders only, because its user labels are additive labels
+// rather than locations; Outlook and IMAP mailboxes keep their real folders.
+// The Archive is an internal record for the archive operation, never a
+// browsable folder.
+func (s *Server) mailboxFolderList(ctx context.Context, p model.Principal, mb mailboxBackend) ([]model.Folder, error) {
+	if mb.inbox.Kind == model.InboxKindDomain {
+		folders, err := s.Service.Store.EnsureSystemFolders(ctx, p.AccountID, mb.inbox.ID)
+		if err != nil {
+			return nil, err
+		}
+		return publicSystemFolders(folders), nil
+	}
+	folders, err := s.Service.Store.ListFolders(ctx, p.AccountID, mb.inbox.ID)
+	if err != nil {
+		return nil, err
+	}
+	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, mb.inbox.ID) {
+		return googleSystemFolders(folders), nil
+	}
+	return folders, nil
+}
+
+// publicSystemFolders keeps the system destinations a domain mailbox files mail
+// in. Drafts and Outbox have their own APIs, and Archive is an internal
+// destination (archiving reports folder_id null), so none is a browsable folder.
+func publicSystemFolders(folders []model.Folder) []model.Folder {
+	out := make([]model.Folder, 0, len(folders))
+	for _, f := range folders {
+		switch f.Role {
+		case model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash:
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// googleSystemFolders keeps Gmail's system folders. There is no Archive
+// folder: Gmail has no such label, and a derived Archive view would be a
+// virtual folder the reader cannot select.
+func googleSystemFolders(folders []model.Folder) []model.Folder {
+	out := make([]model.Folder, 0, len(folders))
+	for _, f := range folders {
+		if systemFolderRole(f.Role) && f.Role != model.FolderRoleArchive {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// systemFolderRole reports whether a role is one of the universal system
+// folder roles.
+func systemFolderRole(role string) bool {
+	switch role {
+	case model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleDrafts, model.FolderRoleArchive,
+		model.FolderRoleOutbox, model.FolderRoleSpam, model.FolderRoleTrash:
+		return true
+	}
+	return false
+}
+
+// customFolder reports whether a folder is a user folder rather than one of
+// the protected system folders.
+func customFolder(f model.Folder) bool {
+	return !f.IsSystem && (f.Role == model.FolderRoleFolder || f.Role == model.FolderRoleLabel)
+}
+
+// rejectCustomFolderWrite refuses a folder mutation a mailbox does not
+// support. A domain or Gmail mailbox organises with additive labels and
+// exposes system folders only, so it has no custom folder to create, rename
+// or delete.
+func (s *Server) rejectCustomFolderWrite(ctx context.Context, p model.Principal, mb mailboxBackend) error {
+	if !s.ownsPhysicalFolders(ctx, p, mb.inbox) {
+		return model.NewMailboxError(model.ErrKindUnsupported, "this mailbox supports system folders only; organise with labels", false, nil)
+	}
+	return nil
 }
 
 // apiInboxFolderWrite creates, renames or deletes a folder. Creation is a POST on
@@ -187,6 +242,10 @@ func (s *Server) apiInboxFoldersWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "path is required")
 		return
 	}
+	if err := s.rejectCustomFolderWrite(r.Context(), p, mb); err != nil {
+		mapMailboxError(w, err)
+		return
+	}
 	if mb.routed {
 		folder, cerr := mb.remote.CreateRemoteFolder(r.Context(), p, mb.inbox.ID, path, in.Name)
 		if cerr != nil {
@@ -204,7 +263,8 @@ func (s *Server) apiInboxFoldersWrite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, folderResponse(folder))
 }
 
-// apiInboxFolderItem renames or deletes one folder.
+// apiInboxFolderItem renames or deletes one folder. A system folder is
+// protected: it is managed by the mailbox, not freely editable.
 func (s *Server) apiInboxFolderItem(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
@@ -213,6 +273,23 @@ func (s *Server) apiInboxFolderItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	folderID := r.PathValue("folderId")
+	folder, ferr := s.Service.Store.GetFolderByID(r.Context(), p.AccountID, mb.inbox.ID, folderID)
+	if ferr != nil {
+		if errors.Is(ferr, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "folder not found")
+			return
+		}
+		mapStoreError(w, ferr)
+		return
+	}
+	if !customFolder(folder) {
+		mapMailboxError(w, model.NewMailboxError(model.ErrKindForbidden, "system folders are protected", false, store.ErrFolderProtected))
+		return
+	}
+	if err := s.rejectCustomFolderWrite(r.Context(), p, mb); err != nil {
+		mapMailboxError(w, err)
+		return
+	}
 	switch r.Method {
 	case http.MethodPatch:
 		var in struct {
@@ -265,106 +342,18 @@ func (s *Server) apiInboxFolderItem(w http.ResponseWriter, r *http.Request) {
 // a folder path (standalone) or folder id (local); when empty the inbox's root/
 // Inbox is used.
 func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
-	limit, ok := limitQuery(w, r)
-	if !ok {
-		return
-	}
-	before := strings.TrimSpace(r.URL.Query().Get("before"))
-	labels, problem := s.labelFilterFromQuery(r.Context(), p, mb.inbox, r.URL.Query())
-	if problem != "" {
-		writeError(w, http.StatusBadRequest, problem)
-		return
-	}
-	if !mb.routed {
-		f := store.MessageFilter{
-			InboxID:   mb.inbox.ID,
-			Direction: r.URL.Query().Get("direction"),
-			From:      r.URL.Query().Get("from"),
-			To:        r.URL.Query().Get("to"),
-			Labels:    labels.Names,
-			Before:    before,
-			Limit:     limit + 1,
-		}
-		scope := strings.TrimSpace(r.URL.Query().Get("folder"))
-		if labels.Scope != "" {
-			scope = labels.Scope
-		}
-		if scope != "" {
-			f.FolderScoped = true
-			f.MailboxID = scope
-		}
-		msgs, lerr := s.Service.Store.ListMessages(r.Context(), p, f)
-		if lerr != nil {
-			mapStoreError(w, lerr)
-			return
-		}
-		cursor := ""
-		if len(msgs) > limit {
-			msgs = msgs[:limit]
-			if len(msgs) > 0 {
-				cursor = msgs[len(msgs)-1].ID
-			}
-		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, msgs, false), cursor, model.CompletenessComplete, nil))
-		return
-	}
-	scopeFolder := strings.TrimSpace(r.URL.Query().Get("folder"))
-	if labels.Scope != "" {
-		scopeFolder = labels.Scope
-	}
-	if len(labels.Names) > 0 {
-		records, lerr := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, mb.inbox.ID, store.RemoteMessageFilter{
-			FolderPath: scopeFolder, Labels: labels.Names, Limit: limit + 1, Before: before,
-		})
-		if lerr != nil {
-			mapStoreError(w, lerr)
-			return
-		}
-		cursor := ""
-		if len(records) > limit {
-			records = records[:limit]
-			cursor = records[len(records)-1].ID
-		}
-		items := make([]model.Message, 0, len(records))
-		for _, rec := range records {
-			rec.Labels, _ = s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, mb.inbox.ID, rec.ID)
-			items = append(items, remoteMessageToModel(mb.remote.ViewOf(rec), nil))
-		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, s.remoteIndexCompleteness(r.Context(), p.AccountID, mb.inbox.ID), nil))
-		return
-	}
-	res, rerr := mb.remote.ListRemoteMessages(r.Context(), p, mb.inbox.ID, scopeFolder, limit, before)
-	if rerr != nil {
-		mapMailboxError(w, rerr)
-		return
-	}
-	items := make([]model.Message, 0, len(res.Items))
-	for _, v := range res.Items {
-		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-	}
-	if labels.Scope != "" {
-		items = filterByFolderScope(items, labels.Scope)
-	}
-	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), res.NextCursor, res.Completeness, nil))
+	s.apiMessages(w, inboxScopedRequest(r))
 }
 
-// filterByFolderScope keeps only messages whose folder membership matches an
-// explicit folder-backed label, so a folder: filter still narrows a listing the
-// metadata source cannot express directly.
-func filterByFolderScope(items []model.Message, folderID string) []model.Message {
-	out := items[:0]
-	for _, m := range items {
-		if m.MailboxID == folderID || m.FolderPath == folderID {
-			out = append(out, m)
-		}
-	}
-	return out
+// inboxScopedRequest makes both URL forms use one contract; query parameters
+// cannot override the inbox in the path or select a compatibility projection.
+func inboxScopedRequest(r *http.Request) *http.Request {
+	r = r.Clone(r.Context())
+	q := r.URL.Query()
+	q.Set("inbox", r.PathValue("id"))
+	q.Del("address")
+	r.URL.RawQuery = q.Encode()
+	return r
 }
 
 // filterByLabelNames keeps only messages carrying every requested additive
@@ -430,6 +419,11 @@ func (s *Server) apiInboxMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, rerr := mb.remote.GetRemoteMessage(r.Context(), p, mb.inbox.ID, messageID)
+	if isRemoteMiss(rerr) {
+		if arrival, ok := s.remoteMessageFromArrival(r.Context(), p, mb, messageID); ok {
+			v, rerr = arrival, nil
+		}
+	}
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
@@ -471,7 +465,12 @@ func (s *Server) apiInboxMessageContent(w http.ResponseWriter, r *http.Request) 
 		http.ServeFile(w, r, path)
 		return
 	}
-	path, size, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, messageID)
+	m, resolved, err := s.resolveActionMessage(r, p, messageID)
+	if err != nil || resolved.inbox.ID != mb.inbox.ID {
+		writeError(w, 404, "not found")
+		return
+	}
+	path, size, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, m.ID)
 	if ferr != nil {
 		mapMailboxError(w, ferr)
 		return
@@ -488,6 +487,10 @@ func (s *Server) apiInboxMessageContent(w http.ResponseWriter, r *http.Request) 
 // local message extracts the named attachment; a remote message fetches the part
 // structurally by its MIME part path.
 func (s *Server) apiInboxMessageAttachment(w http.ResponseWriter, r *http.Request) {
+	if !parsePartOK(r.PathValue("part")) {
+		writeError(w, 400, "invalid part")
+		return
+	}
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
@@ -524,7 +527,12 @@ func (s *Server) apiInboxMessageAttachment(w http.ResponseWriter, r *http.Reques
 	}
 	filename := strings.TrimSpace(r.URL.Query().Get("filename"))
 	contentType := strings.TrimSpace(r.URL.Query().Get("content_type"))
-	att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, messageID, partPath, filename, contentType)
+	m, resolved, err := s.resolveActionMessage(r, p, messageID)
+	if err != nil || resolved.inbox.ID != mb.inbox.ID {
+		writeError(w, 404, "not found")
+		return
+	}
+	att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, m.ID, partPath, filename, contentType)
 	if ferr != nil {
 		mapMailboxError(w, ferr)
 		return
@@ -570,69 +578,14 @@ func (s *Server) streamLocalAttachment(w http.ResponseWriter, r *http.Request, m
 
 // apiInboxThreads lists an inbox's threads as the shared envelope.
 func (s *Server) apiInboxThreads(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
-	limit, ok := limitQuery(w, r)
-	if !ok {
-		return
-	}
-	if !mb.routed {
-		items, lerr := s.Service.Store.ListThreads(r.Context(), p, mb.inbox.ID, limit)
-		if lerr != nil {
-			mapStoreError(w, lerr)
-			return
-		}
-		writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
-		return
-	}
-	threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, "")
-	if rerr != nil {
-		mapMailboxError(w, rerr)
-		return
-	}
-	out := make([]remoteThreadResponse, 0, len(threads))
-	for _, t := range threads {
-		out = append(out, remoteThreadResponse{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, UnreadCount: t.UnreadCount, LastMessageAt: t.LastMessageAt})
-	}
-	writeJSON(w, 200, newEnvelope(out, "", model.CompletenessComplete, nil))
+	s.apiThreads(w, inboxScopedRequest(r))
 }
 
 // apiInboxThread returns one thread with its messages.
 func (s *Server) apiInboxThread(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
-	threadKey := r.PathValue("threadId")
-	if !mb.routed {
-		msgs, lerr := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: mb.inbox.ID, ThreadID: threadKey, Limit: limits.PageSizeMaxList})
-		if lerr != nil {
-			mapStoreError(w, lerr)
-			return
-		}
-		if len(msgs) == 0 {
-			writeError(w, 404, "thread not found")
-			return
-		}
-		writeJSON(w, 200, map[string]any{"id": threadKey, "inbox_id": mb.inbox.ID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": s.messageResponses(r, msgs, false)})
-		return
-	}
-	view, msgs, rerr := mb.remote.GetRemoteThread(r.Context(), p, mb.inbox.ID, threadKey)
-	if rerr != nil {
-		mapMailboxError(w, rerr)
-		return
-	}
-	items := make([]model.Message, 0, len(msgs))
-	for _, v := range msgs {
-		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-	}
-	writeJSON(w, 200, map[string]any{"id": view.Key, "inbox_id": mb.inbox.ID, "subject": view.Subject, "message_count": view.MessageCount, "unread_count": view.UnreadCount, "messages": s.messageResponses(r, items, false)})
+	r = inboxScopedRequest(r)
+	r.SetPathValue("id", r.PathValue("threadId"))
+	s.apiThread(w, r)
 }
 
 // ---- Search ----
@@ -643,79 +596,7 @@ func (s *Server) apiInboxThread(w http.ResponseWriter, r *http.Request) {
 // envelope; for a remote search the completeness reflects the server's own
 // best-effort enumeration.
 func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
-	limit, ok := limitQuery(w, r)
-	if !ok {
-		return
-	}
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	labels, problem := s.labelFilterFromQuery(r.Context(), p, mb.inbox, r.URL.Query())
-	if problem != "" {
-		writeError(w, http.StatusBadRequest, problem)
-		return
-	}
-	if !mb.routed {
-		f := store.MessageFilter{
-			InboxID: mb.inbox.ID,
-			From:    r.URL.Query().Get("from"),
-			To:      r.URL.Query().Get("to"),
-			Labels:  labels.Names,
-			Before:  strings.TrimSpace(r.URL.Query().Get("before")),
-			Limit:   limit,
-		}
-		if labels.Scope != "" {
-			f.FolderScoped = true
-			f.MailboxID = labels.Scope
-		}
-		items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, f)
-		if lerr != nil {
-			mapStoreError(w, lerr)
-			return
-		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", model.CompletenessComplete, nil))
-		return
-	}
-	cursorUID := uint32(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
-		if n, cerr := strconv.ParseUint(raw, 10, 32); cerr == nil {
-			cursorUID = uint32(n)
-		}
-	}
-	sq := app.RemoteSearchQuery{
-		FolderPath:     labels.Scope,
-		From:           r.URL.Query().Get("from"),
-		To:             r.URL.Query().Get("to"),
-		Subject:        r.URL.Query().Get("subject"),
-		Text:           q,
-		Limit:          limit,
-		Cursor:         cursorUID,
-		ProviderCursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
-	}
-	res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, sq)
-	if rerr != nil {
-		mapMailboxError(w, rerr)
-		return
-	}
-	items := make([]model.Message, 0, len(res.Items))
-	for _, v := range res.Items {
-		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-	}
-	if len(labels.Names) > 0 {
-		items = filterByLabelNames(items, labels.Names)
-	}
-	cursor := ""
-	if res.NextCursor != 0 {
-		cursor = strconv.FormatUint(uint64(res.NextCursor), 10)
-	}
-	if res.ProviderCursor != "" {
-		cursor = res.ProviderCursor
-	}
-	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, res.Completeness, nil))
+	s.apiSearch(w, inboxScopedRequest(r))
 }
 
 // ---- Labels ----

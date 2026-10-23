@@ -224,7 +224,7 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		if keyID != "" && st.KeyID != "" && st.KeyID != keyID {
 			continue
 		}
-		v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname}
+		v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname, HTTPCode: st.HTTPCode}
 		if !st.ExpiresAt.IsZero() {
 			t := st.ExpiresAt
 			v.ExpiresAt = &t

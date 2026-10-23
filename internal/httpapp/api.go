@@ -51,7 +51,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 			"curl":   "/examples/curl",
 		},
 		"bootstrap":    "/v1/bootstrap",
-		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "send-any-in-domain", "hermes-relay"},
+		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "folders", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "send-any-in-domain", "hermes-relay"},
 		"limits":       s.discoveryLimits(),
 	})
 }
@@ -145,18 +145,17 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	// Domain names resolve a live domain-wide sending grant to the domain it
-	// applies to, so a client can send `sender` addresses directly.
-	domainNames := make(map[string]string, len(p.DomainSend))
-	for _, b := range boxes {
-		if !p.DomainSend[b.ID] {
-			continue
-		}
-		if d, derr := s.Service.Store.GetDomain(r.Context(), p.AccountID, b.DomainID); derr == nil {
-			domainNames[b.DomainID] = d.Name
-		}
+	// The account's enabled catch-alls are the inboxes a domain-wide send is
+	// honoured from: an account Admin key holds the grant implicitly on each of
+	// them, and any other key holds it only where its own binding carries the
+	// flag. The domain name comes with them, so a client knows which domain the
+	// widened `sender` rule covers.
+	catchAlls, err := s.Service.Store.ListEnabledCatchAlls(r.Context(), p.AccountID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes, domainNames), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
+	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes, catchAlls), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
 }
 
 type mailboxPermissions struct {
@@ -173,14 +172,13 @@ type mailboxPermissions struct {
 	SendAnyDomain   string `json:"send_any_domain,omitempty"`
 }
 
-func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, domainNames map[string]string) map[string]mailboxPermissions {
+func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, catchAlls map[string]string) map[string]mailboxPermissions {
 	out := make(map[string]mailboxPermissions, len(boxes))
 	for _, box := range boxes {
 		role := p.Role(box.ID)
 		if p.Admin {
 			role = "admin"
 		}
-		anyDomain := p.Admin || p.DomainSend[box.ID]
 		perm := mailboxPermissions{
 			Role:       role,
 			CanRead:    p.CanRead(box.ID),
@@ -188,9 +186,14 @@ func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, domainN
 			CanSend:    p.CanOwn(box.ID),
 			CanApprove: p.CanOwn(box.ID),
 		}
-		if anyDomain {
+		// A domain-wide send is advertised only where it would be honoured: the
+		// key holds the grant — explicitly, or implicitly as an account Admin
+		// key — and the inbox is its domain's enabled catch-all. A web session
+		// holds no key, so it never has the grant.
+		granted := p.DomainSend[box.ID] || (p.Admin && p.APIKeyID != "")
+		if domain, ok := catchAlls[box.ID]; ok && granted {
 			perm.SendAnyInDomain = true
-			perm.SendAnyDomain = domainNames[box.DomainID]
+			perm.SendAnyDomain = domain
 		}
 		out[box.ID] = perm
 	}
@@ -647,6 +650,10 @@ func sanitizedMessages(ms []model.Message) []model.Message {
 }
 
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("cursor") {
+		writeError(w, http.StatusBadRequest, "use before with the returned next_cursor, not cursor")
+		return
+	}
 	p := principal(r)
 	unread, ok := boolQuery(w, r, "unread")
 	if !ok {
@@ -672,7 +679,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
+	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), Direction: r.URL.Query().Get("direction"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
 	if trashed != nil && *trashed {
 		f.Trashed = true
 		f.IncludeSpam = true
@@ -696,19 +703,19 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	// inbox, every authorized standalone inbox via the remote index.
 	folder := strings.TrimSpace(r.URL.Query().Get("folder"))
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
-	// A label_id that names a folder-backed destination is resolved through the
-	// scoped inbox's catalogue so the account-wide route behaves exactly like the
-	// inbox-scoped one.
-	if labels, problem := s.accountLabelFilter(r.Context(), p, f.InboxID, r.URL.Query()); problem != "" {
+	var scopeErr error
+	f.InboxID, scopeErr = s.folderInboxScope(r.Context(), p, f.InboxID, folder)
+	if scopeErr != nil {
+		mapMailboxError(w, scopeErr)
+		return
+	}
+	// Label and folder selectors are independent.
+	labels, problem := s.accountLabelFilter(r.Context(), p, f.InboxID, r.URL.Query())
+	if problem != "" {
 		writeError(w, http.StatusBadRequest, problem)
 		return
 	} else {
 		f.Labels = labels.Names
-		if labels.Scope != "" {
-			folder = labels.Scope
-			f.FolderScoped = true
-			f.MailboxID = labels.Scope
-		}
 	}
 	items, cursor, failures, err := s.listMessagesUnified(r.Context(), p, f, folder, before, limit)
 	if err != nil {
@@ -723,17 +730,12 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	completeness := model.CompletenessComplete
-	if len(failures) > 0 {
-		completeness = model.CompletenessPartial
-	}
+	completeness := s.listingCompleteness(r.Context(), p, f.InboxID, failures)
 	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, completeness, failures))
 }
 
 // accountLabelFilter resolves label/label_id query parameters for the
-// account-wide routes. A tag-only filter needs no inbox, but a folder-backed
-// label_id is single-inbox state, so it requires the caller to scope the query
-// with inbox= rather than guessing across mailboxes.
+// account-wide routes. Only additive labels are accepted.
 func (s *Server) accountLabelFilter(ctx context.Context, p model.Principal, inboxID string, q url.Values) (labelFilter, string) {
 	if strings.TrimSpace(inboxID) != "" {
 		mb, err := s.resolveMailbox(ctx, p, inboxID)
@@ -748,7 +750,7 @@ func (s *Server) accountLabelFilter(ctx context.Context, p model.Principal, inbo
 		switch {
 		case v == "":
 		case strings.HasPrefix(v, "folder:"):
-			return labelFilter{}, "a folder-backed label_id requires an inbox= scope"
+			return labelFilter{}, "folders are not labels; use folder= with inbox= instead"
 		case strings.HasPrefix(v, "tag:"):
 			out.Names = appendUniqueFold(out.Names, strings.TrimPrefix(v, "tag:"))
 		default:
@@ -809,19 +811,9 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			// A local-only filter maps to the matching remote role folder so it is
 			// honored rather than ignored: trashed -> Trash, spam -> Spam,
 			// direction=outbound -> Sent.
-			scopeFolder := folder
-			if f.Trashed {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleTrash); ok {
-					scopeFolder = rf.Path
-				}
-			} else if f.SpamOnly {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSpam); ok {
-					scopeFolder = rf.Path
-				}
-			} else if f.Direction == "outbound" {
-				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSent); ok {
-					scopeFolder = rf.Path
-				}
+			scopeFolder, present := s.remoteFilterFolder(ctx, p.AccountID, mb.inbox.ID, folder, f)
+			if !present {
+				return []model.Message{}, "", nil, nil
 			}
 			// Apply the remaining common filters in-memory: the remote list
 			// cannot express from/to/unread/has_attachment/label, so they are
@@ -842,20 +834,21 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			more := false
 			exhausted := false
 			for page := 0; page < remoteFilterScanMaxPages; page++ {
-				rawLimit := limit + 1
+				rawLimit := pageLookahead(limit)
 				if rawLimit < remoteFilterScanPage {
 					rawLimit = remoteFilterScanPage
 				}
-				res, rerr := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, scopeFolder, rawLimit, scanBefore)
+				res, rerr := s.listRemoteMessagePage(ctx, p, mb, f.ThreadID, scopeFolder, rawLimit, scanBefore)
 				if rerr != nil {
 					// A remote failure is reported as an unavailable inbox; the
 					// caller surfaces it with the common classification (503),
 					// never a misleading empty 200 or a 404.
 					return nil, "", nil, rerr
 				}
+				visible := s.remoteThreadVisibility(ctx, p, mb, res.Items, f, scopeFolder)
 				for _, v := range res.Items {
 					m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-					if !matchMessageFilter(m, applyFilter) {
+					if !matchMessageFilter(m, applyFilter) || (visible != nil && !visible[m.ID]) {
 						continue
 					}
 					out = append(out, m)
@@ -894,6 +887,13 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 		// treating a full page as "more".
 		if limit <= 0 || limit > limits.PageSizeMaxList {
 			limit = limits.PageSizeDefault
+		}
+		// A folder filter means the same thing here as on the inbox-scoped
+		// route: for a domain inbox the value is a folder id, so the query is
+		// scoped to that folder instead of returning every folder's messages. An
+		// already-resolved label scope wins, so it is never overwritten.
+		if err := s.applyLocalFolder(ctx, p, mb.inbox.ID, folder, &f); err != nil {
+			return nil, "", nil, err
 		}
 		f.Before = before
 		f.Limit = limit
@@ -1031,11 +1031,29 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	// A remote message's parts are not cached (only its header is), so the
-	// attachment list is empty and the parts are downloaded structurally from
-	// /v1/messages/{id}/attachments/{part}.
-	if _, _, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
-		writeJSON(w, 200, []model.Attachment{})
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
+	if rerr != nil {
+		mapMailboxError(w, rerr)
+		return
+	}
+	if remote {
+		path, _, err := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, m.ID)
+		if err != nil {
+			mapMailboxError(w, err)
+			return
+		}
+		defer mb.remote.CleanupRemoteRaw(path)
+		parsed, err := mailparse.ParseFile(path)
+		if err != nil {
+			mapMailboxError(w, model.NewMailboxError(model.ErrKindUnavailable, "the remote attachments could not be parsed", true, err))
+			return
+		}
+		items := make([]attachmentResponse, 0, len(parsed.Attachments))
+		for _, att := range parsed.Attachments {
+			q := url.Values{"filename": {att.Filename}, "content_type": {att.ContentType}}
+			items = append(items, attachmentResponse{Attachment: model.Attachment{MessageID: m.ID, Filename: att.Filename, ContentType: att.ContentType, ContentID: att.ContentID, Size: att.Size}, DownloadURL: "/v1/messages/" + url.PathEscape(m.ID) + "/attachments/" + att.PartPath + "?" + q.Encode()})
+		}
+		writeJSON(w, 200, items)
 		return
 	}
 	items, err := s.Service.Store.ListAttachments(r.Context(), p, r.PathValue("id"))
@@ -1043,7 +1061,17 @@ func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, items)
+	out := make([]attachmentResponse, 0, len(items))
+	for _, att := range items {
+		out = append(out, attachmentResponse{Attachment: att, DownloadURL: "/v1/attachments/" + url.PathEscape(att.ID)})
+	}
+	writeJSON(w, 200, out)
+}
+
+// DownloadURL is an authenticated relative URL, opaque to clients on every backend.
+type attachmentResponse struct {
+	model.Attachment
+	DownloadURL string `json:"download_url"`
 }
 
 // apiMessageContent streams a message's raw RFC5322 MIME. A local message reads
@@ -1064,13 +1092,13 @@ func (s *Server) apiMessageContent(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, path)
 		return
 	}
-	_, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
 	}
 	if remote {
-		s.remoteMessageContent(w, r, p, mb, id)
+		s.remoteMessageContent(w, r, p, mb, m.ID)
 		return
 	}
 	writeError(w, 404, "not found")
@@ -1086,9 +1114,32 @@ func (s *Server) apiMessageAttachmentPart(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid part")
 		return
 	}
-	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
+	if rerr != nil {
+		mapMailboxError(w, rerr)
+		return
+	}
+	if !remote {
+		atts, err := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		part, err := strconv.Atoi(r.PathValue("part"))
+		if err == nil {
+			for _, a := range atts {
+				if a.PartIndex == part {
+					s.streamLocalAttachment(w, r, m, a)
+					return
+				}
+			}
+		}
+		writeError(w, 404, "attachment not found")
+		return
+	}
+	if remote {
 		part := parsePartPath(r.PathValue("part"))
-		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, id, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
+		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, m.ID, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
 		if ferr != nil {
 			mapMailboxError(w, ferr)
 			return
@@ -1137,12 +1188,27 @@ func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("cursor") {
+		writeError(w, http.StatusBadRequest, "use before with the returned next_cursor, not cursor")
+		return
+	}
 	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
 	p := principal(r)
 	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
+	inbox, err := s.folderInboxScope(r.Context(), p, inbox, strings.TrimSpace(r.URL.Query().Get("folder")))
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	labels, problem := s.accountLabelFilter(r.Context(), p, inbox, r.URL.Query())
+	if problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+	filtered := len(labels.Names) > 0
 	if inbox == "" {
 		// Account-wide: one globally date-sorted thread stream across the local
 		// store and every authorized remote inbox, resumed through one cursor.
@@ -1151,44 +1217,70 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid cursor")
 			return
 		}
-		items, cursor, failures, err := s.mergeThreads(r.Context(), p, r.URL.Query().Get("folder"), cur, limit)
+		items, cursor, failures, err := s.mergeThreads(r.Context(), p, r.URL.Query().Get("folder"), labels, cur, limit)
 		if err != nil {
 			mapMailboxError(w, err)
 			return
 		}
-		writeJSON(w, 200, newEnvelope(items, cursor, model.CompletenessComplete, failures))
+		writeJSON(w, 200, newEnvelope(items, cursor, s.listingCompleteness(r.Context(), p, "", failures), failures))
 		return
 	}
-	// Scoped to one inbox: a standalone inbox reads its remote thread index.
+	// Both URL forms use the same single-inbox keyset and projection.
 	mb, err := s.resolveMailbox(r.Context(), p, inbox)
 	if err != nil {
 		mapMailboxError(w, err)
 		return
 	}
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	items := []model.Thread{}
+	completeness := model.CompletenessComplete
 	if mb.routed {
 		s.demandDetection(r.Context(), []mailboxBackend{mb})
-		threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, "")
-		if rerr != nil {
-			mapMailboxError(w, rerr)
+		if filtered {
+			paths := []string{}
+			if folder := strings.TrimSpace(r.URL.Query().Get("folder")); folder != "" {
+				paths = append(paths, folder)
+			}
+			var rerr error
+			items, rerr = s.labelFilteredRemoteThreads(r.Context(), p, mb, paths, labels.Names, pageLookahead(limit), before)
+			if rerr != nil {
+				mapMailboxError(w, rerr)
+				return
+			}
+		} else {
+			threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), pageLookahead(limit), before)
+			if rerr != nil {
+				mapMailboxError(w, rerr)
+				return
+			}
+			for _, t := range threads {
+				items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, UnreadCount: t.UnreadCount, LastMessageAt: t.LastMessageAt})
+			}
+		}
+		completeness = s.remoteIndexCompleteness(r.Context(), p.AccountID, inbox)
+	} else {
+		var lerr error
+		filter := store.MessageFilter{InboxID: inbox, Labels: labels.Names}
+		if err := s.applyLocalFolder(r.Context(), p, inbox, strings.TrimSpace(r.URL.Query().Get("folder")), &filter); err != nil {
+			mapMailboxError(w, err)
 			return
 		}
-		items := make([]model.Thread, 0, len(threads))
-		for _, t := range threads {
-			items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
+		items, lerr = s.Service.Store.ListThreadsFilteredBefore(r.Context(), p, filter, pageLookahead(limit), before)
+		if lerr != nil {
+			mapStoreError(w, lerr)
+			return
 		}
-		writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
-		return
 	}
-	items, lerr := s.Service.Store.ListThreads(r.Context(), p, inbox, limit)
-	if lerr != nil {
-		mapStoreError(w, lerr)
-		return
+	cursor := ""
+	if len(items) > limit || (limit == limits.PageSizeMaxList && len(items) == limit) {
+		items = items[:limit]
+		cursor = items[len(items)-1].ID
 	}
-	writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
+	writeJSON(w, 200, newEnvelope(items, cursor, completeness, nil))
 }
 func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	key, inboxID, msgs, remote, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"))
+	key, inboxID, msgs, remote, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"), true)
 	if err != nil {
 		if isRemoteMiss(err) {
 			writeError(w, 404, "thread not found")
@@ -1202,8 +1294,31 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subject := msgs[len(msgs)-1].Subject
-	_ = remote
-	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "messages": s.messageResponses(r, msgs, false)})
+	completeness := model.CompletenessComplete
+	if len(msgs) > 200 {
+		msgs = msgs[:200]
+		completeness = model.CompletenessPartial
+	}
+	if !remote && len(msgs) == 200 {
+		older, err := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: inboxID, ThreadID: key, Before: msgs[len(msgs)-1].ID, Limit: 1})
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		if len(older) > 0 {
+			completeness = model.CompletenessPartial
+		}
+	}
+	if remote && s.remoteIndexCompleteness(r.Context(), p.AccountID, inboxID) != model.CompletenessComplete {
+		completeness = model.CompletenessPartial
+	}
+	unread := 0
+	for _, m := range msgs {
+		if !m.Read {
+			unread++
+		}
+	}
+	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "unread_count": unread, "completeness": completeness, "messages_url": "/v1/messages?inbox=" + url.QueryEscape(inboxID) + "&thread=" + url.QueryEscape(key), "messages": s.messageResponses(r, msgs, false)})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -1238,6 +1353,11 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	to := r.URL.Query().Get("to")
 	subject := r.URL.Query().Get("subject")
 	folder := r.URL.Query().Get("folder")
+	inbox, err := s.folderInboxScope(r.Context(), p, inbox, strings.TrimSpace(folder))
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
 	var labels labelFilter
 	if inbox != "" {
 		mb, merr := s.resolveMailbox(r.Context(), p, inbox)
@@ -1262,70 +1382,11 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid cursor")
 		return
 	}
-	// Scoped to a domain inbox: local FTS5 only.
-	if inbox != "" {
-		mb, merr := s.resolveMailbox(r.Context(), p, inbox)
-		if merr != nil {
-			mapMailboxError(w, merr)
-			return
-		}
-		if !mb.routed {
-			f := store.MessageFilter{
-				InboxID:       inbox,
-				From:          from,
-				To:            to,
-				Unread:        unread,
-				HasAttachment: hasAttachment,
-				Labels:        labels.Names,
-				Before:        cur.sourceCursor("local"),
-				Limit:         limit + 1,
-			}
-			if labels.Scope != "" {
-				f.FolderScoped = true
-				f.MailboxID = labels.Scope
-			}
-			items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, f)
-			if lerr != nil {
-				mapStoreError(w, lerr)
-				return
-			}
-			cursor := ""
-			if limit > 0 && len(items) > limit {
-				items = items[:limit]
-				if len(items) > 0 {
-					cursor = items[len(items)-1].ID
-				}
-			}
-			writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessComplete, nil))
-			return
-		}
-		s.demandDetection(r.Context(), []mailboxBackend{mb})
-		scope := folder
-		if labels.Scope != "" {
-			scope = labels.Scope
-		}
-		res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, app.RemoteSearchQuery{
-			FolderPath: scope, From: from, To: to, Subject: subject, Text: q, Unread: unread, Limit: limit,
-		})
-		if rerr != nil {
-			mapMailboxError(w, rerr)
-			return
-		}
-		var items []model.Message
-		for _, v := range res.Items {
-			if hasAttachment != nil && v.HasAttach != *hasAttachment {
-				continue
-			}
-			items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
-		}
-		if len(labels.Names) > 0 {
-			items = filterByLabelNames(items, labels.Names)
-		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", res.Completeness, nil))
+	if r.URL.Query().Has("cursor") {
+		writeError(w, 400, "use before with the returned next_cursor, not cursor")
 		return
 	}
-	// Account-wide merged search.
-	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, q, folder, from, to, subject, labels, unread, hasAttachment, cur, limit)
+	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, inbox, q, folder, from, to, subject, labels, unread, hasAttachment, cur, limit)
 	if err != nil {
 		mapMailboxError(w, err)
 		return
@@ -1414,20 +1475,17 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	// Async by default: return the pending message immediately. With ?wait=true
-	// the request blocks until the worker delivers or fails (or times out).
-	if r.URL.Query().Get("wait") == "true" {
-		m, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
-		if werr != nil {
-			writeError(w, 504, werr.Error())
-			return
-		}
-		res.Message = m
-		res.ProviderMessageID = m.ProviderMessageID
-	}
-	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
+	s.writeSendResult(w, r, res)
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
+	s.apiMessageSend(w, r, false)
+}
+
+func (s *Server) apiForward(w http.ResponseWriter, r *http.Request) {
+	s.apiMessageSend(w, r, true)
+}
+
+func (s *Server) apiMessageSend(w http.ResponseWriter, r *http.Request, forward bool) {
 	p := principal(r)
 	m, _, _, err := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
 	if err != nil {
@@ -1437,6 +1495,9 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Sender      string               `json:"sender"`
 		To          stringList           `json:"to,omitempty"`
+		CC          stringList           `json:"cc,omitempty"`
+		BCC         stringList           `json:"bcc,omitempty"`
+		Subject     string               `json:"subject,omitempty"`
 		Text        string               `json:"text"`
 		HTML        string               `json:"html,omitempty"`
 		Attachments []app.SendAttachment `json:"attachments,omitempty"`
@@ -1444,15 +1505,28 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, To: []string(in.To), ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	input := app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}
+	if forward {
+		input.ForwardOfMessageID = m.ID
+	} else {
+		input.ReplyToMessageID = m.ID
+	}
+	res, err := s.Service.Send(r.Context(), p, input, idemKey(r))
 	if err != nil {
-		mapStoreError(w, err)
+		if forward {
+			mapMailboxError(w, err)
+		} else {
+			mapStoreError(w, err)
+		}
 		return
 	}
-	// Async by default: return the pending message immediately. With ?wait=true
-	// the request blocks until the worker delivers or fails (or times out).
+	s.writeSendResult(w, r, res)
+}
+
+// writeSendResult keeps every outbound enqueue response and wait behavior identical.
+func (s *Server) writeSendResult(w http.ResponseWriter, r *http.Request, res app.SendResult) {
 	if r.URL.Query().Get("wait") == "true" {
-		dm, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
+		dm, werr := s.Service.WaitForDelivery(r.Context(), principal(r).AccountID, res.Message.ID, 30*time.Second)
 		if werr != nil {
 			writeError(w, 504, werr.Error())
 			return
@@ -1460,7 +1534,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		res.Message = dm
 		res.ProviderMessageID = dm.ProviderMessageID
 	}
-	writeJSON(w, 201, map[string]any{"message": s.messageResponse(r, res.Message), "provider_message_id": res.ProviderMessageID})
+	writeJSON(w, http.StatusOK, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
 }
 
 func (s *Server) apiDrafts(w http.ResponseWriter, r *http.Request) {
@@ -1523,6 +1597,13 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
+		// A consumed draft is replayed by writeDraftResult through the idempotency
+		// key; any other action, or a retry without a key, needs the draft.
+		_, gerr := s.Service.Store.GetDraft(r.Context(), p, id)
+		if gerr != nil && errors.Is(gerr, store.ErrNotFound) && action == "send" && idemKey(r) != "" {
+			s.writeDraftResult(w, r, p, id, action, in.External, http.StatusOK)
+			return
+		}
 		old, err := s.Service.Store.GetDraft(r.Context(), p, id)
 		if err != nil {
 			mapStoreError(w, err)
@@ -1560,17 +1641,20 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p model.Principal, draftID, action string, external bool, okStatus int) {
 	switch action {
 	case "send":
-		d, err := s.Service.Store.GetDraft(r.Context(), p, draftID)
+		// A retry of a send whose draft was already consumed replays through the
+		// idempotency key, so a missing draft is not an error on its own.
+		d, derr := s.Service.Store.GetDraft(r.Context(), p, draftID)
+		if derr != nil && !errors.Is(derr, store.ErrNotFound) {
+			mapStoreError(w, derr)
+			return
+		}
+		in := app.SendInput{InboxID: d.InboxID, FromAddress: d.FromAddress, FromName: d.FromName, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}
+		res, err := s.Service.SendDraft(r.Context(), p, draftID, in, idemKey(r))
 		if err != nil {
 			mapStoreError(w, err)
 			return
 		}
-		res, err := s.Service.SendDraft(r.Context(), p, draftID, app.SendInput{InboxID: d.InboxID, FromAddress: d.FromAddress, FromName: d.FromName, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}, idemKey(r))
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
+		s.writeSendResult(w, r, res)
 	case "request-send":
 		d, err := s.Service.RequestSend(r.Context(), p, draftID, external)
 		if err != nil {
@@ -1600,21 +1684,28 @@ func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := s.Service.Store.GetDraft(r.Context(), p, id)
-	if err != nil {
+	// A retry of an already-consumed draft reaches the idempotency replay inside
+	// SendDraft, which enforces ownership on the replayed message's inbox.
+	missing := errors.Is(err, store.ErrNotFound)
+	if err != nil && !missing {
 		mapStoreError(w, err)
 		return
 	}
-	if !p.CanOwn(d.InboxID) {
+	if missing && idemKey(r) == "" {
+		mapStoreError(w, store.ErrNotFound)
+		return
+	}
+	if !missing && !p.CanOwn(d.InboxID) {
 		mapStoreError(w, store.ErrForbidden)
 		return
 	}
-	if in.To != nil || in.CC != nil || in.BCC != nil || in.Subject != nil || in.Text != nil || in.HTML != nil || in.FromAddress != "" || in.Sender != "" {
+	if !missing && (in.To != nil || in.CC != nil || in.BCC != nil || in.Subject != nil || in.Text != nil || in.HTML != nil || in.FromAddress != "" || in.Sender != "") {
 		if _, err = s.Service.Store.UpdateDraft(r.Context(), p, patchDraft(in, d)); err != nil {
 			mapStoreError(w, err)
 			return
 		}
 	}
-	if len(in.Attachments) > 0 {
+	if !missing && len(in.Attachments) > 0 {
 		if _, err = s.persistDraftAttachments(r.Context(), p, id, in.Attachments); err != nil {
 			mapStoreError(w, err)
 			return
@@ -1694,7 +1785,7 @@ func (s *Server) apiDraftApprove(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": s.messageResponse(r, res.Message)})
+	s.writeSendResult(w, r, res)
 }
 
 // apiDraftReject rejects a pending request with optional feedback. Requires

@@ -206,8 +206,8 @@ func TestWebhookCreateViaDashboard(t *testing.T) {
 	if !strings.Contains(body, `data-connector="`+clients[0].ID+`"`) || !strings.Contains(body, "Hooks") {
 		t.Fatal("dashboard does not render the webhook connector on its inbox")
 	}
-	if strings.Contains(body, `data-kind="webhook" data-name="Hooks"`) {
-		t.Fatal("webhook connector should not render as a row in Clients")
+	if !strings.Contains(body, `data-connector-row>`) || !strings.Contains(body, `data-kind="webhook" data-name="Hooks"`) {
+		t.Fatal("webhook connector should render as a row in Clients (shown by default)")
 	}
 }
 

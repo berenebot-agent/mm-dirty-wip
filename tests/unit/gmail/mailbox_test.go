@@ -73,6 +73,33 @@ func TestListPagination(t *testing.T) {
 	}
 }
 
+// TestListIncludingSpamTrash verifies that indexing and search can explicitly
+// request Spam/Trash while the legacy transport method retains its default.
+func TestListIncludingSpamTrash(t *testing.T) {
+	var requested []string
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := r.URL.Query().Get("includeSpamTrash")
+		requested = append(requested, v)
+		w.Header().Set("Content-Type", "application/json")
+		if v == "true" {
+			io.WriteString(w, `{"messages":[{"id":"spam-message"}]}`)
+			return
+		}
+		io.WriteString(w, `{"messages":[]}`)
+	}))
+	base, err := c.List(context.Background(), "tok", "", "SPAM", "", 50)
+	if err != nil || len(base.Messages) != 0 {
+		t.Fatalf("default list: %#v, %v", base, err)
+	}
+	all, err := c.ListIncludingSpamTrash(context.Background(), "tok", "", "SPAM", "", 50)
+	if err != nil || len(all.Messages) != 1 || all.Messages[0].ID != "spam-message" {
+		t.Fatalf("inclusive list: %#v, %v", all, err)
+	}
+	if len(requested) != 2 || requested[0] != "" || requested[1] != "true" {
+		t.Fatalf("includeSpamTrash requests = %v", requested)
+	}
+}
+
 func TestListClampsLimit(t *testing.T) {
 	var maxResults string
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

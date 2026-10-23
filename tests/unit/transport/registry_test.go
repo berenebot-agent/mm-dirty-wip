@@ -29,9 +29,9 @@ func TestInboundMXProviderLabel(t *testing.T) {
 	}
 }
 
-// TestInboundRemoteMXProvider pins the Remote MX provider: it has no
-// per-domain schema (the receiver is configured once per account) and a picker
-// label that names it as the account's own receiver.
+// TestInboundRemoteMXProvider pins the Remote MX provider: its only per-domain
+// value is the core-side spam policy (the receiver is configured once per
+// account), and a picker label that names it as the account's own receiver.
 func TestInboundRemoteMXProvider(t *testing.T) {
 	provider, ok := transport.LookupInbound("remotemx")
 	if !ok {
@@ -43,8 +43,9 @@ func TestInboundRemoteMXProvider(t *testing.T) {
 	if got := transport.InboundSelectLabel(provider); got != "Remote MailMoose MX (your own receiver)" {
 		t.Fatalf("remotemx select label = %q", got)
 	}
-	if fields := provider.ConfigFields(); len(fields) != 0 {
-		t.Fatalf("remotemx per-domain config = %+v, want none", fields)
+	fields := provider.ConfigFields()
+	if len(fields) != 1 || fields[0].Name != "enforcement" {
+		t.Fatalf("remotemx per-domain config = %+v, want only enforcement", fields)
 	}
 }
 

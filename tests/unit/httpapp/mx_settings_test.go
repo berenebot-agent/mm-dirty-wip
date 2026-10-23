@@ -279,10 +279,19 @@ func TestAdminMXUISaveAndClear(t *testing.T) {
 
 	page := uiGet(t, h, cookie, view)
 	body := page.Body.String()
-	for _, want := range []string{"Direct MX receiver", `value="included"`, "SMTP greeting hostname", "Shared receiver"} {
+	for _, want := range []string{`value="included"`, "SMTP greeting hostname", "Shared receiver", "Receiver authentication enforcement"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("admin MX section missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Direct MX receiver") || strings.Contains(body, "Publish an SPF record") {
+		t.Fatal("Direct MX setup must not repeat its title or ask for a receiving-domain SPF record")
+	}
+	shared := strings.Index(body, "Shared receiver")
+	enforcement := strings.Index(body, "Receiver authentication enforcement")
+	hostname := strings.Index(body, "SMTP greeting hostname")
+	if shared < 0 || enforcement <= shared || hostname <= enforcement {
+		t.Fatalf("Direct MX UI should show shared notice, enforcement, then receiver tuning in that order")
 	}
 
 	if rr := uiPost(t, h, cookie, path, url.Values{"mode": {"remote"}}.Encode()); rr.Code != http.StatusForbidden {

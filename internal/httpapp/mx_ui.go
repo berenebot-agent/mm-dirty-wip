@@ -103,18 +103,15 @@ type mxReceiverEditorView struct {
 	DomainID            string
 	CSRF                string
 	MXForm              mxFormView
-	MXStatus            app.MXReceiverStatus
 	MXIncludedSupported bool
 }
 
 const mxReceiverSection = `<div class="mx-editor">
-<p class="muted small">Shared receiver · changes apply to all Direct MX domains.</p>
 {{if not .MXIncludedSupported}}<div class="error">The Included receiver is unavailable in this deployment: the container must start as root to launch the isolated receiver child.</div>{{end}}
 {{if .MXForm.Error}}<div class="error">{{.MXForm.Error}}</div>{{end}}
 <input type="hidden" name="revision" value="{{.MXForm.Revision}}">
 <input type="hidden" name="mode" value="included">
-<p class="muted small"><b>Included receiver</b> · runs inside this deployment with automatically generated credentials.</p>
-{{if eq .MXStatus.Mode "remote"}}<p class="muted small">Saving switches the shared receiver from Remote to Included.</p>{{end}}
+<p class="muted small">These settings apply to the bundled receiver that every Direct MX domain shares. A Remote MX receiver is configured on that receiver instead.</p>
 <div><label>SMTP greeting hostname (optional)</label><input name="hostname" value="{{.MXForm.Hostname}}" placeholder="mail.example.com">
 <p class="muted small">Defaults to the external receiving URL hostname, or the public URL hostname. You can change it.</p>
 <details{{if .MXForm.Error}} open{{end}}><summary>Limits</summary>
@@ -122,10 +119,10 @@ const mxReceiverSection = `<div class="mx-editor">
 <div class="row"><div style="flex:1"><label>Max recipients</label><input name="max_recipients" type="number" min="0" step="1" value="{{.MXForm.MaxRecipients}}" placeholder="100"></div><div style="flex:1"><label>Max connections</label><input name="max_connections" type="number" min="0" step="1" value="{{.MXForm.MaxConnections}}" placeholder="256"></div></div>
 <p class="muted small">Leave a limit blank or 0 to use the receiver default (shown as the placeholder). Values apply to the Included receiver.</p>
 </details><details{{if .MXForm.Error}} open{{end}}><summary>Verification</summary>
-<label class="inherit-option"><input type="checkbox" name="verify_spf" value="true"{{if .MXForm.VerifySPF}} checked{{end}}> <span>Verify SPF</span></label>
+<label class="inherit-option"><input type="checkbox" name="verify_spf" value="true"{{if .MXForm.VerifySPF}} checked{{end}}> <span>Check the sender's SPF record</span></label>
 <label class="inherit-option"><input type="checkbox" name="verify_dkim" value="true"{{if .MXForm.VerifyDKIM}} checked{{end}}> <span>Verify DKIM</span></label>
 <label class="inherit-option"><input type="checkbox" name="verify_dmarc" value="true"{{if .MXForm.VerifyDMARC}} checked{{end}}> <span>Verify DMARC</span></label>
-<p class="muted small">Authentication evidence is computed at the included receiver. Verification defaults on; clearing a box saves it off. An unauthenticated message is delivered as Spam, never rejected.</p>
+<p class="muted small">These checks evaluate incoming senders; they do not require publishing an SPF record for this receiving domain. Verification defaults on; clearing a box saves it off. An unauthenticated message is delivered as Spam, never rejected.</p>
 </details><details{{if .MXForm.Error}} open{{end}}><summary>Network &amp; timeouts</summary>
 <label>DNS resolver (optional, host:port)</label><input name="dns_resolver" value="{{.MXForm.DNSResolver}}" placeholder="system resolver">
 <div class="row"><div style="flex:1"><label>DNS timeout (s)</label><input name="dns_timeout_seconds" type="number" min="0" step="1" value="{{.MXForm.DNSTimeoutSeconds}}" placeholder="10"></div><div style="flex:1"><label>Read timeout (s)</label><input name="read_timeout_seconds" type="number" min="0" step="1" value="{{.MXForm.ReadTimeoutSeconds}}" placeholder="60"></div></div>
@@ -135,9 +132,7 @@ const mxReceiverSection = `<div class="mx-editor">
 <p class="muted small">Optional certificate pair the receiver offers to senders. Set both to enable STARTTLS; clear the certificate to remove the pair (clearing the certificate also clears the stored private key).</p>
 <label>Certificate (PEM, public)</label><textarea name="smtp_tls_cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----">{{.MXForm.SMTPTLSCert}}</textarea>
 <label>Private key (PEM)</label><textarea name="smtp_tls_key" rows="4" autocomplete="off" placeholder="{{if .MXForm.SMTPTLSKeyConfigured}}Leave blank to keep the stored private key{{else}}-----BEGIN PRIVATE KEY-----{{end}}"></textarea>
-<p class="muted small">The private key is never shown again. A blank field keeps the stored key.</p></details></div>
-<p class="muted small">Receiver settings are stored in the database and managed here; they are authoritative and legacy MX environment variables are no longer read at startup.</p>
-</div>`
+<p class="muted small">The private key is never shown again. A blank field keeps the stored key.</p></details></div>`
 
 // uiAdminMXSave handles the domain MX form submission. It validates through the
 // same service path the API uses, so the form and the API cannot diverge.
@@ -169,34 +164,39 @@ func (s *Server) saveIncludedMXForm(w http.ResponseWriter, r *http.Request) bool
 		return false
 	}
 	in := app.MXReceiverInput{Mode: mode, Revision: rev}
-	// Only Included fields are accepted by the domain editor. Remote receiver
-	// configuration remains available through the installation API.
-	switch mode {
-	case app.MXModeIncluded:
-		in.Hostname = r.Form.Get("hostname")
-		in.MaxMessageBytes = parseNonNegativeInt(r.Form.Get("max_message_bytes"))
-		in.MaxStagingBytes = parseNonNegativeInt(r.Form.Get("max_staging_bytes"))
-		in.MaxRecipients = int(parseNonNegativeInt(r.Form.Get("max_recipients")))
-		in.MaxConnections = int(parseNonNegativeInt(r.Form.Get("max_connections")))
-		in.DNSResolver = r.Form.Get("dns_resolver")
-		in.DNSTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("dns_timeout_seconds")))
-		in.ReadTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("read_timeout_seconds")))
-		in.WriteTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("write_timeout_seconds")))
-		in.DataTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("data_timeout_seconds")))
-		in.SMTPTLSCert = r.Form.Get("smtp_tls_cert")
-		in.SMTPTLSKey = r.Form.Get("smtp_tls_key")
-		// Checkboxes default checked where noted; an unchecked box is an
-		// explicit false, not "unset".
-		in.RequireTLS = checkboxBool(r.Form, "require_tls")
-		in.VerifySPF = checkboxBool(r.Form, "verify_spf")
-		in.VerifyDKIM = checkboxBool(r.Form, "verify_dkim")
-		in.VerifyDMARC = checkboxBool(r.Form, "verify_dmarc")
-	}
+	// Only Included fields are accepted by the domain editor. The Remote
+	// receiver is chosen on the installation's Admin page.
+	in = mxIncludedInput(r, in)
 	if _, err := s.Service.SaveMXReceiverSettings(r.Context(), p, in); err != nil {
 		s.mxAdminError(w, r, err)
 		return false
 	}
 	return true
+}
+
+// mxIncludedInput fills the Included receiver's fields from a submitted form.
+// It is shared by the domain editor and the installation receiver form, so
+// both send exactly the same Included configuration to the service.
+func mxIncludedInput(r *http.Request, in app.MXReceiverInput) app.MXReceiverInput {
+	in.Hostname = r.Form.Get("hostname")
+	in.MaxMessageBytes = parseNonNegativeInt(r.Form.Get("max_message_bytes"))
+	in.MaxStagingBytes = parseNonNegativeInt(r.Form.Get("max_staging_bytes"))
+	in.MaxRecipients = int(parseNonNegativeInt(r.Form.Get("max_recipients")))
+	in.MaxConnections = int(parseNonNegativeInt(r.Form.Get("max_connections")))
+	in.DNSResolver = r.Form.Get("dns_resolver")
+	in.DNSTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("dns_timeout_seconds")))
+	in.ReadTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("read_timeout_seconds")))
+	in.WriteTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("write_timeout_seconds")))
+	in.DataTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("data_timeout_seconds")))
+	in.SMTPTLSCert = r.Form.Get("smtp_tls_cert")
+	in.SMTPTLSKey = r.Form.Get("smtp_tls_key")
+	// Checkboxes default checked where noted; an unchecked box is an explicit
+	// false, not "unset".
+	in.RequireTLS = checkboxBool(r.Form, "require_tls")
+	in.VerifySPF = checkboxBool(r.Form, "verify_spf")
+	in.VerifyDKIM = checkboxBool(r.Form, "verify_dkim")
+	in.VerifyDMARC = checkboxBool(r.Form, "verify_dmarc")
+	return in
 }
 
 // uiAdminMXClear removes the configured receiver. The revision travels in the

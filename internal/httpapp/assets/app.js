@@ -1846,6 +1846,7 @@
       groups: { inboxes: Object.create(null), clients: Object.create(null) },
       collapsed: { inboxes: Object.create(null), clients: Object.create(null) },
       showGroups: { inboxes: false, clients: false },
+      showConnectors: { clients: true },
       sort: Object.create(null)
     };
   }
@@ -1873,6 +1874,11 @@
           next.showGroups[table] = saved.showGroups[table] === true;
         }
       });
+      // Absent or null means checked: connectors show by default, including
+      // for instances saved before this preference existed.
+      if (isObject(saved.showConnectors)) {
+        next.showConnectors.clients = saved.showConnectors.clients !== false;
+      }
       if (isObject(saved.sort)) {
         Object.keys(tables).forEach(function (table) {
           var spec = saved.sort[table];
@@ -2030,6 +2036,23 @@
       toggle.appendChild(box);
       toggle.appendChild(label);
       tools.insertBefore(toggle, addButton || null);
+    }
+    if (table === 'clients') {
+      var connectorToggle = tools.querySelector('[data-dashboard-connectors-toggle]');
+      if (!connectorToggle) {
+        connectorToggle = document.createElement('button');
+        connectorToggle.type = 'button';
+        connectorToggle.className = 'secondary btn-sm dashboard-groups-toggle';
+        connectorToggle.setAttribute('data-dashboard-connectors-toggle', table);
+        var connBox = document.createElement('span');
+        connBox.className = 'dashboard-groups-box';
+        connBox.setAttribute('aria-hidden', 'true');
+        var connLabel = document.createElement('span');
+        connLabel.textContent = 'Connectors';
+        connectorToggle.appendChild(connBox);
+        connectorToggle.appendChild(connLabel);
+        tools.insertBefore(connectorToggle, toggle.nextSibling || addButton || null);
+      }
     }
     var collapse = tools.querySelector('[data-dashboard-collapse-all]');
     if (!collapse) {
@@ -2301,6 +2324,10 @@
     if (toggle) {
       toggle.setAttribute('aria-pressed', shown ? 'true' : 'false');
     }
+    var connectorToggle = config.card.querySelector('[data-dashboard-connectors-toggle]');
+    if (connectorToggle) {
+      connectorToggle.setAttribute('aria-pressed', state.showConnectors[table] === false ? 'false' : 'true');
+    }
     if (collapse) {
       collapse.hidden = !shown || !hasNamed;
       var allCollapsed = hasNamed && groups.length > 0 && groups.every(function (group) { return isCollapsed(table, group.name); });
@@ -2308,8 +2335,24 @@
     }
   }
 
+  function isConnectorRow(row) {
+    return row.hasAttribute('data-connector-row');
+  }
+
   function renderGroupedTable(table, rows) {
     var config = tables[table];
+    var parked = [];
+    if (table === 'clients' && state.showConnectors[table] === false) {
+      // Parked rows stay appended (hidden) so rowsFor, which re-reads the
+      // tbody, can find them again when the preference is turned back on.
+      rows = rows.filter(function (row) {
+        if (isConnectorRow(row)) {
+          parked.push(row);
+          return false;
+        }
+        return true;
+      });
+    }
     var groups = groupRows(table, rows);
     var hasNamed = groups.some(function (group) { return group.name !== ''; });
     var showHeaders = state.showGroups[table] !== false && hasNamed;
@@ -2325,6 +2368,10 @@
         updateGroupButton(table, row);
         config.tbody.appendChild(row);
       });
+    });
+    parked.forEach(function (row) {
+      row.hidden = true;
+      config.tbody.appendChild(row);
     });
     updateCardControls(table, groups);
   }
@@ -2455,6 +2502,14 @@
     if (groupsToggle) {
       var showTable = groupsToggle.getAttribute('data-dashboard-groups-toggle');
       state.showGroups[showTable] = state.showGroups[showTable] === false;
+      saveState();
+      refresh();
+      return;
+    }
+    var connectorsToggle = event.target.closest('[data-dashboard-connectors-toggle]');
+    if (connectorsToggle) {
+      var connectorTable = connectorsToggle.getAttribute('data-dashboard-connectors-toggle');
+      state.showConnectors[connectorTable] = state.showConnectors[connectorTable] === false;
       saveState();
       refresh();
       return;
@@ -6150,19 +6205,20 @@ function generateBearerSecret() {
       return;
     }
     var value = sel.value;
-    var mxPanel = dlg.querySelector('[data-mx-panel]');
-    if (mxPanel) {
-      mxPanel.hidden = value !== 'mx';
-      mxPanel.querySelectorAll('input,select,textarea').forEach(function (input) {
+    dlg.classList.toggle('domain-dialog--wide', value === 'mx' || value === 'remotemx');
+    var mxPanels = dlg.querySelectorAll('[data-mx-panel]');
+    mxPanels.forEach(function (panel) {
+      panel.hidden = value !== 'mx';
+      panel.querySelectorAll('input,select,textarea').forEach(function (input) {
         input.disabled = value !== 'mx';
       });
-    }
-    // The Remote MX panel carries its own account-level form (a separate
-    // endpoint), so it is only shown/hidden with the provider choice; its inputs
-    // stay enabled so an account admin can configure the receiver from here.
+    });
     var remoteMXPanel = dlg.querySelector('[data-remote-mx-panel]');
     if (remoteMXPanel) {
       remoteMXPanel.hidden = value !== 'remotemx';
+      remoteMXPanel.querySelectorAll('input,select,textarea').forEach(function (input) {
+        input.disabled = value !== 'remotemx';
+      });
     }
     dlg.querySelectorAll('.provider-fields').forEach(function (group) {
       var active = group.getAttribute('data-provider') === value;
@@ -6414,8 +6470,18 @@ function generateBearerSecret() {
     // receiverLabel renders the specific Antler reason next to the traffic light,
     // not a generic word: the receiver's own verdict ("not in MX", "key
     // unavailable", "authentication failed") is the most precise thing we know
-    // about that connector. The raw reason stays in the row's tooltip.
+    // about that connector. The raw reason stays in the row's tooltip. The HTTP
+    // status the receiver URL answered with is named too: whatever answered at
+    // that URL — the receiver, or a proxy in front of it — owns that status, and
+    // the core cannot tell the two apart.
     function receiverLabel(status) {
+      var label = receiverLabelText(status);
+      if (status.http_code) { label += ' (HTTP ' + status.http_code + ')'; }
+      return label;
+    }
+    // receiverLabelText is the receiver's verdict on its own, without the HTTP
+    // status the receiver URL answered with.
+    function receiverLabelText(status) {
       if (isReady(status)) { return 'Ready to receive'; }
       switch (status.reason) {
         case 'not_mx': return 'Not in MX';
@@ -6429,6 +6495,9 @@ function generateBearerSecret() {
         // word covers every refused code, because at this layer a 401 and a 404
         // are both a receiver or proxy that is not serving this core.
         case 'session_rejected': return 'Receiver refused the session';
+        // The receiver URL answered with its own error status: the receiver is
+        // up and is expected to recover, so the row stays a retrying session.
+        case 'receiver_error': return 'Receiver reported a server error';
         case 'http2_required': return 'Receiver speaks HTTP/1.1, not HTTP/2';
         case 'mode_mismatch': return 'Wrong receiver mode';
         case 'protocol_mismatch': return 'Receiver protocol mismatch';
@@ -8333,16 +8402,18 @@ function generateBearerSecret() {
   });
 }());
 
-// Folder management (shared mailbox sidebar). The "New folder" button opens a
-// dialog with a single name field; each custom folder's folder glyph opens a
-// manage dialog with Rename and Delete. The manage dialog's forms start with no
-// action and are pointed at the clicked folder's routes here, so one dialog
-// serves every folder on the page.
+// Folder and label management (shared mailbox sidebar). "New folder" and "New
+// label" open their own dialogs; each sidebar row's glyph opens the shared
+// manage dialog, whose forms start with no action and are pointed at the
+// clicked row's routes here, so one dialog serves every folder and label on
+// the page. A folder and a label are different things, so the dialog says
+// which one it is about to rename or delete.
 (function () {
   var sidebar = document.querySelector('[data-sidebar]');
   if (!sidebar) { return; }
   var inboxID = sidebar.getAttribute('data-inbox') || '';
-  var newDlg = document.getElementById('folder-new-dialog');
+  var folderNewDlg = document.getElementById('folder-new-dialog');
+  var labelNewDlg = document.getElementById('label-new-dialog');
   var manageDlg = document.getElementById('folder-manage-dialog');
 
   function wireClose(dlg) {
@@ -8351,31 +8422,42 @@ function generateBearerSecret() {
       btn.addEventListener('click', function () { dlg.close(); });
     });
   }
-  wireClose(newDlg);
+  wireClose(folderNewDlg);
+  wireClose(labelNewDlg);
   wireClose(manageDlg);
 
-  var newBtn = sidebar.querySelector('[data-folder-new]');
-  if (newBtn && newDlg && typeof newDlg.showModal === 'function') {
-    newBtn.addEventListener('click', function () {
-      var input = newDlg.querySelector('input[name=name], input[name=path]');
+  function wireNew(btn, dlg) {
+    if (!btn || !dlg || typeof dlg.showModal !== 'function') { return; }
+    btn.addEventListener('click', function () {
+      var input = dlg.querySelector('input[name=name], input[name=path]');
       if (input) { input.value = ''; }
-      newDlg.showModal();
+      dlg.showModal();
       if (input) { input.focus(); }
     });
   }
+  wireNew(sidebar.querySelector('[data-folder-new]'), folderNewDlg);
+  wireNew(sidebar.querySelector('[data-label-new]'), labelNewDlg);
 
   if (!manageDlg || typeof manageDlg.showModal !== 'function') { return; }
   sidebar.querySelectorAll('[data-folder-manage]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var id = btn.getAttribute('data-label-id') || btn.getAttribute('data-folder-id') || '';
+      var kind = btn.getAttribute('data-manage-kind') === 'folder' ? 'folder' : 'label';
+      var id = kind === 'folder' ? (btn.getAttribute('data-folder-id') || '') : (btn.getAttribute('data-label-id') || '');
       var name = btn.getAttribute('data-folder-name') || '';
-      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/labels/' + encodeURIComponent(id);
+      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/' + kind + 's/' + encodeURIComponent(id);
       var renameForm = manageDlg.querySelector('[data-folder-rename-form]');
       var deleteForm = manageDlg.querySelector('[data-folder-delete-form]');
       var input = manageDlg.querySelector('[data-folder-rename-input]');
+      var title = manageDlg.querySelector('#folder-manage-title');
+      var del = manageDlg.querySelector('[data-manage-delete]');
       if (renameForm) { renameForm.setAttribute('action', base + '/rename'); }
       if (deleteForm) { deleteForm.setAttribute('action', base + '/delete'); }
       if (input) { input.value = name; }
+      if (title) { title.textContent = kind === 'folder' ? 'Manage folder' : 'Manage label'; }
+      if (del) {
+        del.textContent = kind === 'folder' ? 'Delete folder' : 'Delete label';
+        del.setAttribute('data-confirm', kind === 'folder' ? 'Delete this folder? It must be empty.' : 'Delete this label? This will remove the label from its messages.');
+      }
       manageDlg.showModal();
       if (input) { input.focus(); input.select(); }
     });

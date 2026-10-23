@@ -11,8 +11,8 @@ import (
 // registration count so a new transport route cannot be added without a
 // matching table entry.
 func TestRoutesCount(t *testing.T) {
-	if got := len(apispec.Routes()); got != 120 {
-		t.Fatalf("len(Routes()) = %d, want 120", got)
+	if got := len(apispec.Routes()); got != 122 {
+		t.Fatalf("len(Routes()) = %d, want 122", got)
 	}
 }
 

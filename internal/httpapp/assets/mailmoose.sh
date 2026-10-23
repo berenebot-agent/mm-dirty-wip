@@ -278,9 +278,9 @@ commands:
   search           GET  /v1/search?q=               full-text search
   threads          GET  /v1/threads                 list threads
   thread           GET  /v1/threads/{id}            thread detail (+ --messages)
-  labels           GET  /v1/labels                  distinct labels in use
+   labels           GET  /v1/inboxes/{id}/label-catalog  additive labels (tag:Name; none for IMAP)
   folders          GET  /v1/inboxes/{id}/folders    list an inbox's folders (common)
-  folder-add       POST /v1/inboxes/{id}/folders    create a folder (--inbox, PATH [NAME])
+  folder-add       POST /v1/inboxes/{id}/folders    create a folder (Outlook/IMAP only; --inbox, PATH [NAME])
   folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
   remote           GET  /v1/inboxes/{id}/remote     standalone inbox remote config
   authoring        GET/PUT /v1/inboxes/{id}/authoring  assistant authoring settings
@@ -288,6 +288,7 @@ commands:
   remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                    send (Owner)
   reply            POST /v1/messages/{id}/reply    reply (Owner)
+  forward          POST /v1/messages/{id}/forward  forward (Owner)
   mark-read        PATCH  /v1/messages/{id}         set read=true
   mark-unread      PATCH  /v1/messages/{id}         set read=false
   label            PATCH  /v1/messages/{id}         replace labels
@@ -313,7 +314,8 @@ common flags:
   send:          --to ADDR --cc ADDR --bcc ADDR --subject TEXT --text TEXT
                  --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
-  reply:         --text TEXT --html HTML --attach FILE --sender ADDR --wait
+  reply/forward: --to ADDR --cc ADDR --bcc ADDR --subject TEXT --text TEXT
+                 --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
   label:         --labels a,b --clear-labels
   drafts/draft:  --create --to --cc --bcc --subject --text --html --from
@@ -639,15 +641,7 @@ build_send_body() {
 }
 
 build_reply_body() {
-	jq -n -c \
-		--arg text "$TEXT" --arg html "$HTML" --arg sender "$SENDER" \
-		--argjson has_text "$TEXT_SET" --argjson has_html "$HTML_SET" \
-		--slurpfile att "$ATT_JSON_FILE" \
-		'{}
-     + (if $has_text==1 then {text:$text} else {} end)
-     + (if $has_html==1 then {html:$html} else {} end)
-     + (if $sender!="" then {sender:$sender} else {} end)
-     + (if ($att[0]|length)>0 then {attachments:$att[0]} else {} end)'
+	build_send_body | jq -c 'del(.inbox_id) | if (.to|length)==0 then del(.to) else . end'
 }
 
 # build_draft_body INCLUDE_INBOX(0|1)
@@ -713,6 +707,7 @@ cmd_list() {
 	reject_extra
 	QUERY=""
 	if [ -n "$INBOX" ]; then addq inbox "$INBOX"; fi
+	if [ -n "$FOLDER" ]; then addq folder "$FOLDER"; fi
 	add_multi label ${LABEL_PARTS[@]+"${LABEL_PARTS[@]}"}
 	if [ -n "$FROM_Q" ]; then addq from "$FROM_Q"; fi
 	if [ "${#TO_PARTS[@]}" -gt 0 ]; then addq to "${TO_PARTS[0]}"; fi
@@ -738,9 +733,6 @@ cmd_search() {
 	fi
 	if [ -z "$query" ]; then
 		query="$Q"
-	fi
-	if [ -z "$query" ]; then
-		die_usage "search: missing QUERY (positional or --q)"
 	fi
 	reject_extra
 	QUERY=""
@@ -783,7 +775,11 @@ cmd_thread() {
 
 cmd_labels() {
 	reject_extra
-	api GET "/v1/labels" "" "" "$TABLE_LABELS"
+	if [ -n "$INBOX" ]; then
+		api GET "/v1/inboxes/$INBOX/label-catalog" "" "" "$TABLE_LABELS"
+	else
+		api GET "/v1/labels" "" "" "$TABLE_LABELS"
+	fi
 }
 
 # cmd_folders lists an inbox's folders (common to domain and standalone inboxes).
@@ -874,11 +870,14 @@ cmd_send() {
 cmd_reply() {
 	need_pos "$COMMAND"
 	reject_extra
+	if [ "$COMMAND" = "forward" ] && [ "${#TO_PARTS[@]}" -eq 0 ]; then
+		die_usage "forward: --to is required"
+	fi
 	build_attachments
 	local body idem path
 	body="$(build_reply_body)"
 	idem="$(idem_for_request)"
-	path="/v1/messages/$POSITION/reply"
+	path="/v1/messages/$POSITION/$COMMAND"
 	if [ "$WAIT" -eq 1 ]; then path="$path?wait=true"; fi
 	api POST "$path" "$body" "$idem" "$TABLE_DEFAULT"
 }
@@ -1588,7 +1587,7 @@ main() {
 	handoffs) cmd_handoffs ;;
 	remote-role) cmd_remote_role ;;
 	send) cmd_send ;;
-	reply) cmd_reply ;;
+	reply|forward) cmd_reply ;;
 	mark-read) cmd_mark_read ;;
 	mark-unread) cmd_mark_unread ;;
 	label) cmd_label ;;

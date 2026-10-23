@@ -147,6 +147,14 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D140: Email approval binds to the message From, not the provider envelope](#d140-email-approval-binds-to-the-message-from-not-the-provider-envelope)
 - [D142: Recognise Brevo attachment-extension rejections without retaining provider text](#d142-recognise-brevo-attachment-extension-rejections-without-retaining-provider-text)
 - [D143: Passkey controls are hidden where WebAuthn cannot run](#d143-passkey-controls-are-hidden-where-webauthn-cannot-run)
+- [D144: The receiver session endpoint's proxy requirements are documented for operators](#d144--the-receiver-session-endpoints-proxy-requirements-are-documented-for-operators)
+- [D145: An account Admin key holds the domain-wide sending grant implicitly](#d145--an-account-admin-key-holds-the-domain-wide-sending-grant-implicitly)
+- [D146: The installation receiver Admin card was superseded](#d146--the-installation-receiver-admin-card-was-superseded)
+- [D147: The status the receiver URL answered is surfaced in the Receiving panel](#d147--the-status-the-receiver-url-answered-is-surfaced-in-the-receiving-panel)
+- [D148: Connectors return to the dashboard Clients list behind a per-admin toggle](#d148--connectors-return-to-the-dashboard-clients-list-behind-a-per-admin-toggle)
+- [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
+- [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
+- [D153: Forwarding and a common outbound API response](#d153--forwarding-and-a-common-outbound-api-response)
 
 ---
 
@@ -2006,10 +2014,10 @@ safe and prevents a crafted relay value from being echoed as authority.
   `last_error` is not set by a skip.
 - No backward-compatibility alias is needed for a capability that has not yet
   shipped.
-- The joint wire contract with the consuming agent (Billbot) is documented in
-  `docs/integrations/BILLBOT_WEBHOOK_CONTRACT.md`, with a byte-identical fixture committed at
-  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. Both
-  are maintained by hand; the generating worker test is
+- The joint wire contract with the consuming agent (Billbot) is pinned by a
+  byte-identical fixture committed at
+  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. The
+  fixture is maintained by hand; the generating worker test is
   `TestWebhookForwardContractFixture`.
 
 ## D067 — Dial MX: an outbound-dialing standalone receiver
@@ -2128,6 +2136,14 @@ authentication policy and durable delivery semantics.
 > runtime reconciliation remain current. The one-time import of `MX_ENABLE`,
 > `MX_RECEIVER_URL`, `DIALMX_CORE_KEY` and the `MX_*` environment described
 > below is removed: the persisted receiver settings are authoritative.
+>
+> **Amended.** The UI edits the Included receiver only; the `remote` mode is
+> configured through the API. The account-level Remote MX receiver (D084) is the
+> UI-supported path for a separately operated receiver.
+>
+> **Amended by D149.** The Included receiver is configured from the domain's
+> Direct MX Receiving panel. The account-level Remote MX (D084) remains a
+> separate provider for receivers operated outside the core.
 
 **Requirement:** The installation-wide MX receiver must be configurable from the
 system-administrator UI/API and survive restarts, instead of being fixed by the
@@ -4538,6 +4554,13 @@ design); Google/Microsoft unowned-address behaviour is not gated; and a wildcard
 address cannot be approved from the web UI or sent by system mail, because those
 paths hold no key.
 
+**Follow-up (2026-10-21):** the "Account Admin keys get the capability for
+free" bullet above was not true of the code: the advertisement treated an Admin
+as holding the grant while the enforcement read the grant from the sending
+key's own binding row, which an Admin key never has, so the send was refused.
+D145 makes the two agree — an Admin key holds the grant implicitly, on the same
+catch-all anchor as any other key.
+
 ## D116 — Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness
 
 **Flash follow-up (2026-10-13):** the initial cookie-presence check below did not
@@ -4879,8 +4902,7 @@ fake remote server. No new dependency, table or migration.
 
 **Not fixed here:** the separate "a folder-backed label cannot be moved back out
 through the API" gap (no `POST /v1/messages/{id}/move` route; a folder-label
-`remove` still returns 409) is unchanged and remains tracked in
-`docs/proposals/label-findings-fix-plan.md`.
+`remove` still returns 409) is unchanged.
 
 ## D120 — A move destination may be a folder id or a folder path
 
@@ -4926,6 +4948,39 @@ store-level regression test. No new dependency, table or migration.
 ## D131 — One label membership projection, one filter resolution, and catalogue capabilities
 
 **Date:** 2026-10-13. **Approved by:** Ben.
+
+**Amendment — 2026-10-22, API change explicitly approved by Ben:** The public
+contract is label-first. The catalogue includes supported system classifications
+(Inbox, Sent, Spam, Trash, Archive and provider Drafts), and `label_ids` is the
+authoritative membership array, including implicit local Inbox membership and
+all indexed Gmail system memberships. Local drafts/outbox jobs retain their
+separate APIs rather than becoming Message memberships. The earlier wording
+below about a universally single folder-addressed membership is superseded:
+catalogue `membership`, not the ID prefix or `kind`, determines exclusivity.
+IMAP labels and Outlook folder classifications remain exclusive; native tags,
+Gmail labels and Outlook categories retain additive membership. Existing IDs
+remain stable. A generic agent discovers IDs and uses `label_id` uniformly on
+inbox/account list and search routes; repeated filters AND together, and multiple
+Gmail system memberships can be intersected. Inbox-scoping requirements for
+account-wide folder-addressed IDs remain unchanged.
+
+> **Superseded in part by D151 (2026-10-22, human approved).** The unified
+> membership projection described in this amendment is replaced: a message's
+> location is `folder_id` (one stable MailMoose folder id, or `null`) and
+> `label_ids` carries additive labels only (`tag:Name`, empty for IMAP). The
+> `folder:<id>` identity, the exclusive/system label classification and the
+> catalogue's `role` are gone. The route, role and filter-resolution decisions
+> in D131 stand.
+
+Per-label `can_add` and optional system `role` augment the existing capabilities.
+Supported system actions use the label endpoint; Sent/Drafts remain read-only,
+and system labels cannot be renamed or deleted. Applying an exclusive label
+moves the message; removal without replacement is rejected. Local system
+classification changes placement and Spam/Trash visibility transactionally;
+Gmail uses provider transitions without replacing unrelated labels. The web UI
+uses the API's membership resolution. Legacy `labels`, `folder=`, folder endpoints
+and `/move` stay available, with folder-only compatibility behaviour preserved.
+No dependency, service, schema migration or runtime component is added.
 
 **Requirement:** The unified Labels system shipped a provider-aware catalogue,
 but the read contract still exposed only additive names. A folder-backed label
@@ -5848,3 +5903,580 @@ account page about what the operator can do.
 `pageData` field removed, one availability check and one removal helper added
 to the browser glue, and the unmatched `</section>` in the settings template
 removed. No API, schema, dependency or runtime service change.
+
+## D144 — The receiver session endpoint's proxy requirements are documented for operators
+
+**Context:** A separate SMTP receiver (Dial MX shared mode, Remote MX single
+mode) is reached over a session the core opens itself: a long-lived streaming
+HTTP/2 `POST /mx/v1/session` to the receiver (`internal/mxwire/session.go`).
+The core's transport speaks HTTP/2 only and never downgrades
+(`internal/transport/mxdial/runtime.go`); the receiver answers `426 HTTP/2
+required` to an HTTP/1.1 request and admits a cleartext h2c session only from
+a loopback peer or a `DIALMX_TRUSTED_PROXIES` address
+(`dialmx/receiver/receiver.go`). A proxy that buffers the request body forwards
+nothing, so the receiver logs no session at all and the core reports the
+receiver unreachable when its 5-second response timeout expires — a silent,
+hard-to-diagnose failure. The design already anticipated this: D083 records the
+h2c path for a TLS-terminating proxy and the nginx constraint
+(`proxy_http_version 2` only from nginx 1.29.4). None of it reached the
+operator guide, and `DIALMX_TRUSTED_PROXIES` and `DIALMX_REQUIRE_TLS` appeared
+in no user-facing document and in no shipped Compose file. An independent
+acceptance test (public beta UAT, finding D-5) hit exactly this path: a
+conventional reverse proxy produced "unreachable" with no session attempt in the
+receiver's log, and the tester diagnosed it only by reading the source.
+
+**Decision (2026-10-21):** Document the operator-facing contract rather than
+change any behaviour. A new "Reverse proxies in front of the receiver" section
+in `docs/REMOTE_MX.md` states that the session endpoint speaks HTTP/2 only,
+that a proxy must offer h2 to the core, speak h2 (or h2c) to the receiver,
+stream the request body instead of buffering it, and keep the connection open;
+it gives the layer-4-termination guidance, the `DIALMX_TRUSTED_PROXIES` rule
+for a cleartext receiver (including the note that the shipped Compose file
+does not pass it through), a `curl --http2` check, and a table mapping each
+failure signature to its cause. `docs/EMAIL_PROVIDERS.md` and
+`docs/SELFHOSTING.md` link to it.
+
+**Reason:** The product is already correct and the defect is a documentation
+gap, so the fix belongs in the guide, not in the code. The tester reached the
+working configuration only by reading the source, and the next self-hoster
+must not have to. The alternative the finding also suggests — teaching the
+Receiving panel to name a proxy's own 4xx/5xx — cannot be done reliably: the
+core cannot tell a proxy's refusal from the receiver's, because both arrive as
+an HTTP status on the same request. The receiver's own log is the
+authoritative diagnosis, so the guide points there instead of guessing.
+
+**Complexity:** Documentation only: one new section in `docs/REMOTE_MX.md`, two
+linked pointers, and a changelog entry. No code, API, schema, dependency or
+runtime service change. The optional Receiving-panel improvement stays open.
+
+## D145 — An account Admin key holds the domain-wide sending grant implicitly
+
+**Requirement:** The public beta UAT (finding D-9) found `GET /v1/bootstrap`
+advertising `send_any_in_domain: true` to an account Admin key, while the send
+that flag authorises was refused with `403 sender_not_allowed`. The two paths
+disagreed about what an Admin key may do. The advertisement
+(`effectiveMailboxPermissions`, `internal/httpapp/api.go`) computed
+`p.Admin || p.DomainSend[box.ID]`; the enforcement (`domainSendGrantAt`,
+`internal/store/domain_send.go`) reads the grant from the sending key's own
+`client_inbox_bindings` row, and an Admin key never has one — `replaceBindings`
+deletes every row and returns early for an Admin key, so there is nowhere to
+hang the flag. The grant was therefore never true for an Admin key and the send
+was refused in every case, catch-all or not. The product told a client it could
+do something and then refused it, and it did so with a `true` flag and no
+`send_any_domain` to act on, which the `/agent` guide describes as the contract
+for a widened `sender`.
+
+**Decision (2026-10-21, human approved):** The two paths are made to agree, in
+favour of the enforcement's design, and the agreement is in favour of the
+capability: an account Admin key holds the domain-wide sending grant
+implicitly, on exactly the terms a per-key grant has.
+
+- **The catch-all anchor is not weakened.** An Admin key may put any address on
+  a domain in the `From` only from that domain's **enabled catch-all** inbox.
+  That is what makes an arbitrary From replyable, and it applies to the Admin
+  key exactly as it applies to a granted key.
+- **Enforcement.** `domainSendGrantAt` reads the sending key's admin flag
+  together with its binding flag: an Admin key holds the grant, and any other
+  key holds it only where its own binding carries it. The live condition — the
+  inbox is the domain's current, enabled catch-all — is unchanged and still
+  gates both. The flag is read from the key at send time, so demoting an Admin
+  key takes the implicit grant away immediately.
+- **Advertisement.** `GET /v1/bootstrap` reports `send_any_in_domain` only
+  where the send would actually be honoured, and always with `send_any_domain`
+  naming the domain. The inboxes a domain-wide send is honoured from are the
+  account's enabled catch-alls (`ListEnabledCatchAlls`), which is also where a
+  non-admin key's own grant is live. An Admin key is therefore advertised on the
+  catch-all inbox only: another inbox of the same domain, a domain with no
+  catch-all and a disabled catch-all all advertise nothing, and a web session
+  holds no key, so it is never advertised either.
+- **The UI needed no change.** The key dialog already clears the per-inbox
+  "Domain send" control while Account Admin is ticked, on the same
+  understanding, and the Clients & Access panel already shows an Admin key
+  read-only.
+
+**Reason:** D115 already decided that "Account Admin keys get the capability
+for free" and that the flag is meaningful only for non-admin keys; the web UI
+was written on that basis. The gap was between that decision and the
+enforcement, not a decision to make the advertisement authoritative. The
+alternative — dropping the flag for Admin keys — would have matched the
+enforcement as well, but it would have contradicted D115 and the UI, and it
+would have left the account's most capable credential unable to do what the
+product says it can, with no way to grant it. The replyability guarantee is
+untouched: the grant still requires an enabled catch-all, so an arbitrary From
+is always answerable.
+
+**Complexity:** One store query change (`domainSendGrantAt`), one new store read
+(`ListEnabledCatchAlls`), and one bootstrap handler change. No migration, no
+schema change, no new dependency, transport or runtime service. One query
+replaces the per-inbox domain lookups the bootstrap used to make.
+
+## D146 — The installation receiver Admin card was superseded
+
+> **Superseded by D149.** The installation-wide receiver card was added to
+> Admin, then removed after review: it split Direct MX configuration away from
+> the domain Receiving flow and conflated Direct MX with Remote MX.
+
+The historical decision below records the short-lived Admin-card approach.
+
+**Requirement:** The public beta UAT (finding D-4) found the installation-wide
+Direct MX receiver's Remote mode reachable only by reading the source: the
+documented switch had no discoverable route. The installation receiver is the
+one shared receiver every Direct MX domain points its MX record at
+(`mx_settings`, a singleton row — D071). Its mode decides where that receiver
+lives: the child bundled inside this deployment, or one the operator runs
+themselves. The per-domain Direct MX panel is Included-only (D071's amendment,
+`8a22ae98`), so the Remote mode had no interface at all, and a deployment that
+cannot run the bundled child (no root) had no way to receive mail by SMTP.
+
+**Decision (2026-10-21, human approved):** The Admin page carries an **MX
+receiver** card that adds the shared receiver in either mode.
+
+- **One form, two ways to add a receiver.** A radio chooses **Included** (the
+  bundled child) or **Remote** (a receiver you run: URL, bearer key, optional
+  private CA). Only the selected mode's fields are saved, exactly as the API
+  decides it: the server reads the submitted mode's fields, so a value left in
+  the other block can never fail the save. The Included field set is one shared
+  template with the per-domain editor, so the two cannot drift.
+- **It edits the installation setting, not a domain's.** The choice is
+  installation-wide, so it lives with the other installation settings and only a
+  system administrator may change it. A domain still only chooses *whether* it
+  receives by MX; the per-domain Direct MX panel stays Included-only, because a
+  domain must not re-point the receiver every other account's domains use.
+- **The card is also the status view.** It shows the configured mode, the live
+  state and the SMTP/session addresses, and it can clear the receiver.
+- **The deployment files already promise it.** `docker-compose.yml`,
+  `docker-compose.advanced.yml` and `.env.example` tell the operator to "sign
+  in as the system administrator and set Admin -> MX receiver" to Included or
+  Remote. That card was removed with the /admin panel in `8a22ae98` and the
+  files were never corrected, so this build makes them true rather than
+  rewriting them.
+
+**Reason:** The setting is real, documented and reachable only by `curl`; the
+guides, the Compose files and the environment example all point at an interface
+that does not exist, and the finding is a self-hoster hitting a dead end. The
+alternative — leaving Remote to the API — keeps the dead end for exactly the
+deployments that cannot use the bundled receiver at all, and leaves the shipped
+files lying. The alternative the finding also suggests — putting the choice in
+the per-domain Direct MX panel — was already tried and rejected: the receiver is
+shared by every Direct MX domain on the instance, so a per-domain control would
+silently re-point other accounts' mail.
+
+**Complexity:** Local to `internal/httpapp`: one shared template split out of
+the domain editor, one new card template, two UI routes
+(`POST /ui/admin/mx`, `POST /ui/admin/mx/clear`) over the existing service path,
+and a dozen lines of browser glue that show the selected mode's fields. No
+schema, migration, dependency, transport or runtime service change; the API
+contract is unchanged, and the form and the API go through the same service
+validation.
+
+## D147 — The status the receiver URL answered is surfaced in the Receiving panel
+
+**Context:** The public beta UAT (finding D-5) found that a receiver's session
+endpoint needs HTTP/2 and a non-buffering proxy, and D144 put that contract in
+`docs/REMOTE_MX.md`. D144 also declined the second half of the same finding —
+teaching the Receiving panel to name a proxy's own 4xx/5xx — because the core
+cannot tell a proxy's refusal from the receiver's: both arrive as an HTTP
+status on the same request. It recorded that half as "not done and stays
+open". What that reasoning rules out is the *attribution*, not the *number*.
+The status is a fact about the request the core made, and it is the one piece
+of the failure an operator can act on and the core can be sure of: it separates
+"the endpoint answered and declined" from "nothing answered at all" (a proxy
+that buffered the request body, D144's case), and it is the number that appears
+in the proxy's own log. Today that number is dropped on the floor: the dialer
+reduces a non-200 session response to a failure token
+(`internal/transport/mxdial/runtime.go`), so a proxy answering `502` leaves the
+row reading "reconnecting" and the account Remote MX panel reading
+"receiver_error", indefinitely, with nothing to match against a log.
+
+**Decision (2026-10-21):** The dialer keeps the HTTP status the receiver URL
+answered the session `POST` with (`mxdial.Status.HTTPCode`, carried by the
+session that owns the attempt), and every surface that reports a receiver's
+state names it: the domain Receiving panel (the per-receiver status rows, both
+server-rendered and in the browser), the account Remote MX panel, the
+installation Direct MX card, and the API (`status[].http_code`, and `http_code`
+on the account MX status). The status is never attributed: the wording is
+neutral ("receiver refused the session (HTTP 405)"), because the core cannot say
+whose status it is. A receiver's own 5xx is named too, and its label names the
+cause ("receiver reported a server error") rather than "reconnecting".
+
+**Reason:** D144's caution is kept by the wording, not by withholding the
+number. The status is reported as a fact about the request; the proxy's and the
+receiver's own logs remain the authoritative diagnosis, and the guide still
+points there. Leaving the status out would leave the finding half-closed: a
+self-hoster whose proxy answers an error sees an endless "reconnecting" and no
+way to find the matching proxy log line. An attempt that was never answered
+carries no status, and the panel still reads "unreachable" for it — that case
+is the guide's, and D144's table already names it. The dialer's own vocabulary
+is unchanged: a 4xx stays a settled refusal and a 5xx stays a retrying receiver
+error, so no state, reason or retry behaviour moves.
+
+**Complexity:** Local to the dialer, the HTTP layer and the operator prose. One
+field on the dialer's status and on the session that owns the attempt, one
+field on the API's receiver status view, one on the account MX status, a label
+case in the Go and the browser renderer, and the operator phrase in
+`cmd/server` takes the code and appends it. No schema, migration, dependency,
+transport or runtime service change; the failure tokens and states are
+unchanged.
+
+## D148 — Connectors return to the dashboard Clients list behind a per-admin toggle
+
+**Requirement:** Client feedback: the dashboard Clients list no longer shows
+relay/webhook connectors (they were removed deliberately; they remain reachable
+via each inbox's Connectors tab), so an administrator cannot see all clients in
+one place. The Clients card should gain a checkbox, beside the existing
+"Groups" one, labelled "Connectors" that restores connectors to the list.
+
+**Why the current design is insufficient:** The Clients list is filled from
+API keys only (`credentialViews(keys, nil, nil)`), so a unit test pins the
+absence of connector rows in the served HTML. Restoring them unconditionally
+would reintroduce exactly the clutter the removal addressed.
+
+**Decision (2026-10-21):** The dashboard always renders connector rows
+(Hermes, OpenClaw, webhook) in the Clients table, tagged `data-connector-row`,
+and hides or shows them client-side based on a new per-admin dashboard
+preference, `showConnectors[clients]`, persisted through the existing
+`/ui/dashboard/preferences` endpoint and validated to allow only the
+`clients` table. The state is absent-equals-shown: the default is checked,
+including for accounts saved before the preference existed. The toggle
+reuses the Groups toggle's button/`aria-pressed` styling and its connector
+rows participate in grouping and sorting like key rows.
+
+**Complexity:** The row template already supported connector kinds (editing,
+deletion and the delivery-log link are unchanged); the change passes through
+`credentialViews(keys, conns, webhooks)`, adds one template attribute, one
+store field, one validation loop, and ~40 lines of JavaScript clone of the
+Groups toggle semantics. No schema, migration, dependency, transport or new
+surface.
+
+## D149 — Direct MX stays in Receiving; Remote MX is a separate provider
+
+**Requirement:** Keep receiver setup with domain Receiving, remove the duplicate
+Admin settings surface and make the UI distinguish direct delivery to the
+MailMoose core from a separately operated receiver.
+
+**Decision (2026-10-21, human approved):** Direct MX means delivery to the
+receiver bundled with the core. Its shared receiver controls remain in the
+Direct MX provider panel in domain Receiving, not in Settings → Admin. The
+panel shows the domain's MX target first, followed by a yellow notice that the
+receiver settings are shared by all Direct MX domains, then domain-level
+receiver enforcement and the Included receiver hostname, limits, verification,
+network/timeouts and STARTTLS controls. The dialog widens when Direct MX is
+selected. There is no Included/Remote selector in the Direct MX UI.
+
+Remote MX remains a distinct receiving provider for an operator-run receiver:
+MailMoose connects outbound over HTTP/2, and the receiver URL/key are configured
+in the account's Remote MX settings surfaced from Receiving. The UI links to the
+Remote SMTP receiving guide and does not present that receiver as the core's
+internal listener.
+
+The Direct MX setup does not ask the operator to publish an SPF record for the
+receiving domain. SPF verification evaluates the incoming sender's domain; the
+receiver's MX hostname is what belongs in the receiving domain's MX record.
+
+The installation API's `remote` mode remains available to API clients as an
+advanced installation-level configuration; it is not offered as a Direct MX
+mode in the human UI. The account-level Remote MX provider remains the normal UI
+path for a receiver operated separately.
+
+**Reason:** The Admin card created a second place to edit Direct MX and put a
+deployment-wide receiver choice away from the Receiving workflow. The product
+already has a separate account-level Remote MX provider for external receivers.
+Keep Direct MX direct-to-core, explain its shared scope in the panel, and keep
+the distinct remote setup in Remote MX.
+
+**Complexity:** UI layout and help text only, plus removal of the duplicate
+Admin form/routes. No runtime, API or schema change.
+
+## D150 — One native mailbox pagination and discovery contract
+
+**Requirement:** Release audit found common path names but divergent handlers:
+single-inbox threads/search lost continuations, standalone search ignored its
+folder, local search ignored subject/read state, and agent prose described the
+retired no-catalogue label model. Ben approved standardizing the public contract
+rather than maintaining multiple provider-specific pagination inputs.
+
+**Decision (2026-10-21, human approved):** Native mailbox lists, threads and search
+use `before=<next_cursor>` for domain and connected inboxes. The old standalone
+search `cursor` parameter is rejected with a migration hint. Inbox-scoped and
+equivalent `?inbox=` reads share handlers. Existing route names, the canonical
+Message schema, mailbox roles, and separate openagent.email projections remain.
+Search may omit q for filter-only reads; advanced FTS5/provider syntax is not
+claimed to be portable.
+
+Message/search merging advances source-native cursors without reordering a
+provider's window by MailMoose IDs: provider search order can break ties
+differently, and reordering then resuming a native cursor loses results. The
+merger chooses among source heads; source progress, not a global-ID cutoff,
+prevents duplicates. Local message/search keysets use received time (creation
+time if unavailable), then ID. Full maximum-size pages may carry a continuation
+that leads to an empty terminal page when store clamping prevents lookahead.
+
+Completeness describes coverage independently of pagination. Completed indexes
+or provider enumerations can be complete; incomplete coverage/source failures
+are partial; indeterminate coverage is unknown. The label catalogue's existing
+capabilities describe additive versus exclusive membership and edit support.
+Authoring settings distinguish approval from remote placement. Provider limits
+remain explicit rather than being hidden behind claims of universal behavior.
+
+**Complexity:** Reuses existing handlers, source cursors and capabilities; removes
+duplicate scoped listing logic. No new endpoint, dependency, service, secret
+handling, or database schema/migration. Regression coverage includes both inbox
+kinds/URL forms, tied dates, maximum page size, filters, completeness, local
+attachment downloads, rendered OpenAPI/agent guidance, and executable clients.
+
+## D151 — Universal folders and additive labels: one location, one label set
+
+**Requirement:** The unified-label contract (D131) made a folder *also* a
+label. `label_ids` carried a mix of `tag:<Name>` and `folder:<id>`, the
+catalogue classified entries as exclusive or multiple, and the system
+classifications (Inbox, Sent, Spam, Trash) travelled as label identities.
+That made one mailbox concept carry two vocabularies: a client could not tell
+whether applying an entry would add metadata or move the message, `label_id`
+meant two different things, and the behaviour differed per provider (IMAP
+labels were folders, Outlook folders were exclusive labels, Gmail had
+overlapping system labels with no canonical one). Operators also had no
+single place that said what a mailbox supports: "create a label" meant a
+MailMoose tag on one provider, a Gmail user label on another and a remote
+folder on a third.
+
+**Decision (2026-10-22, human approved — API Beta 3, intentional contract
+change):** A message has two independent classifications and they are never
+mixed.
+
+- `folder_id` is the canonical location: one stable MailMoose folder id
+  (`fld_...`, the ids `GET /v1/inboxes/{id}/folders` returns) or `null`. It is
+  always present. A folder id is never a label id, and the `folder:<id>`
+  catalogue identity is removed.
+- `label_ids` carries **additive labels only** (`tag:Name`): MailMoose tags
+  for a domain inbox, Gmail user labels, Outlook categories. It is always
+  present and empty for an IMAP inbox, which has no canonical labels and
+  refuses every label operation. The exclusive/system label classification
+  (`membership`, catalogue `role`) is gone; the catalogue's `kind` and
+  `membership` remain for compatibility and are always `tag` and `multiple`.
+
+Capability discovery is one surface: the inbox. `model.Capabilities` gains
+`create_folders`, `rename_folders`, `delete_folders`, `create_labels`,
+`rename_labels` and `delete_labels` beside the existing `folders`, `move` and
+`labels`, so `GET /v1/inboxes/{id}` states what the mailbox supports. A domain
+or Gmail inbox exposes system folders only (no custom folders, no folder
+CRUD); Outlook and IMAP expose physical custom folders; IMAP has no labels at
+all; Outlook categories can be created but not renamed or deleted (Graph
+exposes no managed category rename or delete). The label catalogue keeps its
+own `capabilities` block for compatibility, reporting the label half of the
+same surface and staying present on an empty catalogue.
+
+Gmail's overlapping native system labels collapse to one deterministic
+canonical folder — Trash, Spam, Drafts, Inbox, Sent, first match wins, `null`
+when none match. A Gmail inbox's folder list is exactly those five system
+destinations: there is no virtual folder, no All Mail and no derived Archive
+view. Archiving removes `INBOX` and keeps `SENT`, so an archived message still
+projects the Sent folder. A `null` move means **archive**: a domain inbox
+files the message in its internal archive — a destination that is not a
+canonical folder, so the message then reports `folder_id: null` — and a Gmail
+inbox removes `INBOX`. An Outlook or IMAP message always lives in exactly one
+physical folder, so a null move is refused there. System folders are protected
+everywhere, and Sent, Drafts and Outbox are never move destinations: a sent
+copy comes from sending, a draft from the drafts API.
+
+Existing mail is preserved, not flattened. A domain inbox's legacy custom
+folders keep their records, with their original full paths, and the message
+relations that point at them, so the organisation can be restored or rolled
+back. Each custom folder is mapped to one additive label by a deterministic,
+collision-safe mapping (a label name already in use takes the first free
+numeric suffix) recorded in a mapping table, so the mapping is idempotent and
+never re-derives or duplicates a label. A message filed in a legacy custom
+folder has no canonical folder: `folder_id` is `null` and the folder is
+visible as its label. Legacy IMAP local tags are preserved in the legacy
+`labels` field but are not canonical `label_ids` and cannot be applied or
+removed.
+
+**Reason:** One mailbox, one vocabulary. A location and a piece of metadata
+are different things, and the contract says so in two fields instead of
+pretending a folder is a label. The capability block moves the provider
+differences out of the client: a generic agent reads what the mailbox supports
+instead of inferring it from a provider name.
+
+**Supersedes:** D131's unified membership projection, its `folder:<id>`
+identity, its exclusive/membership classification and the system label
+classification in the catalogue. D131's route, role and filter-resolution
+decisions stand.
+
+**Complexity:** Additive capability booleans on the existing capability
+struct, one projection change in the message response, provider-scoped refusals
+in the label, folder and filter paths, and the documentation of the new
+contract. No new endpoint, dependency, service or runtime component. A
+migration preserves existing folder and label data rather than rewriting it.
+
+## D152 — Outlook category creation uses the native master-category endpoint
+
+**Requirement:** D151 makes an Outlook category the mailbox's additive label.
+Creating one has to write to the mailbox, and Graph only offers that through
+`POST /users/{mailbox}/outlook/masterCategories`, which is guarded by the
+`MailboxSettings.ReadWrite` delegated permission. Without it MailMoose could
+only remember a category name locally, which is not a category the mailbox
+knows about.
+
+**Decision (2026-10-22, human approved):** The Microsoft connector requests
+`MailboxSettings.ReadWrite` alongside `User.Read`, `Mail.ReadWrite`,
+`Mail.Send` and `offline_access` (plus the shared-mailbox permissions for a
+shared connection). Category creation calls the native master-category
+endpoint, and a defined-label cache entry is written **only after Graph has
+accepted the category**, so a failed creation never leaves MailMoose claiming
+a category the mailbox does not have. Categories stay read-only for rename
+and delete: `rename_labels` and `delete_labels` remain false, while native
+category add/remove on a message keeps working.
+
+**Consequence for operators:** a Microsoft mailbox connected before this
+permission was added does not carry the grant, and Microsoft does not add a
+scope to an existing token. Such an inbox must be reconnected once from its
+settings. A grant that arrives without the new permission is refused with
+`Microsoft mailbox permissions were not granted`, so a partially consented
+connection never looks healthy.
+
+**Complexity:** One added scope, one native endpoint call in the Outlook
+category-creation path, and a cache write ordered after the provider's
+acceptance. No new dependency, service, secret handling or schema change; the
+permission is delegated by the signed-in user and is not stored separately.
+
+## D153 — Forwarding and a common outbound API response
+
+**Requirement:** UAT found that forwarding was available in the UI but not the
+public API. Before the major beta release, outbound operations should expose
+one predictable response rather than carry separate send/reply/approval shapes.
+
+**Decision (2026-10-23, API change explicitly human approved):** Expose
+`POST /v1/messages/{id}/forward` through the same `Service.Send` forwarding
+path as the UI. The source determines the inbox; Owner/account Admin may
+forward to explicit `to` recipients, with optional `sender`, `cc`, `bcc`,
+`subject`, `text`, `html` and base64 `attachments`. Shared fields retain the
+send types (including string-or-array recipients). Reply additionally accepts
+the existing UI compose controls `cc`, `bcc` and subject override.
+
+Every outbound enqueue response — send, reply, forward, draft-send, draft
+writes with `action: "send"`, and approval — returns **200 OK** with exactly
+`queued`, `messageId`, `provider_message_id` and `message`. All use one response
+writer and support `?wait=true` (30-second maximum; 504 on timeout). `queued`
+means the returned status is pending, not that delivery succeeded. A terminal
+delivery failure is represented by the message's failed status. Draft saves
+and approval-request writes still return Drafts, and errors keep their existing
+envelopes. The new forwarding route uses the common mailbox-error mapping for
+remote source failures; existing reply error statuses remain unchanged.
+
+**Compatibility:** Reply changes from 201 to 200 and gains `queued` and
+`messageId`. Approval gains `provider_message_id` and derives `queued` from the
+actual message status. Send/draft-send retain their existing 200 and field
+names, including the compatibility spelling `messageId`. Keeping 200 avoids
+changing the majority of existing outbound callers. Schemas, agent guidance,
+API documentation and the bundled Python/Bash clients agree on the contract.
+
+**Behavior retained:** A forward starts a new conversation, adds the original
+plain text and attachments automatically, and defaults its subject to `Fwd:`.
+It does not preserve original HTML formatting. Local and live remote sources
+share the existing sender/ownership, spam, internal-message, size, quota and
+idempotency controls; no new auth requirement or role is introduced.
+
+**Complexity:** One new route, thin shared reply/forward handling, one shared
+outbound response writer, and contract/client/test updates. No migration,
+dependency, runtime service or new forwarding engine.
+
+## D154 — Bind outbound idempotency keys to the send request
+
+**Requirement:** UAT demonstrated that forwarding and then replying with the
+same key returned the forward as a successful reply, without enqueueing a
+reply. Send/reply already shared this account-wide key space before D153;
+forwarding exposed another instance of the existing silent mismatch.
+
+**Decision (2026-10-23, API change explicitly human approved):** Retain one
+account-wide namespace but bind each reservation to a SHA-256 fingerprint of
+the parsed send inputs before send-time defaults or original message content
+are added. Include inbox, reply/forward source identifiers, sender address and
+name, recipients, subject, text, HTML, attachment metadata and bytes, plus
+draft/approval identifiers when present. Exclude credential/client attribution
+so rotating a credential does not itself change a retry's content.
+
+Reuse for a different action, source message, inbox or content returns **409
+Conflict**, `code: "conflict"`, instead of 200 with an unrelated message.
+Identical retries after durable enqueue retain 200 and replay the original
+message. In-flight reservations also return 409. Failed enqueues release the
+binding; abandoned reservations with no message retain the 15-minute lease.
+
+**Compatibility:** Old reservations cannot be reliably matched to the original
+request because only the resulting message was stored. Legacy keys without a
+fingerprint therefore return 409, never enqueue or claim a match. Clients must
+reconcile the original message before choosing a fresh key to avoid duplicates.
+Matching uses parsed inputs, not effective message equivalence: for example,
+omitting the sender and explicitly supplying the default sender are different
+inputs. JSON formatting and string-versus-array recipient syntax are not.
+
+**Complexity:** One input hash at the shared outbound boundary and an atomic
+binding check in the existing reservation transaction. Store only the hash in
+the previously unused `outbound_idempotency.result_json` metadata column and
+preserve it when enqueue completes the reservation. No schema migration,
+dependency, runtime service or new credential handling.
+
+## D155 — Replay a consumed draft send from its idempotency key
+
+**Requirement:** D154 promises that an identical retry returns the original
+message. Draft send and approval checked the draft first, and a successful send
+deletes the draft row in the enqueue transaction, so a retry whose response was
+lost answered 404 before the key was ever consulted. Clients following the docs
+could re-create the draft and send a duplicate.
+
+**Decision (2026-10-23):** When the draft lookup fails with `not found` and the
+request carries an `Idempotency-Key`, both paths match the key against the
+stored request fingerprint instead of failing. The fingerprint is rebuilt from
+the message the key enqueued (its fields plus its MIME attachments are what the
+original send bound) and must match exactly, so a key reused for different
+content still returns 409. The key's fingerprint therefore covers the draft's
+attachment bytes: `CommitOutbound` preserves the reservation's `result_json`
+rather than resetting it to `{}` (a behaviour change from D154, which was
+unobservable until now because nothing read the done record's hash).
+
+Replay deliberately skips the draft-ownership check, which cannot run without
+the draft, and enforces mailbox ownership on the replayed message's inbox
+instead. The key is caller-generated and account-scoped, so a caller must
+already know both the key and this account to reach it; the exposure is limited
+to a message that caller sent.
+
+**Complexity:** One read-only store lookup (`IdempotentMessage`), one replay
+helper shared by send and approval, and the handler change that lets a
+`send` action on a consumed draft reach the service. No migration, dependency or
+new route.
+
+## D156 — Freeze the common mailbox contract for public Beta 3
+
+**Requirement:** Domain and standalone mailboxes must present one understandable
+client contract before public promotion, without requiring provider-name branches
+for ordinary operations. The review found undiscoverable remote attachments,
+arrival handles that could be read but not mutated, missing capability distinctions,
+truncated threads that looked exhaustive and inaccuracies in OpenAPI.
+
+**Decision (2026-10-23):** Retain existing routes, array/envelope shapes, local
+attachment IDs and remote event payloads. Add portable attachment `download_url`
+descriptors using the existing bounded transient MIME fetch; remote listing can
+perform a full download and fail when offline, but never archives a body or marks
+mail read. Arrival handles are aliases for canonical message IDs on reads and
+mutations; authorization and remote-generation checks remain in force. Mutation
+polling locations use canonical IDs.
+
+Add `archive` and `purge` mailbox support flags, separate from authorization and
+connection readiness. Thread detail exposes preview completeness and a URL for
+the existing paginated message API; remote thread filtering spans indexed folders.
+Legacy thread-message arrays retain their existing behavior. Correct OpenAPI to
+describe the HTTP contract, rather than changing server behavior to match stale
+schema definitions.
+
+**Explicitly approved API shape change:** Ben approved changing unsupported
+mailbox operations from HTTP 409 / `code: "conflict"` to HTTP 409 /
+`code: "unsupported_operation"`. Ordinary conflict codes remain unchanged.
+Action-bearing failures/timeouts also include the standard `error` and `code`
+fields, retaining their existing action records and statuses.
+
+**Tag semantics clarified by Ben:** Tags are their text, not immutable objects.
+`tag:Name` changes on rename, and the rename updates the tag on every message
+carrying it in that inbox. No opaque tag-ID migration is introduced.
+
+**Compatibility:** From Beta 3 onward, v1 additions may introduce optional fields,
+capabilities, routes and event types. Clients ignore unknown response fields/events
+and preserve opaque references. Breaking contract changes require a new API
+version. No new service, dependency or database migration is needed here.

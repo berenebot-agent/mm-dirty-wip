@@ -22,6 +22,10 @@ type senderResolver interface {
 // It is the single live-condition check for the feature: the flag alone is not
 // enough, the anchor must still be the catch-all.
 //
+// An account Admin key holds the grant implicitly, on the same terms: it may
+// send as any address on a domain, but only from that domain's enabled
+// catch-all, which is what keeps an arbitrary From replyable.
+//
 // An empty clientID (a web session, system mail, or the principal-free approval
 // path) never holds the grant, so those callers keep the exact-primary/alias
 // rule.
@@ -29,15 +33,17 @@ func domainSendGrantAt(ctx context.Context, q senderResolver, clientID, inboxID 
 	if clientID == "" || inboxID == "" {
 		return false, nil
 	}
-	var granted int
-	err := q.QueryRowContext(ctx, `SELECT b.send_any_in_domain FROM client_inbox_bindings b WHERE b.client_id=? AND b.inbox_id=?`, clientID, inboxID).Scan(&granted)
+	var isAdmin, granted int
+	err := q.QueryRowContext(ctx, `SELECT k.is_admin,COALESCE(b.send_any_in_domain,0) FROM client_api_keys k LEFT JOIN client_inbox_bindings b ON b.client_id=k.client_id AND b.inbox_id=? WHERE k.client_id=?`, inboxID, clientID).Scan(&isAdmin, &granted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if granted == 0 {
+	// An Admin key holds the grant for free; any other key holds it only where
+	// its own binding carries the flag.
+	if isAdmin == 0 && granted == 0 {
 		return false, nil
 	}
 	// The flag is only live while this inbox is the domain's current, enabled
@@ -52,6 +58,27 @@ func domainSendGrantAt(ctx context.Context, q senderResolver, clientID, inboxID 
 		return false, err
 	}
 	return enabled != 0, nil
+}
+
+// ListEnabledCatchAlls returns the account's enabled catch-all inboxes, mapped to
+// the name of the domain they catch. It is the set of inboxes a domain-wide
+// send is honoured from: an account Admin key holds the grant implicitly on
+// exactly these inboxes, and any other key's grant is live only on one of them.
+func (s *Store) ListEnabledCatchAlls(ctx context.Context, accountID string) (map[string]string, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT i.id,d.name FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE d.account_id=? AND d.catch_all_inbox_id=i.id AND i.enabled=1`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
 }
 
 // DomainSendGrant describes the domain-wide sending grant on one binding row.

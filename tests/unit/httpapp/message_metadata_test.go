@@ -108,7 +108,9 @@ func TestGoogleDirectionUsesAllNativeLabels(t *testing.T) {
 	}{
 		{"sent to self", "INBOX", "outbound", []string{"INBOX", "SENT"}},
 		{"draft", "DRAFT", "unknown", []string{"INBOX", "DRAFT"}},
-		{"archive", "ARCHIVE", "unknown", []string{"Label_1"}},
+		// A message with no system label is in no folder view: it is listed by
+		// the unfiltered listing, not by an Archive folder.
+		{"no system label", "", "unknown", []string{"Label_1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, u, _, _, _ := standaloneFixture(t)
@@ -202,7 +204,7 @@ func TestRemoteDirectionAndSafeReplyDefaults(t *testing.T) {
 			rr = httptest.NewRecorder()
 			h.ServeHTTP(rr, r)
 			var result struct{ Message model.Message }
-			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || rr.Code != 201 || len(result.Message.To) != 1 || result.Message.To[0] != "chosen@example.test" {
+			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || rr.Code != 200 || len(result.Message.To) != 1 || result.Message.To[0] != "chosen@example.test" {
 				t.Fatalf("explicit reply failed: %d %s %v", rr.Code, rr.Body.String(), err)
 			}
 			_, readerKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "reader", false, map[string]string{box.ID: "read"})

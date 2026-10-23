@@ -127,7 +127,7 @@ func TestRecoverStaleIdempotency(t *testing.T) {
 	box := b[0]
 
 	// A reservation with no message, older than the lease, is reclaimed.
-	claimed, _, err := s.IdempotencyReserve(ctx, u.AccountID, "stale-key", box.ID)
+	claimed, _, err := s.IdempotencyReserve(ctx, u.AccountID, "stale-key", box.ID, "request")
 	if err != nil || !claimed {
 		t.Fatalf("reserve = %v err=%v", claimed, err)
 	}
@@ -135,12 +135,15 @@ func TestRecoverStaleIdempotency(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("recover = %d err=%v", n, err)
 	}
-	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "stale-key", box.ID)
+	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "stale-key", box.ID, "request")
 	if err != nil || !claimed {
 		t.Fatalf("reserve after recovery = %v err=%v", claimed, err)
 	}
 
 	// A reservation that completed keeps replaying and is never reclaimed.
+	if _, _, err = s.IdempotencyReserve(ctx, u.AccountID, "done-key", box.ID, "request"); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err = s.CommitOutbound(ctx, store.OutboundRecord{
 		Inbox: box, Provider: "smtp", From: model.Address{Address: box.Address},
 		To: []string{"x@y.test"}, Subject: "s", Text: "b", RawPath: "messages/m.eml", IdemKey: "done-key",
@@ -150,7 +153,7 @@ func TestRecoverStaleIdempotency(t *testing.T) {
 	if _, err = s.RecoverStaleIdempotency(ctx, time.Now().UTC().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	claimed, mid, err := s.IdempotencyReserve(ctx, u.AccountID, "done-key", box.ID)
+	claimed, mid, err := s.IdempotencyReserve(ctx, u.AccountID, "done-key", box.ID, "request")
 	if err != nil || claimed || mid == "" {
 		t.Fatalf("done key reclaimed: claimed=%v mid=%q err=%v", claimed, mid, err)
 	}

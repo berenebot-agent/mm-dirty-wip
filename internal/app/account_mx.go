@@ -273,6 +273,11 @@ type AccountMXReceiverStatus struct {
 	Revision   int64  `json:"revision"`
 	State      string `json:"state"`
 	Detail     string `json:"detail,omitempty"`
+	// HTTPCode is the HTTP status the receiver URL answered the session with, or
+	// 0 when it never answered. A proxy in front of the receiver answers in its
+	// own right, and the core cannot tell the two apart, so the code is returned
+	// and nothing is attributed.
+	HTTPCode int `json:"http_code,omitempty"`
 }
 
 func (s *Service) wakeRemoteMXRuntime() {

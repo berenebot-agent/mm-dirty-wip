@@ -423,6 +423,60 @@ func TestRemoteDraftHandoffPermanentFailure(t *testing.T) {
 	}
 }
 
+// TestRemoteDraftHandoffDefinitiveRemoteRefusalFails proves that a remote
+// server refusing the append for a reason that cannot resolve itself — the
+// destination folder does not exist, or the server refuses the operation —
+// settles the handoff as failed. The refusal is definitive, so the handoff is
+// not retried into an ambiguous state, and its local draft is unfrozen.
+func TestRemoteDraftHandoffDefinitiveRemoteRefusalFails(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err    error
+		reason string
+	}{
+		"destination folder does not exist": {
+			err:    model.NewMailboxError(model.ErrKindNotFound, "remote destination does not exist", false, errors.New("NO [TRYCREATE] No such folder : Drafts")),
+			reason: "Drafts folder",
+		},
+		"server refuses the append": {
+			err:    model.NewMailboxError(model.ErrKindForbidden, "remote server refused the operation", false, errors.New("NO [CANNOT]")),
+			reason: "refused the append",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, u, _, _ := testService(t)
+			ctx := context.Background()
+			box := standaloneInbox(t, svc, u.AccountID, "refused@remote.example")
+			asst := assistantPrincipal(u.AccountID, box.ID)
+			d := standaloneDraft(t, svc, u.AccountID, box)
+			if _, err := svc.RequestSend(ctx, asst, d.ID, false); err != nil {
+				t.Fatal(err)
+			}
+			fake := &fakeHandoff{failAppend: true, appendErr: tc.err}
+			svc.SetHandoffPublisher(fake)
+			svc.PublishHandoffs(ctx)
+			h, _ := svc.Store.LatestAssistantHandlingForDraft(ctx, u.AccountID, d.ID)
+			got, _ := svc.Store.GetAssistantHandlingInternal(ctx, u.AccountID, h.ID)
+			if got.Publication != model.HandoffFailed {
+				t.Fatalf("state=%q want failed", got.Publication)
+			}
+			if !strings.Contains(got.LastError, tc.reason) {
+				t.Fatalf("reason=%q want it to name %q", got.LastError, tc.reason)
+			}
+			draft, err := svc.Store.GetDraft(ctx, asst, d.ID)
+			if err != nil || draft.Status != model.DraftStatusDraft {
+				t.Fatalf("draft after terminal failure %+v err=%v", draft, err)
+			}
+			// A settled handoff is never claimed again: no verification lookup,
+			// no re-append.
+			svc.PublishHandoffs(ctx)
+			if fake.lookups != 0 {
+				t.Fatalf("lookups=%d want 0 (a settled handoff is not verified again)", fake.lookups)
+			}
+		})
+	}
+}
+
 // TestRemoteDraftRequestRequiresCanAssist proves a read-only principal cannot
 // request a handoff.
 func TestRemoteDraftRequestRequiresCanAssist(t *testing.T) {
