@@ -8,6 +8,14 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **The domain Sent folder lists its mail again.** `folder=<Sent id>` on a
+  domain inbox returned an empty list for sends completed before explicit
+  filing, because the folder filter matched the exact `mailbox_id` placement
+  that those rows never had while every projection (including the listing the
+  rows came from) still counts them as Sent by the role rule. All folder-scoped
+  domain reads now select Sent by its membership rule — completed outbound mail
+  in the inbox — through one shared mapping the account-wide, inbox-scoped,
+  search and inbox-thread routes all apply.
 - **A Gmail message deleted mid-pass no longer fails the whole sync.** Gmail
   drops a deleted message's history entry asynchronously, so a change window can
   still name a message that `messages.get` then answers 404 for. The deep index

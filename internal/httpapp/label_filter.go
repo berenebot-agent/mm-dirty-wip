@@ -63,6 +63,13 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 		// alone cannot express it, so the visibility rule is applied on that
 		// folder (where spam keeps its mail visible, as the Trash view does).
 		f.Trashed, f.IncludeSpam = true, true
+	case model.FolderRoleSent:
+		// The Sent folder's membership is completed outbound mail, not a
+		// placement: sends completed before explicit filing live in the implicit
+		// mailbox_id NULL bucket, so the clause widens to the role like the
+		// Inbox view does.
+		f.Direction, f.SentOnly = "outbound", true
+		f.FolderScoped, f.InboxRole = true, model.FolderRoleSent
 	default:
 		f.FolderScoped, f.MailboxID = true, labels.FolderID
 	}
@@ -116,6 +123,13 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 		case model.FolderRoleTrash:
 			f.FolderScoped, f.MailboxID = false, ""
 			f.Trashed, f.IncludeSpam = true, true
+		case model.FolderRoleSent:
+			// The Sent folder's membership is completed outbound mail, not a
+			// folder placement: sends completed before explicit filing live in
+			// the implicit mailbox_id NULL bucket, so the clause widens to the
+			// role rather than matching the exact id.
+			f.FolderScoped, f.MailboxID, f.InboxRole = true, "", model.FolderRoleSent
+			f.Direction, f.SentOnly = "outbound", true
 		}
 	default:
 		// Legacy domain custom folders and Archive have no canonical location.
