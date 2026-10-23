@@ -234,3 +234,83 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 		}
 	}
 }
+
+// TestSpamFolderFilterUsesSpamClassification proves the Spam folder selector
+// answers the same set as the spam role shorthand. Marking a message Spam does
+// not file it in the Spam folder, so a message that carries only is_spam (no
+// placement row) must still list under folder=<Spam id>; before the fix the
+// exact-placement match returned an empty folder while spam=true found it.
+func TestSpamFolderFilterUsesSpamClassification(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleSpam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := seedInbound(t, svc, box, "spam-folder-classified", "<spam-folder-classified@test>", "Marked spam needle", "needle")
+	// The classification alone: no move, so mailbox_id is not the Spam folder.
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, flagged.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	filed := seedInbound(t, svc, box, "spam-folder-moved", "<spam-folder-moved@test>", "Moved spam needle", "needle")
+	// A classify move files the message AND marks it Spam; a plain move only
+	// files it, so it is not in Spam.
+	if _, err := svc.Store.ClassifyMessage(ctx, p, filed.ID, spam.ID); err != nil {
+		t.Fatal(err)
+	}
+	seedInbound(t, svc, box, "spam-folder-clean", "<spam-folder-clean@test>", "Clean needle", "needle")
+	key := adminKey(t, svc, u)
+	param := "folder=" + url.QueryEscape(spam.ID)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/messages?" + param,
+		"/v1/messages?inbox=" + box.ID + "&" + param,
+		"/v1/messages?" + param,
+		"/v1/inboxes/" + box.ID + "/search?q=needle&" + param,
+		"/v1/search?inbox=" + box.ID + "&q=needle&" + param,
+		"/v1/search?q=needle&" + param,
+	} {
+		rr := apiGet(t, h, path, key)
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		seen := map[string]bool{}
+		for _, item := range page.Items {
+			seen[item.ID] = true
+		}
+		if len(page.Items) != 2 || !seen[flagged.ID] || !seen[filed.ID] {
+			t.Fatalf("%s: got %v, want both Spam messages (%s and %s)", path, seen, flagged.ID, filed.ID)
+		}
+	}
+	// The same folder id with the role shorthand agrees.
+	rr := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?spam=true", key)
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("spam=true: %d %s", rr.Code, rr.Body.String())
+	}
+	// The reader's Folder tab lists the same set as the API.
+	session, _ := uiSession(t, svc, u.ID)
+	rr = uiGet(t, h, session, "/ui/inboxes/"+box.ID+"/folder?folder="+url.QueryEscape(spam.ID))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("folder tab: %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, m := range []model.Message{flagged, filed} {
+		if !strings.Contains(body, m.Subject) {
+			t.Fatalf("folder tab missing %q", m.Subject)
+		}
+	}
+	if strings.Contains(body, "Clean needle") {
+		t.Fatal("folder tab lists a message that is not Spam")
+	}
+}
