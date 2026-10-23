@@ -858,10 +858,13 @@ trashed
 
 `folder` scopes the listing to one canonical folder using the stable MailMoose
 ID returned by the Folders API. The ID also scopes an account-wide query to its
-owning inbox. Legacy standalone folder paths remain accepted for compatibility.
-On the account-wide route it applies to the inbox named by `inbox=`; without that
-scope it narrows the connected (standalone) inboxes by folder path and leaves the
-local store unfiltered.
+owning inbox. Legacy folder paths remain accepted for compatibility and resolve
+to the same folder as the ID form wherever one inbox is named — directly, or on
+the account-wide route when exactly one inbox holds a folder of that path. A
+path several inboxes share (every mailbox has a `Spam`) cannot name a single
+inbox, so the account-wide form keeps its compatibility behaviour: it narrows
+the connected (standalone) inboxes by folder path and selects nothing from the
+local store.
 
 A listing with no `folder` spans **every folder of the mailbox**, not the Inbox
 alone: an Outlook or IMAP user-created folder and a Gmail view are included on

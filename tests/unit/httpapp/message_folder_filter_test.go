@@ -314,3 +314,79 @@ func TestSpamFolderFilterUsesSpamClassification(t *testing.T) {
 		t.Fatal("folder tab lists a message that is not Spam")
 	}
 }
+
+// TestLegacySpamFolderPathMatchesIDForm proves the legacy folder path form
+// reaches the same folder and the same membership rule as the stable id form:
+// a caller selecting the Spam folder by its path ("Spam") lists the same two
+// Spam messages the id form lists, on every route the id form answers, and the
+// reader's Folder tab resolves the path too. Before the path lookup existed
+// the listing left an exact-placement filter the classified rows never
+// satisfy, so the folder read as empty while the id form found the mail.
+func TestLegacySpamFolderPathMatchesIDForm(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleSpam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := seedInbound(t, svc, box, "spam-path-classified", "<spam-path-classified@test>", "Marked spam path", "needle")
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, flagged.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	filed := seedInbound(t, svc, box, "spam-path-moved", "<spam-path-moved@test>", "Moved spam path", "needle")
+	if _, err := svc.Store.ClassifyMessage(ctx, p, filed.ID, spam.ID); err != nil {
+		t.Fatal(err)
+	}
+	seedInbound(t, svc, box, "spam-path-clean", "<spam-path-clean@test>", "Clean path", "needle")
+	key := adminKey(t, svc, u)
+	// The fixture has exactly one inbox, so the account-wide routes can resolve
+	// the shared system path without ambiguity.
+	inboxRoute := "/v1/inboxes/" + box.ID + "/messages?folder=Spam"
+	for _, path := range []string{
+		inboxRoute,
+		"/v1/messages?inbox=" + box.ID + "&folder=Spam",
+		"/v1/messages?folder=Spam",
+		"/v1/inboxes/" + box.ID + "/search?q=needle&folder=Spam",
+		"/v1/search?inbox=" + box.ID + "&q=needle&folder=Spam",
+		"/v1/search?q=needle&folder=Spam",
+		"/v1/inboxes/" + box.ID + "/threads?folder=Spam",
+		"/v1/threads?inbox=" + box.ID + "&folder=Spam",
+	} {
+		rr := apiGet(t, h, path, key)
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		seen := map[string]bool{}
+		for _, item := range page.Items {
+			seen[item.ID] = true
+		}
+		want := []string{flagged.ID, filed.ID}
+		if strings.Contains(path, "/threads") {
+			// Thread listings return thread keys, not message ids.
+			want = []string{flagged.ThreadID, filed.ThreadID}
+		}
+		if len(page.Items) != 2 || !seen[want[0]] || !seen[want[1]] {
+			t.Fatalf("%s: got %v, want both Spam messages (%s and %s)", path, seen, want[0], want[1])
+		}
+	}
+	// The reader's Folder tab resolves the legacy path and lists the same set.
+	session, _ := uiSession(t, svc, u.ID)
+	rr := uiGet(t, h, session, "/ui/inboxes/"+box.ID+"/folder?folder=Spam")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("folder tab by path: %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, flagged.Subject) || !strings.Contains(body, filed.Subject) {
+		t.Fatalf("folder tab by path missing the Spam mail: %s", body)
+	}
+	if strings.Contains(body, "Clean path") {
+		t.Fatal("folder tab by path lists a message that is not Spam")
+	}
+}
