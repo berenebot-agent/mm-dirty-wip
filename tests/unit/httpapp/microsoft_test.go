@@ -60,6 +60,41 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 				value = append(value, map[string]any{"id": "category-" + name, "displayName": name, "color": "preset0"})
 			}
 			json.NewEncoder(w).Encode(map[string]any{"value": value})
+		case strings.HasPrefix(r.URL.Path, "/users/shared@example.net/outlook/masterCategories/"):
+			// A single master category is addressed by its own id; Graph renames
+			// with PATCH and deletes with DELETE.
+			id := strings.TrimPrefix(r.URL.Path, "/users/shared@example.net/outlook/masterCategories/")
+			name := strings.TrimPrefix(id, "category-")
+			switch r.Method {
+			case http.MethodPatch:
+				var body struct {
+					DisplayName string `json:"displayName"`
+				}
+				json.NewDecoder(r.Body).Decode(&body)
+				for i, existing := range masterCategories {
+					if existing == name {
+						masterCategories[i] = body.DisplayName
+					}
+				}
+				for i, existing := range categories {
+					if existing == name {
+						categories[i] = body.DisplayName
+					}
+				}
+				message["categories"] = categories
+				json.NewEncoder(w).Encode(map[string]any{"id": "category-" + body.DisplayName, "displayName": body.DisplayName, "color": "preset0"})
+			case http.MethodDelete:
+				keptCategories := masterCategories[:0]
+				for _, existing := range masterCategories {
+					if existing != name {
+						keptCategories = append(keptCategories, existing)
+					}
+				}
+				masterCategories = keptCategories
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(405)
+			}
 		case strings.HasSuffix(r.URL.Path, "/messages/StableID/move"):
 			var body struct{ DestinationID string }
 			json.NewDecoder(r.Body).Decode(&body)
@@ -189,7 +224,7 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 			t.Fatalf("Outlook catalogue misses %s: %+v", want, labels.Items)
 		}
 	}
-	// A category can be created, but not renamed or deleted.
+	// A category can be created, renamed and deleted.
 	var capabilities struct {
 		Capabilities struct {
 			CanCreate        bool   `json:"can_create"`
@@ -206,8 +241,8 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 		capabilities.Capabilities.CreateMembership != "multiple" {
 		t.Fatalf("Outlook capabilities: %+v", capabilities.Capabilities)
 	}
-	if capabilities.Capabilities.CanRename || capabilities.Capabilities.CanDelete {
-		t.Fatalf("Outlook categories are neither renamable nor deletable: %+v", capabilities.Capabilities)
+	if !capabilities.Capabilities.CanRename || !capabilities.Capabilities.CanDelete {
+		t.Fatalf("Outlook categories are renamable and deletable on Graph: %+v", capabilities.Capabilities)
 	}
 	// The system folders are discovered through the folder endpoint.
 	folders := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/folders", key)
@@ -330,6 +365,29 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	}
 	if !createdNatively {
 		t.Fatalf("the category was not created natively in Outlook: %+v", graphCategories.Value)
+	}
+	// A category is renamed on the provider and the catalogue follows it.
+	renamed := apiDo(srv.Handler(), "PATCH", "/v1/inboxes/"+box.ID+"/label-catalog/"+url.PathEscape("tag:NewCategory"), key, `{"name":"RenamedCategory"}`)
+	if renamed.Code != http.StatusNoContent {
+		t.Fatalf("rename Outlook category = %d %s", renamed.Code, renamed.Body.String())
+	}
+	catalogAfterRename := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	if !strings.Contains(catalogAfterRename.Body.String(), `"id":"tag:RenamedCategory"`) ||
+		strings.Contains(catalogAfterRename.Body.String(), `"id":"tag:NewCategory"`) {
+		t.Fatalf("catalogue did not follow the rename: %s", catalogAfterRename.Body.String())
+	}
+	// An unknown category cannot be renamed: Graph is the provider's truth.
+	if missing := apiDo(srv.Handler(), "PATCH", "/v1/inboxes/"+box.ID+"/label-catalog/"+url.PathEscape("tag:NoSuchCategory"), key, `{"name":"Whatever"}`); missing.Code == http.StatusNoContent {
+		t.Fatalf("renamed a category Outlook does not have: %s", missing.Body.String())
+	}
+	// It is deleted on the provider, which also clears it from every message.
+	deleted := apiDo(srv.Handler(), "DELETE", "/v1/inboxes/"+box.ID+"/label-catalog/"+url.PathEscape("tag:RenamedCategory"), key, "")
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete Outlook category = %d %s", deleted.Code, deleted.Body.String())
+	}
+	catalogAfterDelete := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	if strings.Contains(catalogAfterDelete.Body.String(), "RenamedCategory") {
+		t.Fatalf("deleted category is still in the catalogue: %s", catalogAfterDelete.Body.String())
 	}
 	// An invalid category name is refused.
 	invalid := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/label-catalog", strings.NewReader(`{"name":""}`))

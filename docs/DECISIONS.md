@@ -6480,3 +6480,32 @@ carrying it in that inbox. No opaque tag-ID migration is introduced.
 capabilities, routes and event types. Clients ignore unknown response fields/events
 and preserve opaque references. Breaking contract changes require a new API
 version. No new service, dependency or database migration is needed here.
+
+## D157 — Outlook categories are renamed and deleted natively
+
+**Requirement:** D152 made an Outlook category MailMoose's additive label and
+created it natively, but refused rename and delete (`rename_labels` and
+`delete_labels` false), attributing the gap to the provider. Graph has always
+supported both: `PATCH` and `DELETE` on
+`/users/{mailbox}/outlook/masterCategories/{id}`. A category created through
+MailMoose could therefore never be removed through it, which UAT found when a
+test category could not be cleaned up.
+
+**Decision (2026-10-24):** The Microsoft connector implements category rename
+and delete against the native endpoint, addressed by the master-category id
+Graph assigned the name (a display name is matched case-insensitively and an
+unknown name is not found rather than guessed at). The provider is changed
+first, so a client is never told a category changed when only a local copy did;
+the local label catalogue then follows, and a local failure is logged rather
+than reported as a failed rename or delete that already happened. Deleting a
+category also removes it from every message carrying it, which Graph does.
+
+`rename_labels` and `delete_labels` are therefore true for an Outlook inbox,
+matching the already-contracted capability fields. No route, field or status
+code changes; `DELETE` and `PATCH` on a category already existed and previously
+answered 409 `unsupported_operation`. This supersedes the last sentence of
+D152's decision paragraph only; its permission and creation rules stand.
+
+**Complexity:** Two client calls, two service methods and one capability flag
+flip. No new dependency, service, secret handling or schema change; the
+`MailboxSettings.ReadWrite` grant D152 added already covers both calls.

@@ -37,7 +37,7 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 		return model.NewMailboxError(model.ErrKindNotFound, "label not found", false, nil)
 	}
 	if (operation == "rename" && !label.CanRename) || (operation == "delete" && !label.CanDelete) {
-		return model.NewMailboxError(model.ErrKindUnsupported, "this provider does not support renaming or deleting this label", false, nil)
+		return model.NewMailboxError(model.ErrKindUnsupported, "this label is provider-managed and cannot be renamed or deleted", false, nil)
 	}
 	if operation == "rename" {
 		clean, ok := model.NormalizeLabel(strings.TrimSpace(newName))
@@ -47,6 +47,15 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 		if !ok || clean != strings.TrimSpace(newName) {
 			return model.NewMailboxError(model.ErrKindInvalid, "invalid label name", false, nil)
 		}
+	}
+	// An Outlook category is a provider object, not a MailMoose folder or a local
+	// tag: rename and delete have to happen on Graph first, and the local
+	// catalogue follows.
+	if label.FolderID == "" && s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, mb.inbox.ID) {
+		if operation == "rename" {
+			return s.remoteMailbox().RenameMicrosoftCategory(r.Context(), p, mb.inbox.ID, label.Name, newName)
+		}
+		return s.remoteMailbox().DeleteMicrosoftCategory(r.Context(), p, mb.inbox.ID, label.Name)
 	}
 	if label.FolderID != "" {
 		if mb.routed {

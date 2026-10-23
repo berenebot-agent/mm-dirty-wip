@@ -726,14 +726,6 @@ func joinFolderPath(parent, name string, delim rune) string {
 	return parent + string(delim) + name
 }
 
-// lastRemoteSegment returns the final path segment of a folder path.
-func lastRemoteSegment(path string) string {
-	if idx := strings.LastIndexAny(path, "/."); idx >= 0 && idx+1 < len(path) {
-		return path[idx+1:]
-	}
-	return path
-}
-
 // ---- RemoteDraft handoff publisher ----
 
 // RemoteHandoffPublisher implements HandoffPublisher against the live remote

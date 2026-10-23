@@ -61,3 +61,48 @@ func TestCategoriesRejectCrossOriginContinuation(t *testing.T) {
 		t.Fatal("accepted cross-origin category continuation")
 	}
 }
+
+// TestCategoryRenameAndDeleteResolveTheNativeID proves a rename and a delete
+// address the category by the id Graph assigned it, not by the display name a
+// client happens to know, and that an unknown name is not found rather than
+// guessed at.
+func TestCategoryRenameAndDeleteResolveTheNativeID(t *testing.T) {
+	t.Parallel()
+	var renamed, deleted string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/users/mail@example.test/outlook/masterCategories" && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(map[string]any{"value": []microsoft.Category{{ID: "native-finance", DisplayName: "Finance"}, {ID: "native-urgent", DisplayName: "Urgent"}}})
+		case r.URL.Path == "/users/mail@example.test/outlook/masterCategories/native-urgent" && r.Method == http.MethodPatch:
+			var input microsoft.Category
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.DisplayName != "Critical" {
+				t.Errorf("invalid category rename: %+v %v", input, err)
+			}
+			renamed = "native-urgent"
+			json.NewEncoder(w).Encode(map[string]any{"id": "native-urgent", "displayName": "Critical", "color": "preset0"})
+		case r.URL.Path == "/users/mail@example.test/outlook/masterCategories/native-finance" && r.Method == http.MethodDelete:
+			deleted = "native-finance"
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected category request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "bad request", 400)
+		}
+	}))
+	defer server.Close()
+	client := microsoft.NewClient(server.Client())
+	client.BaseURL = server.URL
+	ctx := context.Background()
+	// A case-insensitive rename of an existing category.
+	category, err := client.RenameCategory(ctx, "token", "mail@example.test", "urgent", "Critical")
+	if err != nil || category.DisplayName != "Critical" || renamed != "native-urgent" {
+		t.Fatalf("category rename: %+v %v (patched %q)", category, err, renamed)
+	}
+	if err := client.DeleteCategory(ctx, "token", "mail@example.test", "Finance"); err != nil || deleted != "native-finance" {
+		t.Fatalf("category delete: %v (deleted %q)", err, deleted)
+	}
+	// The provider does not have that category, so nothing is patched.
+	if err := client.DeleteCategory(ctx, "token", "mail@example.test", "NotARealCategory"); err == nil {
+		t.Fatal("deleted a category the provider does not have")
+	}
+}
