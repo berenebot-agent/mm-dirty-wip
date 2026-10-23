@@ -683,18 +683,13 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 		return RemoteListResult{}, err
 	}
 	folderPath = strings.TrimSpace(folderPath)
-	if folderPath == "" {
-		folderPath = inbox.Namespace
-		if folderPath == "" {
-			folderPath = model.NamespaceINBOX
-		}
-	}
-	// A client may address a folder by its stable id.
+	// A client may address a folder by its stable id. An empty scope is every
+	// indexed folder in scope, with Spam and Trash excluded by default.
 	folderPath = m.remoteFolderScope(ctx, p.AccountID, inboxID, folderPath)
 	// Bootstrap API reads on first use; UI reads schedule the same work and return
 	// the cache immediately. Discovery still enforces the personal namespace.
 	reconciled := false
-	status, serr := m.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, inboxID)
+	indexStatus, serr := m.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, inboxID)
 	if serr != nil {
 		return RemoteListResult{}, mapStoreError(serr)
 	}
@@ -702,11 +697,15 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 	if verr != nil {
 		return RemoteListResult{}, mapStoreError(verr)
 	}
-	if !known || indexedAt.IsZero() || status.Status == store.RemoteIndexNeverStarted {
+	// An unscoped read has no single folder to judge: it bootstraps from the
+	// inbox's index status alone, since a folder-scoped validity lookup for an
+	// empty path is meaningless.
+	scopedFolder := folderPath != ""
+	if indexStatus.Status == store.RemoteIndexNeverStarted || indexStatus.Status == "" || (scopedFolder && (!known || indexedAt.IsZero())) {
 		if cachedOnly {
 			m.ScheduleRefresh(p.AccountID, inboxID)
 		} else {
-			status, err = m.ReconcileRemote(ctx, p.AccountID, inboxID)
+			indexStatus, err = m.ReconcileRemote(ctx, p.AccountID, inboxID)
 			if err != nil {
 				return RemoteListResult{}, err
 			}
@@ -724,15 +723,20 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 	// Enforce that the folder is within the inbox's selected root scope after the
 	// reconcile: a path from outside the scope (for example a shared namespace)
 	// is not addressable.
-	if !m.folderInScope(inbox, folderPath) {
+	// An unscoped read spans every indexed folder in scope, so there is no single
+	// folder path to check against the root scope.
+	if folderPath != "" && !m.folderInScope(inbox, folderPath) {
 		return RemoteListResult{}, model.NewMailboxError(model.ErrKindNotFound, "folder is not in this mailbox's scope", false, nil)
 	}
-	msgs, err := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inboxID, store.RemoteMessageFilter{FolderPath: folderPath, Limit: limit, Before: before})
+	msgs, err := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inboxID, store.RemoteMessageFilter{FolderPath: folderPath, ExcludeSpam: folderPath == "", ExcludeTrash: folderPath == "", Limit: limit, Before: before})
 	if err != nil {
 		return RemoteListResult{}, mapStoreError(err)
 	}
 	out := RemoteListResult{UIDValidity: validity, Reconciled: reconciled, Completeness: model.CompletenessComplete}
-	if !known || indexedAt.IsZero() || status.Status != store.RemoteIndexComplete {
+	if indexStatus.Status != store.RemoteIndexComplete {
+		out.Completeness = model.CompletenessPartial
+	}
+	if folderPath != "" && (!known || indexedAt.IsZero()) {
 		out.Completeness = model.CompletenessPartial
 	}
 	if limit > 0 && len(msgs) == limit {

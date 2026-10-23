@@ -499,7 +499,8 @@ func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal
 	}
 	// An empty scope is the whole mailbox, including the mail that carries no
 	// system label. A folder scope is a system folder view; a user label is an
-	// additive label and selects no folder.
+	// additive label and selects no folder. Either way Trash and Spam are
+	// excluded by default, so every inbox kind's plain read means the same thing.
 	folder = m.googleFolderScope(ctx, p.AccountID, inbox, folder)
 	if cached {
 		// UI navigation serves the cache. Advance an initial or partial index
@@ -518,7 +519,7 @@ func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal
 			return RemoteListResult{}, e
 		}
 	}
-	r, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before})
+	r, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, ExcludeSpam: folder == "", ExcludeTrash: folder == "", Limit: limit, Before: before})
 	if e != nil {
 		return RemoteListResult{}, e
 	}
