@@ -220,6 +220,85 @@ type unavailableForwardSource struct {
 	app.RemoteMessageResolver
 }
 
+func TestAPIIdempotencyRejectsDifferentRequests(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	key := adminKey(t, svc, u)
+	ctx := context.Background()
+	original := seedInbound(t, svc, box, "idem-source", "<idem-source@test>", "Original", "body")
+	other := seedInbound(t, svc, box, "idem-other", "<idem-other@test>", "Other", "body")
+	body := `{"to":"friend@example.net","subject":"Note","text":"body","attachments":[{"filename":"note.txt","content_type":"text/plain","content":"YQ=="}]}`
+	post := func(path, body, idem string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("POST", path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", idem)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	for _, action := range []string{"forward", "reply", "send"} {
+		t.Run(action, func(t *testing.T) {
+			path := "/v1/messages/" + original.ID + "/" + action
+			requestBody := body
+			if action == "send" {
+				path = "/v1/send"
+				requestBody = strings.TrimSuffix(body, "}") + `,"inbox_id":"` + box.ID + `"}`
+			}
+			first := assertSendResponse(t, post(path, requestBody, action), true)
+			assertConflict := func(path, body string) {
+				t.Helper()
+				rr := post(path, body, action)
+				var result struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || rr.Code != 409 || result.Code != "conflict" {
+					t.Fatalf("mismatch: %d %s (%v)", rr.Code, rr.Body.String(), err)
+				}
+			}
+			for _, next := range []string{"forward", "reply"} {
+				if next != action {
+					assertConflict("/v1/messages/"+original.ID+"/"+next, body)
+				}
+				assertConflict("/v1/messages/"+other.ID+"/"+next, body)
+			}
+			if action != "send" {
+				assertConflict("/v1/send", strings.TrimSuffix(body, "}")+`,"inbox_id":"`+box.ID+`"}`)
+			}
+			for _, change := range [][2]string{
+				{"friend@example.net", "other@example.net"},
+				{`"Note"`, `"Changed"`},
+				{`"body"`, `"changed"`},
+				{"note.txt", "other.txt"},
+				{"text/plain", "text/csv"},
+				{"YQ==", "Yg=="},
+			} {
+				assertConflict(path, strings.Replace(requestBody, change[0], change[1], 1))
+			}
+			// Parsed inputs, not JSON formatting or recipient syntax, identify a retry.
+			retryBody := "\n" + strings.Replace(requestBody, `"to":"friend@example.net"`, `"to":["friend@example.net"]`, 1)
+			if replay := assertSendResponse(t, post(path, retryBody, action), true); replay.ID != first.ID {
+				t.Fatalf("replay ID=%s, want %s", replay.ID, first.ID)
+			}
+		})
+	}
+	// Old completed keys have no fingerprint. Never resend or claim they match.
+	if _, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: box, From: model.Address{Address: box.Address}, To: []string{"friend@example.net"},
+		Subject: "Legacy", Text: "body", RawPath: "messages/legacy.eml", IdemKey: "legacy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rr := post("/v1/messages/"+original.ID+"/reply", body, "legacy"); rr.Code != 409 {
+		t.Fatalf("legacy replay: %d %s", rr.Code, rr.Body.String())
+	}
+	outbound, err := svc.Store.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "outbound", Limit: 10})
+	if err != nil || len(outbound) != 4 {
+		t.Fatalf("mismatches enqueued mail: %d messages, %v", len(outbound), err)
+	}
+}
+
 func (unavailableForwardSource) ResolveRemoteForward(context.Context, string, string) (model.Message, []app.SendAttachment, bool, error) {
 	return model.Message{}, nil, true, model.NewMailboxError(model.ErrKindUnavailable, "source body unavailable", true, nil)
 }

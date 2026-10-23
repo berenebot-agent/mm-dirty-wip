@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -177,7 +178,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	// Record the key-to-message mapping as part of enqueueing, so a retry with
 	// the same key replays the queued message regardless of delivery outcome.
 	if r.IdemKey != "" {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,'done',?) ON CONFLICT(account_id,idem_key) DO UPDATE SET message_id=excluded.message_id,inbox_id=excluded.inbox_id,result_json=excluded.result_json,status='done'`, r.Inbox.AccountID, r.IdemKey, id, r.Inbox.ID, "{}", now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,'done',?) ON CONFLICT(account_id,idem_key) DO UPDATE SET message_id=excluded.message_id,inbox_id=excluded.inbox_id,status='done'`, r.Inbox.AccountID, r.IdemKey, id, r.Inbox.ID, "{}", now); err != nil {
 			return model.Message{}, model.Event{}, err
 		}
 	}
@@ -989,21 +990,28 @@ const idempotencyLease = 15 * time.Minute
 // enqueueing) and is reclaimed, so a legitimate retry is not blocked forever.
 // A reservation whose message exists is never reclaimed, because the send was
 // durably enqueued and replaying it would be wrong.
-func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID string) (bool, string, error) {
+// Reuse with a different inbox or request hash conflicts. Legacy keys without
+// a request hash also conflict rather than risking a duplicate or wrong replay.
+func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID, requestHash string) (bool, string, error) {
+	if requestHash == "" {
+		return false, "", ErrConflict
+	}
+	// The existing result metadata column was unused; retain the binding on enqueue.
+	result, err := json.Marshal(map[string]string{"request_sha256": requestHash})
+	if err != nil {
+		return false, "", err
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return false, "", err
 	}
 	defer tx.Rollback()
-	var mid, status, created string
-	err = tx.QueryRowContext(ctx, `SELECT message_id,status,created_at FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status, &created)
+	var mid, status, created, savedInbox, savedResult string
+	err = tx.QueryRowContext(ctx, `SELECT message_id,status,created_at,inbox_id,result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status, &created, &savedInbox, &savedResult)
 	if err == nil {
-		if status == "done" {
-			return false, mid, nil
-		}
 		// Pending. Reclaim it only when it is stale and has no enqueued message.
-		if mid == "" && !parseTime(created).IsZero() && time.Since(parseTime(created)) > idempotencyLease {
-			if _, err = tx.ExecContext(ctx, `UPDATE outbound_idempotency SET status='pending',inbox_id=?,created_at=? WHERE account_id=? AND idem_key=? AND status='pending' AND message_id=''`, inboxID, nowText(), accountID, key); err != nil {
+		if status == "pending" && mid == "" && !parseTime(created).IsZero() && time.Since(parseTime(created)) > idempotencyLease {
+			if _, err = tx.ExecContext(ctx, `UPDATE outbound_idempotency SET status='pending',inbox_id=?,result_json=?,created_at=? WHERE account_id=? AND idem_key=? AND status='pending' AND message_id=''`, inboxID, string(result), nowText(), accountID, key); err != nil {
 				return false, "", err
 			}
 			if err = tx.Commit(); err != nil {
@@ -1011,13 +1019,19 @@ func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID 
 			}
 			return true, "", nil
 		}
+		if savedInbox != inboxID || savedResult != string(result) {
+			return false, "", ErrConflict
+		}
+		if status == "done" {
+			return false, mid, nil
+		}
 		// Another request is in flight.
 		return false, "", ErrConflict
 	}
 	if err != sql.ErrNoRows {
 		return false, "", err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,?,?)`, accountID, key, "", inboxID, "", "pending", nowText()); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,?,?)`, accountID, key, "", inboxID, string(result), "pending", nowText()); err != nil {
 		return false, "", err
 	}
 	if err = tx.Commit(); err != nil {
