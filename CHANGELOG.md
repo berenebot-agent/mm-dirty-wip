@@ -8,6 +8,12 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **The Spam folder lists its mail on a domain inbox.** `folder=<Spam id>`
+  selected the folder by exact `mailbox_id` placement, but marking a message
+  Spam records `is_spam` without filing it, so the folder looked empty while
+  `spam=true` found the same message. The Spam folder now uses the Spam role's
+  membership rule (spam-classified mail) on the API and in the reader's Folder
+  tab, so the folder and the role selector agree.
 - **The domain Sent folder lists its mail again.** `folder=<Sent id>` on a
   domain inbox returned an empty list for sends completed before explicit
   filing, because the folder filter matched the exact `mailbox_id` placement

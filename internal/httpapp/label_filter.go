@@ -57,7 +57,11 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 		// view is the Inbox bucket, not every inbound message in the mailbox.
 		f.FolderScoped, f.MailboxID, f.InboxRole = true, labels.FolderID, model.FolderRoleInbox
 	case model.FolderRoleSpam:
-		f.FolderScoped, f.MailboxID = true, labels.FolderID
+		// Spam membership is the message's own classification (is_spam), not a
+		// placement: marking mail Spam does not file it, so an exact placement
+		// match would empty the folder. Apply the same rule the role shorthand
+		// and the reader use.
+		f.SpamOnly = true
 	case model.FolderRoleTrash:
 		// The Trash folder's membership is deleted_at set; the folder selection
 		// alone cannot express it, so the visibility rule is applied on that
