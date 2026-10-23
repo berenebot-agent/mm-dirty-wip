@@ -8,6 +8,16 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **The legacy `folder=<path>` form finds the same mail as the id form.** A
+  path selector (`folder=Spam`) was only resolved from a folder's stable
+  `fld_…` id, so on a domain inbox it kept an exact-placement filter the
+  classification never populates and answered 0 rows while `folder=<Spam id>`
+  listed the mail. Folder selectors now resolve a legacy path to the same
+  folder row on the inbox-scoped, account-wide, search, thread and Folder-tab
+  reads, then apply the same membership rule; on an account-wide query without
+  `inbox=` the path resolves only when one inbox uniquely holds it, while a
+  path several inboxes share keeps its compatibility behaviour (connected
+  inboxes narrowed by path).
 - **The Spam folder lists its mail on a domain inbox.** `folder=<Spam id>`
   selected the folder by exact `mailbox_id` placement, but marking a message
   Spam records `is_spam` without filing it, so the folder looked empty while
@@ -45,7 +55,9 @@ All notable changes to MailMoose are documented here. This project follows
   folder id selects nothing.
 - **A completed send is filed in the Sent folder it reports.** Domain system
   folders are seeded when the first send completes, so `folder=<Sent>` lists the
-  message instead of an empty folder.
+  message instead of an empty folder. Completed sends recorded before that
+  filing began are now backfilled into the Sent folder on upgrade, so the
+  stored placement agrees with the membership rule the reads apply.
 - **Common mailbox contract before Beta 3.** Attachment listings now return
   descriptors with authenticated relative `download_url` values for both domain
   and connected mailboxes. Remote enumeration fetches size-limited MIME live,
