@@ -2275,6 +2275,37 @@ func TestRemoteListFiltersAndRoleFolder(t *testing.T) {
 	}
 }
 
+func TestRemoteListHasAttachmentBothValues(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	fake.add("INBOX", "From: a@b.test\r\nSubject: With attachment\r\nMessage-ID: <with-attachment@test>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nbody\r\n--x\r\nContent-Type: text/plain; name=note.txt\r\nContent-Disposition: attachment; filename=note.txt\r\n\r\nattachment\r\n--x--\r\n", "<with-attachment@test>", "With attachment")
+	fake.add("INBOX", "From: a@b.test\r\nSubject: Without attachment\r\nMessage-ID: <without-attachment@test>\r\n\r\nbody", "<without-attachment@test>", "Without attachment")
+
+	for _, path := range []string{
+		"/v1/messages?inbox=" + standalone.ID,
+		"/v1/inboxes/" + standalone.ID + "/messages",
+	} {
+		for _, tc := range []struct {
+			filter string
+			want   string
+			omit   string
+		}{
+			{filter: "has_attachment=true", want: "With attachment", omit: "Without attachment"},
+			{filter: "has_attachment=false", want: "Without attachment", omit: "With attachment"},
+		} {
+			separator := "?"
+			if strings.Contains(path, "?") {
+				separator = "&"
+			}
+			rr := apiGet(t, h, path+separator+tc.filter, key)
+			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), tc.want) || strings.Contains(rr.Body.String(), tc.omit) {
+				t.Fatalf("%s&%s: %d %s", path, tc.filter, rr.Code, rr.Body.String())
+			}
+		}
+	}
+}
+
 // TestRemoteScopedListCursorNoSkip proves a scoped standalone message listing
 // pages through same-second remote mail without gaps: the cursor is a metadata
 // id, and resuming must not drop siblings that share the boundary second.

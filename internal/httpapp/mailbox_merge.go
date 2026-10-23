@@ -721,7 +721,7 @@ func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
 		// Unread=true wants unread; a read message fails.
 		return false
 	}
-	if f.HasAttachment != nil && *f.HasAttachment && !m.HasAttachments {
+	if f.HasAttachment != nil && m.HasAttachments != *f.HasAttachment {
 		return false
 	}
 	for _, want := range f.Labels {
