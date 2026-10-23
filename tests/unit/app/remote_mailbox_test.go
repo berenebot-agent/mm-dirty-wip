@@ -569,9 +569,20 @@ func (f *fakeRemoteServer) RenameFolder(_ context.Context, oldPath, newPath stri
 	v := f.folders[oldPath]
 	delete(f.folders, oldPath)
 	f.folders[newPath] = v
+	// A real server moves the folder's children with it, so the fake must too:
+	// otherwise a rename test cannot see the tree the server actually reports.
+	for child, validity := range f.folders {
+		if strings.HasPrefix(child, oldPath+"/") {
+			moved := newPath + strings.TrimPrefix(child, oldPath)
+			delete(f.folders, child)
+			f.folders[moved] = validity
+		}
+	}
 	for _, m := range f.messages {
 		if m.folder == oldPath {
 			m.folder = newPath
+		} else if strings.HasPrefix(m.folder, oldPath+"/") {
+			m.folder = newPath + strings.TrimPrefix(m.folder, oldPath)
 		}
 	}
 	return nil
@@ -1947,5 +1958,72 @@ func TestResolveRemoteReplyFromArrivalID(t *testing.T) {
 	}
 	if msg.RFCMessageID != "<incoming@remote>" || msg.From.Address != "sender@elsewhere.test" {
 		t.Fatalf("resolved message = %+v", msg)
+	}
+}
+
+// TestRemoteFolderRenameAndParentSurvivesChildCreate covers two folder lifecycle
+// bugs on a live IMAP server: a rename proposes a name that exists nowhere yet,
+// so the scope check must admit it (it used to refuse every rename), and a
+// create must not prune the folders it did not mention (creating Parent/Child
+// used to make Parent disappear).
+func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
+	t.Parallel()
+	_, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	folderID := func(path string) string {
+		t.Helper()
+		folders, err := rm.Service.Store.ListFolders(ctx, u.AccountID, box.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range folders {
+			if f.Path == path {
+				return f.ID
+			}
+		}
+		t.Fatalf("folder %q is not in the tree", path)
+		return ""
+	}
+
+	// A fresh top-level name is admitted (and so is a fresh nested one).
+	created, err := rm.CreateRemoteFolder(ctx, p, box.ID, "Projects", "")
+	if err != nil {
+		t.Fatalf("create top-level: %v", err)
+	}
+	if _, err := rm.CreateRemoteFolder(ctx, p, box.ID, "Projects/Child", ""); err != nil {
+		t.Fatalf("create nested: %v", err)
+	}
+	// The parent survives its child's creation, and both are addressable.
+	parentID := folderID("Projects")
+	folderID("Projects/Child")
+	renamed, err := rm.RenameRemoteFolder(ctx, p, box.ID, parentID, "Projects Renamed")
+	if err != nil {
+		t.Fatalf("rename top-level: %v", err)
+	}
+	if renamed.Path != "Projects Renamed" {
+		t.Fatalf("renamed path = %q want Projects Renamed", renamed.Path)
+	}
+	// The server moved the child with its parent, and the mirror followed it.
+	if moved := folderID("Projects Renamed/Child"); moved == "" {
+		t.Fatal("the child did not follow the parent's rename")
+	}
+	// A nested folder renames in place, keeping its parent.
+	nested := folderID("Projects Renamed/Child")
+	child, err := rm.RenameRemoteFolder(ctx, p, box.ID, nested, "Renamed Child")
+	if err != nil {
+		t.Fatalf("rename nested: %v", err)
+	}
+	if child.Path != "Projects Renamed/Renamed Child" {
+		t.Fatalf("nested renamed path = %q", child.Path)
+	}
+	if created.ID != parentID {
+		t.Fatalf("create returned %q, tree holds %q", created.ID, parentID)
 	}
 }
