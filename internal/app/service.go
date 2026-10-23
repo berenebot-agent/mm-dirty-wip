@@ -1784,13 +1784,21 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 
 func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendInput, idem string, limited bool) (result SendResult, err error) {
 	if idem != "" {
+		// Bind retries to the caller's inputs before defaults or source content are added.
+		hash := sha256.New()
+		if err := json.NewEncoder(hash).Encode(struct {
+			SendInput
+			FromAddress   string
+			FromName      string
+			DraftID       string
+			SendRequestID string
+		}{in, in.FromAddress, in.FromName, in.DraftID, in.SendRequestID}); err != nil {
+			return SendResult{}, err
+		}
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
-		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID)
+		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID, hex.EncodeToString(hash.Sum(nil)))
 		if rerr != nil {
-			if errors.Is(rerr, store.ErrConflict) {
-				return SendResult{}, fmt.Errorf("idempotency key %q is already in flight", idem)
-			}
 			return SendResult{}, rerr
 		}
 		if !claimed {
