@@ -260,15 +260,8 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			}
 			g, err := client.Get(ctx, t, item.ID, "metadata")
 			if err != nil {
-				var mb *model.MailboxError
-				if errors.As(err, &mb) && mb.Kind == model.ErrKindNotFound {
-					if id, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, item.ID); e == nil {
-						return m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
-					} else if errors.Is(e, store.ErrNotFound) {
-						return nil
-					} else {
-						return e
-					}
+				if vanished, e := m.googleMessageVanished(ctx, account, inbox, item.ID, err); vanished {
+					return e
 				}
 				return err
 			}
@@ -339,6 +332,15 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 				}
 				g, e := client.Get(ctx, t, id, "metadata")
 				if e != nil {
+					// Gmail deletes a message's history entry asynchronously, so a
+					// history window can still name a message that is already gone.
+					// Treat it as vanished, not as a failed pass.
+					if vanished, ve := m.googleMessageVanished(ctx, account, inbox, id, e); vanished {
+						if ve != nil {
+							return store.RemoteIndexStatus{}, ve
+						}
+						continue
+					}
 					return store.RemoteIndexStatus{}, e
 				}
 				if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
@@ -439,6 +441,27 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	}
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")
 	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, e
+}
+
+// googleMessageVanished reports whether a messages.get failure is Gmail's
+// not_found for a message that left the mailbox between the history/list snapshot
+// and the fetch. That is a benign race, not a failed pass: a history window can
+// still name a message Gmail has already deleted. When it is one, any stale cached
+// row is dropped and the caller skips the message.
+func (m *RemoteMailboxService) googleMessageVanished(ctx context.Context, account, inbox, providerID string, err error) (bool, error) {
+	var mb *model.MailboxError
+	if !errors.As(err, &mb) || mb.Kind != model.ErrKindNotFound {
+		return false, nil
+	}
+	id, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, providerID)
+	if e != nil {
+		return true, nil
+	}
+	e = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
+	if errors.Is(e, store.ErrNotFound) {
+		return true, nil
+	}
+	return true, e
 }
 
 // googleArchiveDestination is the internal handle of the Gmail archive

@@ -8,6 +8,14 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **A Gmail message deleted mid-pass no longer fails the whole sync.** Gmail
+  drops a deleted message's history entry asynchronously, so a change window can
+  still name a message that `messages.get` then answers 404 for. The deep index
+  reconcile treated that as a failed pass, so it retried the same window on every
+  pass and logged `remote sync ... status=error` each time (`gmail messages.get:
+  Gmail could not find the resource`), while cheap detection already skipped it.
+  Reconcile now drops the stale cached row and skips the message, as detection
+  does, so the index completes and the error stops recurring.
 - **Common mailbox contract before Beta 3.** Attachment listings now return
   descriptors with authenticated relative `download_url` values for both domain
   and connected mailboxes. Remote enumeration fetches size-limited MIME live,
