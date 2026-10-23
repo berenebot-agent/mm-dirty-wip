@@ -150,17 +150,18 @@ var routeIOByKey = map[string]routeIO{
 	"GET /v1/events/wait":   {Response: "EventList", Query: []Param{qAfter, qTimeout, qInbox}},
 	"GET /v1/events/stream": {},
 
-	// Send and reply.
-	"POST /v1/send":                {Request: "SendBody", Response: "SendQueued", Query: []Param{qWait}},
-	"POST /v1/messages/{id}/reply": {Request: "ReplyBody", Response: "ReplyResult", Query: []Param{qWait}},
+	// Send, reply and forward.
+	"POST /v1/send":                  {Request: "SendBody", Response: "SendQueued", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/reply":   {Request: "ReplyBody", Response: "SendQueued", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/forward": {Request: "ForwardBody", Response: "SendQueued", Query: []Param{qWait}},
 
 	// Drafts.
 	"GET /v1/drafts":                             {Response: "DraftList", Query: []Param{qInbox, qBefore, qLimit}},
-	"POST /v1/drafts":                            {Request: "DraftWrite", Response: "DraftWriteResult"},
+	"POST /v1/drafts":                            {Request: "DraftWrite", Response: "DraftWriteResult", Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 200, Schema: "SendQueued"}}},
 	"GET /v1/drafts/{id}":                        {Response: "Draft"},
-	"PATCH /v1/drafts/{id}":                      {Request: "DraftWrite", Response: "DraftWriteResult"},
+	"PATCH /v1/drafts/{id}":                      {Request: "DraftWrite", Response: "DraftWriteResult", Query: []Param{qWait}},
 	"DELETE /v1/drafts/{id}":                     {},
-	"POST /v1/drafts/{id}/send":                  {Request: "DraftWrite", Response: "SendQueued"},
+	"POST /v1/drafts/{id}/send":                  {Request: "DraftWrite", Response: "SendQueued", Query: []Param{qWait}},
 	"GET /v1/drafts/{id}/attachments":            {Response: "DraftAttachmentList"},
 	"POST /v1/drafts/{id}/attachments":           {Request: "DraftAttachmentUpload", RequestContentType: "multipart/form-data", Response: "DraftAttachmentList"},
 	"GET /v1/drafts/{id}/attachments/{attId}":    {},
@@ -169,7 +170,7 @@ var routeIOByKey = map[string]routeIO{
 	// Send requests.
 	"POST /v1/drafts/{id}/request-send":        {Request: "RequestSendBody", Response: "Draft"},
 	"POST /v1/drafts/{id}/cancel-send-request": {Response: "Draft"},
-	"POST /v1/drafts/{id}/approve":             {Request: "FeedbackBody", Response: "ApproveResult"},
+	"POST /v1/drafts/{id}/approve":             {Request: "FeedbackBody", Response: "SendQueued", Query: []Param{qWait}},
 	"POST /v1/drafts/{id}/reject":              {Request: "FeedbackBody", Response: "Draft"},
 	"GET /v1/drafts/{id}/send-request":         {Response: "SendRequest"},
 	"GET /v1/send-requests":                    {Response: "SendRequestList", Query: []Param{qInbox, qActive, qLimit}},

@@ -127,13 +127,23 @@ curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/j
   -d "$BODY" "$BASE/v1/send"
 
 # ---------------------------------------------------------------------------
-# 6. Reply to a message (In-Reply-To/References are set server-side)
+# 6. Reply or forward (all outbound sends return HTTP 200 and one envelope)
 # ---------------------------------------------------------------------------
 
 curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -H "Idempotency-Key: reply-$IDEM" \
   -d '{"text":"Thanks for the note!"}' \
   "$BASE/v1/messages/$MSG/reply" | jq .
+
+# Forward starts a new conversation and automatically carries the original
+# plain text and attachments. Add ?wait=true to await delivery on either route.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: forward-$IDEM" \
+  -d '{"to":["alice@example.org"],"text":"FYI — please review."}' \
+  "$BASE/v1/messages/$MSG/forward" | jq .
+
+# Common response: {"queued":true,"messageId":"<...>",
+#                   "provider_message_id":"","message":{...}}
 
 # ---------------------------------------------------------------------------
 # 7. Patch message state and labels

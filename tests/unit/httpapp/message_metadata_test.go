@@ -204,7 +204,7 @@ func TestRemoteDirectionAndSafeReplyDefaults(t *testing.T) {
 			rr = httptest.NewRecorder()
 			h.ServeHTTP(rr, r)
 			var result struct{ Message model.Message }
-			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || rr.Code != 201 || len(result.Message.To) != 1 || result.Message.To[0] != "chosen@example.test" {
+			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || rr.Code != 200 || len(result.Message.To) != 1 || result.Message.To[0] != "chosen@example.test" {
 				t.Fatalf("explicit reply failed: %d %s %v", rr.Code, rr.Body.String(), err)
 			}
 			_, readerKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "reader", false, map[string]string{box.ID: "read"})

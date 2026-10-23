@@ -1355,6 +1355,13 @@ func TestRemoteReplyForwardSubmit(t *testing.T) {
 	if !reply || !fwd {
 		t.Fatalf("remote reply/forward not enqueued: %+v", outbound)
 	}
+	for _, action := range []string{"reply", "forward"} {
+		rr := apiDo(h, "POST", "/v1/messages/"+id+"/"+action, key, `{"to":"elsewhere@example.net","text":"api note"}`)
+		m := assertSendResponse(t, rr, true)
+		if action == "forward" && (!strings.Contains(m.Text, "original body") || m.Subject != "Fwd: Original") {
+			t.Fatalf("remote API forward: %+v", m)
+		}
+	}
 }
 
 // TestAuthoringSelectorPerKind proves the authoring endpoint reports the kind

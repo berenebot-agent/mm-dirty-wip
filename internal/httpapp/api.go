@@ -1434,20 +1434,17 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	// Async by default: return the pending message immediately. With ?wait=true
-	// the request blocks until the worker delivers or fails (or times out).
-	if r.URL.Query().Get("wait") == "true" {
-		m, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
-		if werr != nil {
-			writeError(w, 504, werr.Error())
-			return
-		}
-		res.Message = m
-		res.ProviderMessageID = m.ProviderMessageID
-	}
-	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
+	s.writeSendResult(w, r, res)
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
+	s.apiMessageSend(w, r, false)
+}
+
+func (s *Server) apiForward(w http.ResponseWriter, r *http.Request) {
+	s.apiMessageSend(w, r, true)
+}
+
+func (s *Server) apiMessageSend(w http.ResponseWriter, r *http.Request, forward bool) {
 	p := principal(r)
 	m, _, _, err := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
 	if err != nil {
@@ -1457,6 +1454,9 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Sender      string               `json:"sender"`
 		To          stringList           `json:"to,omitempty"`
+		CC          stringList           `json:"cc,omitempty"`
+		BCC         stringList           `json:"bcc,omitempty"`
+		Subject     string               `json:"subject,omitempty"`
 		Text        string               `json:"text"`
 		HTML        string               `json:"html,omitempty"`
 		Attachments []app.SendAttachment `json:"attachments,omitempty"`
@@ -1464,15 +1464,28 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, To: []string(in.To), ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	input := app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}
+	if forward {
+		input.ForwardOfMessageID = m.ID
+	} else {
+		input.ReplyToMessageID = m.ID
+	}
+	res, err := s.Service.Send(r.Context(), p, input, idemKey(r))
 	if err != nil {
-		mapStoreError(w, err)
+		if forward {
+			mapMailboxError(w, err)
+		} else {
+			mapStoreError(w, err)
+		}
 		return
 	}
-	// Async by default: return the pending message immediately. With ?wait=true
-	// the request blocks until the worker delivers or fails (or times out).
+	s.writeSendResult(w, r, res)
+}
+
+// writeSendResult keeps every outbound enqueue response and wait behavior identical.
+func (s *Server) writeSendResult(w http.ResponseWriter, r *http.Request, res app.SendResult) {
 	if r.URL.Query().Get("wait") == "true" {
-		dm, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
+		dm, werr := s.Service.WaitForDelivery(r.Context(), principal(r).AccountID, res.Message.ID, 30*time.Second)
 		if werr != nil {
 			writeError(w, 504, werr.Error())
 			return
@@ -1480,7 +1493,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		res.Message = dm
 		res.ProviderMessageID = dm.ProviderMessageID
 	}
-	writeJSON(w, 201, map[string]any{"message": s.messageResponse(r, res.Message), "provider_message_id": res.ProviderMessageID})
+	writeJSON(w, http.StatusOK, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
 }
 
 func (s *Server) apiDrafts(w http.ResponseWriter, r *http.Request) {
@@ -1590,7 +1603,7 @@ func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p mode
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
+		s.writeSendResult(w, r, res)
 	case "request-send":
 		d, err := s.Service.RequestSend(r.Context(), p, draftID, external)
 		if err != nil {
@@ -1714,7 +1727,7 @@ func (s *Server) apiDraftApprove(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": s.messageResponse(r, res.Message)})
+	s.writeSendResult(w, r, res)
 }
 
 // apiDraftReject rejects a pending request with optional feedback. Requires

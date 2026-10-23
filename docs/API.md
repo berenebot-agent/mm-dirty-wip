@@ -1177,6 +1177,37 @@ Hermes Relay sends as an owner directly and does not use the draft workflow.
 
 ## 9. Send and reply
 
+### Common outbound response
+
+Send, reply, forward, draft-send, draft writes with `action: "send"`, and
+draft approval return **200 OK** with exactly this common envelope:
+
+```json
+{
+  "queued": true,
+  "messageId": "<outbound@example.com>",
+  "provider_message_id": "",
+  "message": { "id": "msg_01K...", "status": "pending" }
+}
+```
+
+The `message` above is abbreviated; the actual response contains the native
+Message representation. `messageId` is its RFC 5322 Message-ID, not its internal
+`id`. `provider_message_id` is empty until the provider assigns one. `queued`
+is true only while the returned message's status is `pending`.
+
+All these outbound paths accept `?wait=true` to wait for delivery or failure
+(up to 30 seconds; timeout returns `504`). A terminal failure still returns
+the common 200 response with `queued: false`; inspect `message.status` and
+`message.last_error`. Without `wait`, the response normally contains the pending
+message. Validation and authorization failures retain their error envelopes.
+Draft writes that save a draft or request approval still return a Draft, not
+this send envelope.
+
+**Beta compatibility change:** reply previously returned `201` and omitted
+`queued` and `messageId`; approval omitted `provider_message_id`. Clients must
+now accept `200` for reply. See decision D153.
+
 ### Send
 
 ```http
@@ -1245,10 +1276,54 @@ Idempotency-Key: <caller-generated-key>
 ```
 
 The application creates appropriate `In-Reply-To` and `References` headers.
-`sender` is optional and works as above.
+`sender` is optional and works as above. The optional `to`, `cc` and `bcc`
+fields accept a single address or an array, as on send. Omit `to` to use the
+original sender for inbound messages or original To recipients for outbound
+messages; an unknown-direction message requires explicit recipients. An
+optional `subject` overrides the default `Re:` subject. `text`, `html` and
+base64 `attachments` use the send field shapes. A reply remains in the
+original conversation.
 
 Add `?wait=true` to block until the worker delivers or fails (up to 30
 seconds), returning the terminal message; a timeout returns `504`.
+
+### Forward
+
+```http
+POST /v1/messages/{id}/forward
+Idempotency-Key: <caller-generated-key>
+```
+
+```json
+{
+  "to": ["recipient@example.org"],
+  "text": "FYI — please review."
+}
+```
+
+Requires Owner access to the source message's inbox (or account Admin).
+Works with both locally stored and standalone/connected messages, using the
+same forwarding logic as the web UI. The source message determines the sending
+inbox; there is no separate `inbox_id` or `from` selector.
+
+`to` is required. Optional `sender`, `cc`, `bcc`, `subject`, `text`, `html` and
+base64 `attachments` have the same names and types as send/reply. Recipient
+fields accept either a single address or an array. If `subject` is omitted or
+empty, it defaults to `Fwd:` plus the original subject (without adding another
+prefix when already present).
+
+The original message's **plain text and attachments are included automatically**;
+`text` supplies an optional note before the quote and `attachments` adds files.
+Original HTML formatting is not carried into the HTML body. Forwarding starts
+a new conversation and does not set reply headers. A remote source is fetched
+live; an unavailable body/attachment fetch refuses the send rather than
+silently forwarding partial content. Spam messages must first be released,
+and internal workflow messages cannot be forwarded. Existing sender permissions,
+message-size limits, quotas and idempotency rules apply unchanged.
+
+Returns the common 200 outbound envelope above; `?wait=true` is supported.
+The bundled clients expose `forward MESSAGE_ID --to recipient@example.org`
+with the same compose flags as `reply`.
 
 ### Drafts
 
@@ -1915,6 +1990,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | --- | --- | --- | --- |
 | POST | /v1/send | Send email as an Owner | owner |
 | POST | /v1/messages/{id}/reply | Reply to a message (Owner); optional sender chooses the From identity | owner |
+| POST | /v1/messages/{id}/forward | Forward a message (Owner) | owner |
 
 ### Drafts
 
