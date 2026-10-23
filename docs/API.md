@@ -11,6 +11,21 @@ semantics and provider capabilities.
 > readable operation list. The contract sections below explain behavior,
 > provider schemas, and compatibility details that route tables cannot carry.
 
+### V1 compatibility policy (Beta 3 onward)
+
+Within `/v1`, existing route meanings, field names and types, required request
+fields, HTTP statuses, error codes and pagination ordering are compatibility
+commitments. Breaking changes require a new API version rather than silently
+changing the existing contract. Development-time changes called out below are
+upgrade notes for releases before this freeze, not permission for future breaks.
+
+New routes, optional request/response fields, capabilities and event types may be
+added. Clients must ignore unknown response fields and event types, preserve opaque
+identifiers/cursors verbatim, and use capability discovery rather than hard-coded
+provider matrices. Provider availability and index completeness can change at
+runtime; neither is a schema change. Existing array-returning legacy routes remain
+arrays; the common listing envelope is not retroactively imposed on them.
+
 ## 1. Authentication
 
 ```http
@@ -22,6 +37,13 @@ API error responses include a stable `code` alongside the human-readable
 broad category. Authorization failures use codes such as `unauthorized`,
 `forbidden`, `admin_required` and `sender_not_allowed`; missing resources use
 `not_found`.
+
+Unsupported mailbox operations return **409** with `code: "unsupported_operation"`;
+ordinary conflicts retain `code: "conflict"`. A queued-action failure or wait timeout
+also includes its `action` record beside `error` and `code` (`conflict` or `timeout`).
+Inspect that action before retrying: a timeout does not cancel the work, and an
+ambiguous outcome must not be blindly replayed. This error-code distinction was
+explicitly approved for Beta 3; see **D156**.
 
 Mailbox access is assigned per inbox using one of three roles:
 
@@ -179,7 +201,7 @@ exposed.
 
 Routes under `/v1/inboxes/{id}/…` dispatch on the inbox kind, so one set of
 endpoints reads a domain inbox (local store) and a standalone inbox (live remote
-server) alike. Every listing returns the shared **envelope**:
+server) alike. Common message, thread, search and folder listings return the shared **envelope**:
 
 ```json
 {
@@ -335,8 +357,8 @@ PUT /v1/inboxes/{id}/authoring
   are still returned but have no effect.
 
 For a standalone inbox, a message's body and attachments are fetched **live**
-from the remote server on each request and are never archived; the attachment
-listing is empty and parts are downloaded structurally by MIME part path. The
+from the remote server on each request and are never archived; attachment
+listings enumerate MIME parts live and provide opaque `download_url` values. The
 single-message `GET` returns the **live body**, or `503` if the connector is
 unreachable — there is no offline fallback that serves cached metadata as the
 body. A purge (`DELETE /v1/messages/{id}/purge`) requires Assistant or Owner and
@@ -375,6 +397,8 @@ The inbox is the authoritative capability surface. Read `capabilities` from
 |---|---|---|
 | `folders` | the inbox exposes named folders — list them | — |
 | `move` | messages can be moved between folders | — |
+| `archive` | a null-destination move is supported | — |
+| `purge` | permanent deletion is supported after Trash | — |
 | `create_folders` | a new custom folder can be created | — |
 | `rename_folders` | a custom folder can be renamed | — |
 | `delete_folders` | an empty custom folder can be deleted | — |
@@ -389,6 +413,12 @@ The inbox is the authoritative capability surface. Read `capabilities` from
 present even when the catalogue is empty, so an empty catalogue still says
 what the inbox supports. Do not infer support from the inbox kind or the
 provider name.
+
+These describe mailbox support, not the caller's permissions or a guarantee that
+the provider is currently reachable. `archive` is true for domain and Google/One
+inboxes; `purge` is true for domain, IMAP and Microsoft inboxes. Purge still requires
+the proper role and a message already in Trash. `realtime` describes source-side
+push detection, not access to MailMoose's SSE/event endpoints.
 
 ### What each provider supports
 
@@ -691,8 +721,11 @@ folder is reported by `folder_id`. The legacy `labels` array remains the
 additive-name view only; new clients should read `label_ids` and filter with
 `label_id`.
 
-Use catalogue ids verbatim. `tag:<Name>` identities are stable, and a folder
-is addressed with its own id, never as a label. See
+Use catalogue references verbatim. Tags are identified by their text, not by an
+immutable object ID: renaming a tag changes it on all messages carrying it in that
+inbox, and changes its `tag:<Name>` reference. Saved filters using the old name
+do not follow the rename; a later tag with the old name is that name's new meaning.
+A folder is addressed with its own id, never as a label. See
 [§3b Folders and labels](#3b-folders-and-labels) for the per-provider rules,
 the capability surface and the Gmail folder projection. The endpoint reference
 below lists the label routes. Filtering semantics are described in this
@@ -1006,6 +1039,17 @@ do not inflate ordinary thread counts. Detail `unread_count` counts unread
 messages in the returned `messages` array, matching the detail's `message_count`.
 The `/messages` subroute remains a message array, not a thread summary.
 
+Thread detail embeds at most 200 messages. Its optional `completeness` is
+`partial` if the embedded preview is truncated or the connected index is not
+complete; otherwise it is `complete`. Counts describe the returned preview, not
+an unbounded total. The optional `messages_url` points to the existing common
+listing, `/v1/messages?inbox={inbox_id}&thread={thread_id}`: follow that URL and
+page newest first using `before=<next_cursor>`, retaining the filters. This spans
+indexed folders for connected inboxes as well as domain mail. A partial index
+still means some remote mail may not yet be enumerable, even at the last page.
+The legacy `/v1/threads/{id}/messages` array is not the portable complete retrieval
+path and keeps its existing behavior.
+
 ## 6. Search
 
 ```http
@@ -1053,16 +1097,24 @@ Metadata:
   "id": "att_01K...",
   "filename": "quote.pdf",
   "content_type": "application/pdf",
-  "size": 184920
+  "size": 184920,
+  "download_url": "/v1/attachments/att_01K..."
 }
 ```
 
 `GET /v1/messages/{id}/content` streams the raw RFC5322 MIME; `GET
 /v1/messages/{id}/attachments/{part}` downloads a local attachment by flat
 numeric index or a connected attachment by dotted MIME part path (e.g. `1.2`).
-For a **standalone** inbox's message only the
-header is cached, so the `attachments` listing is empty and parts are downloaded
-structurally by path (the body is fetched live and never archived).
+`GET /v1/messages/{id}/attachments` returns the same descriptor array for both
+inbox kinds, including an authenticated relative `download_url`. Send the same
+bearer credential when following it; treat the URL as opaque. Stored attachment
+IDs remain available for domain mail; a remote part has an empty `id`, so use its
+`download_url` instead. For a standalone message the server fetches size-limited
+raw MIME to a temporary file and parses its attachment metadata on demand. This
+can require a full message download and can fail when the provider is unavailable;
+fetch/parse failures return an error, never a misleading empty success. Nothing
+is archived or marked read by enumeration. Remote temporary files are removed
+after the request. Repeated enumeration can incur repeated provider downloads.
 
 Attachment content responses use download disposition and `nosniff` headers.
 
@@ -1403,6 +1455,14 @@ durable header fields when the reconcile has not yet run — so a client can fol
 an event id straight into `GET /v1/messages/{id}` and obtain the canonical
 message (including its message id, which a reply/forward then uses). An arrival
 whose folder UIDVALIDITY has since changed resolves to `404`.
+
+The event's `message_id` is also that arrival handle. It is accepted as an alias
+on message reads, mutations, reply/forward, raw-content and attachment routes,
+with the same inbox/account authorization boundaries. Retain the canonical `id`
+returned by reads or `action.message_id` for subsequent calls. Mutation `Location`
+headers use the canonical message ID, including for polling after a purge. Existing
+event payloads and arrival IDs are preserved; clients do not have to rewrite their
+event subscriptions.
 
 ## 11. Inbound endpoints and domain provider configuration
 

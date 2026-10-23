@@ -87,10 +87,7 @@ func assertUnsupportedOp(t *testing.T, what string, rr *httptest.ResponseRecorde
 		Code  string `json:"code"`
 	}
 	_ = json.Unmarshal(rr.Body.Bytes(), &body)
-	if body.Code == "unsupported_operation" {
-		return
-	}
-	if !strings.Contains(strings.ToLower(body.Error), "support") {
+	if body.Code != "unsupported_operation" {
 		t.Fatalf("%s: refusal does not identify an unsupported operation: %s", what, rr.Body.String())
 	}
 }

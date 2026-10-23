@@ -218,14 +218,15 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 			if rawLimit < remoteFilterScanPage {
 				rawLimit = remoteFilterScanPage
 			}
-			res, e := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, scopeFolder, rawLimit, scanBefore)
+			res, e := s.listRemoteMessagePage(ctx, p, mb, f.ThreadID, scopeFolder, rawLimit, scanBefore)
 			if e != nil {
 				rerr = e
 				break
 			}
+			visible := s.remoteThreadVisibility(ctx, p, mb, res.Items, f, scopeFolder)
 			for _, v := range res.Items {
 				m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-				if !matchMessageFilter(m, f) {
+				if !matchMessageFilter(m, f) || (visible != nil && !visible[m.ID]) {
 					continue
 				}
 				ts := messageSortTime(m)
@@ -265,6 +266,32 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 // uses, so mixing the two would silently mis-resume.
 func remoteSourceCursor(v app.RemoteMessageView) string {
 	return v.ID
+}
+
+func (s *Server) listRemoteMessagePage(ctx context.Context, p model.Principal, mb mailboxBackend, thread, folder string, limit int, before string) (app.RemoteListResult, error) {
+	if thread != "" {
+		return mb.remote.ListRemoteThreadPage(ctx, p, mb.inbox.ID, thread, folder, before, limit)
+	}
+	return mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, folder, limit, before)
+}
+
+// An unscoped thread spans folders, but must not turn ordinary reads into a
+// Trash/Spam view. Explicit folder/state selectors retain their usual meaning.
+func (s *Server) remoteThreadVisibility(ctx context.Context, p model.Principal, mb mailboxBackend, views []app.RemoteMessageView, f store.MessageFilter, folder string) map[string]bool {
+	if f.ThreadID == "" || folder != "" {
+		return nil
+	}
+	messages := remoteViewsToMessages(views)
+	identity := s.labelIdentity(ctx, p, mb.inbox, messages)
+	visible := make(map[string]bool, len(messages))
+	for _, m := range messages {
+		role := ""
+		if id := folderIDFor(m, identity); id != nil {
+			role = identity.byID[*id].Role
+		}
+		visible[m.ID] = role != model.FolderRoleTrash && (f.IncludeSpam || role != model.FolderRoleSpam)
+	}
+	return visible
 }
 
 // pageMerged merges source heads without reordering a source's native results.

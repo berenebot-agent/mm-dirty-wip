@@ -872,6 +872,7 @@ func remoteLastSegment(path string) string {
 // metadata id (the UI's own "load older" cursor), so the id is required here.
 type RemoteMessageFilter struct {
 	FolderPath string
+	ThreadKey  string
 	// Labels filters to messages carrying every listed additive label (AND).
 	// It is a slice so a repeatable label filter cannot silently mean "the
 	// first label only", which is the bug a single-value field allowed.
@@ -889,6 +890,10 @@ type RemoteMessageFilter struct {
 func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inboxID string, f RemoteMessageFilter) ([]RemoteMessage, error) {
 	q := `SELECT ` + remoteMessageColumns + ` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`
 	args := []any{accountID, inboxID}
+	if f.ThreadKey != "" {
+		q += ` AND thread_key=?`
+		args = append(args, f.ThreadKey)
+	}
 	if strings.TrimSpace(f.FolderPath) != "" {
 		if s.IsGoogle(ctx, accountID, inboxID) {
 			clause, cargs := googleFolderScopeSQL(inboxID, "id", f.FolderPath)
@@ -1345,12 +1350,18 @@ func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxI
 
 // ListRemoteThreadMessages returns the cached messages of a thread, oldest first,
 // scoped to the account and inbox.
-func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID, threadKey string) ([]RemoteMessage, error) {
+func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID, threadKey string, limit ...int) ([]RemoteMessage, error) {
 	threadKey = strings.TrimSpace(threadKey)
 	if threadKey == "" {
 		return []RemoteMessage{}, nil
 	}
-	rows, err := s.read.QueryContext(ctx, `SELECT `+remoteMessageColumns+` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key=? ORDER BY COALESCE(received_at,'') ASC, remote_uid ASC`, accountID, inboxID, threadKey)
+	q := `SELECT ` + remoteMessageColumns + ` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key=? ORDER BY COALESCE(received_at,'') ASC, remote_uid ASC`
+	args := []any{accountID, inboxID, threadKey}
+	if len(limit) > 0 && limit[0] > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit[0])
+	}
+	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

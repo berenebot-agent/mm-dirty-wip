@@ -8,6 +8,26 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **Common mailbox contract before Beta 3.** Attachment listings now return
+  descriptors with authenticated relative `download_url` values for both domain
+  and connected mailboxes. Remote enumeration fetches size-limited MIME live,
+  removes its temporary file and never marks mail read; provider/parse failures
+  are errors rather than empty attachment lists. Existing local attachment IDs
+  and download routes are preserved.
+- Remote arrival handles now resolve for message mutations and inbox-scoped
+  detail/content/attachment reads as well as the account-wide detail route.
+  Mutation responses and polling locations use canonical message IDs; existing
+  event payloads are unchanged. Inbox and account authorization still apply.
+- Thread detail reports preview completeness and a paginated `messages_url`.
+  Connected `thread` message filters span indexed folders instead of only the
+  default Inbox. Ordinary thread listings exclude Spam and Trash unless explicitly
+  selected. Existing legacy array routes retain their response shapes.
+- OpenAPI now describes inbox kind/connection fields, attachment download URLs,
+  action queue records, optional request bodies, settled delete/purge/seen
+  responses and the inbox-label envelope. Repeated query encoding is corrected.
+  Tag documentation makes clear that `tag:Name` is name-based, not an immutable
+  object ID; a rename changes the tag on all messages carrying it.
+
 - **Draft send and approval retries replay instead of returning 404.** A
   successful send consumes its draft, so a retry of the same request after a
   lost response previously failed at the draft lookup and never reached the
@@ -18,6 +38,17 @@ All notable changes to MailMoose are documented here. This project follows
   still returns 409. See **D155** and `docs/API.md` §9.
 
 ### Changed
+
+- **Unsupported-operation error code (API change explicitly approved).**
+  Unsupported mailbox operations keep HTTP **409**, but return
+  `code: "unsupported_operation"` instead of `conflict`. Ordinary conflicts
+  remain `conflict`. Queued-action failure/timeout responses now include
+  `error` and `code` alongside their existing action handles. See **D156**.
+- Inbox capabilities add `archive` (null-destination move) and `purge`
+  (permanent deletion after Trash), independently of caller permissions and
+  provider availability. `realtime` means provider push detection, not whether
+  the MailMoose event/SSE API is available. The Beta 3 onward v1 compatibility
+  policy is documented in `docs/API.md`.
 
 - **Outbound idempotency rejects mismatched reuse (API change explicitly
   approved).** Keys remain account-wide across send/reply/forward and draft

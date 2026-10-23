@@ -109,6 +109,7 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 		mapStoreError(w, err)
 		return
 	}
+	id = m.ID
 	a, err := s.Service.EnqueueInboxAction(r.Context(), p, mb.inbox.ID, m.ID, in)
 	if err != nil {
 		if ui {
@@ -137,7 +138,7 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 	if r.URL.Query().Get("wait") == "true" {
 		a, err = s.Service.WaitForInboxAction(r.Context(), p, a.ID, 30*time.Second)
 		if err != nil {
-			writeJSON(w, 504, map[string]any{"error": "action wait timed out; action remains queued", "action": a})
+			writeJSON(w, 504, map[string]any{"error": "action wait timed out; action remains queued", "code": "timeout", "action": a})
 			return
 		}
 		if a.State == "done" {
@@ -166,6 +167,10 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 		status = http.StatusConflict
 	}
 	w.Header().Set("Location", "/v1/messages/"+id+"?action="+a.ID)
+	if status == http.StatusConflict {
+		writeJSON(w, status, map[string]any{"error": "action failed or its outcome is uncertain", "code": "conflict", "queued": false, "action": a})
+		return
+	}
 	writeJSON(w, status, map[string]any{"queued": a.State == "pending" || a.State == "running", "action": a})
 }
 
@@ -188,8 +193,18 @@ func (s *Server) resolveActionMessage(r *http.Request, p model.Principal, id str
 			continue
 		}
 		rec, e := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id)
+		if errors.Is(e, store.ErrNotFound) {
+			arrival, err := s.Service.Store.GetRemoteArrival(r.Context(), p.AccountID, id)
+			if err != nil || arrival.InboxID != box.ID || !s.remoteMailbox().InScope(p.AccountID, box.ID, arrival.FolderPath) {
+				continue
+			}
+			rec, e = s.Service.Store.RemoteMessageForArrival(r.Context(), p.AccountID, id)
+			if e == nil && (rec.InboxID != box.ID || !s.remoteMailbox().InScope(p.AccountID, box.ID, rec.FolderPath)) {
+				continue
+			}
+		}
 		if e == nil {
-			labels, e := s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, box.ID, id)
+			labels, e := s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, box.ID, rec.ID)
 			if e != nil {
 				return m, mailboxBackend{}, e
 			}
@@ -371,17 +386,17 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Location", "/v1/actions/"+a.ID)
 	if a.State == "failed" || a.State == "ambiguous" {
-		writeJSON(w, 409, map[string]any{"action": a})
+		writeJSON(w, 409, map[string]any{"error": "empty trash failed or its outcome is uncertain", "code": "conflict", "action": a})
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {
 		settled, e := s.Service.WaitForInboxAction(r.Context(), p, a.ID, 30*time.Second)
 		if e != nil {
-			writeJSON(w, 504, map[string]any{"action": settled, "actions": []store.MessageAction{settled}})
+			writeJSON(w, 504, map[string]any{"error": "action wait timed out; action remains queued", "code": "timeout", "action": settled, "actions": []store.MessageAction{settled}})
 			return
 		}
 		if settled.State != "done" {
-			writeJSON(w, 409, map[string]any{"action": settled})
+			writeJSON(w, 409, map[string]any{"error": "empty trash failed or its outcome is uncertain", "code": "conflict", "action": settled})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"purged": settled.EmptyTrash.Purged, "action": settled})

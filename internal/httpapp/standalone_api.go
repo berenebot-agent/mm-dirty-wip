@@ -419,6 +419,11 @@ func (s *Server) apiInboxMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, rerr := mb.remote.GetRemoteMessage(r.Context(), p, mb.inbox.ID, messageID)
+	if isRemoteMiss(rerr) {
+		if arrival, ok := s.remoteMessageFromArrival(r.Context(), p, mb, messageID); ok {
+			v, rerr = arrival, nil
+		}
+	}
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
@@ -460,7 +465,12 @@ func (s *Server) apiInboxMessageContent(w http.ResponseWriter, r *http.Request) 
 		http.ServeFile(w, r, path)
 		return
 	}
-	path, size, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, messageID)
+	m, resolved, err := s.resolveActionMessage(r, p, messageID)
+	if err != nil || resolved.inbox.ID != mb.inbox.ID {
+		writeError(w, 404, "not found")
+		return
+	}
+	path, size, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, m.ID)
 	if ferr != nil {
 		mapMailboxError(w, ferr)
 		return
@@ -517,7 +527,12 @@ func (s *Server) apiInboxMessageAttachment(w http.ResponseWriter, r *http.Reques
 	}
 	filename := strings.TrimSpace(r.URL.Query().Get("filename"))
 	contentType := strings.TrimSpace(r.URL.Query().Get("content_type"))
-	att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, messageID, partPath, filename, contentType)
+	m, resolved, err := s.resolveActionMessage(r, p, messageID)
+	if err != nil || resolved.inbox.ID != mb.inbox.ID {
+		writeError(w, 404, "not found")
+		return
+	}
+	att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, m.ID, partPath, filename, contentType)
 	if ferr != nil {
 		mapMailboxError(w, ferr)
 		return

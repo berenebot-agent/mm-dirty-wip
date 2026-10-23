@@ -340,8 +340,12 @@ curl -sS -H "Authorization: Bearer $KEY" \
 
 # Download a connected MIME attachment (dotted part path, e.g. 1.2).
 # Local downloads instead use a flat numeric attachment index, or the attachment
-# ID at /v1/attachments/{id}. Connected attachment metadata lists are empty;
-# discover MIME part paths from the raw content, not by guessing.
+# ID at /v1/attachments/{id}. Both inbox kinds return download_url values from
+# GET /v1/messages/{id}/attachments; follow those with the same bearer key.
+# Remote enumeration fetches bounded MIME live and may fail if offline.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages/$MSG/attachments" | jq '.[] | {filename, size, download_url}'
+# Advanced: use a known structural part path directly; never guess it.
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/messages/$MSG/attachments/1.2?filename=report.pdf" -o report.pdf
 
