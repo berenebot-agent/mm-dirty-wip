@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -181,13 +182,13 @@ func mxIncludedInput(r *http.Request, in app.MXReceiverInput) app.MXReceiverInpu
 	in.Hostname = r.Form.Get("hostname")
 	in.MaxMessageBytes = parseNonNegativeInt(r.Form.Get("max_message_bytes"))
 	in.MaxStagingBytes = parseNonNegativeInt(r.Form.Get("max_staging_bytes"))
-	in.MaxRecipients = int(parseNonNegativeInt(r.Form.Get("max_recipients")))
-	in.MaxConnections = int(parseNonNegativeInt(r.Form.Get("max_connections")))
 	in.DNSResolver = r.Form.Get("dns_resolver")
-	in.DNSTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("dns_timeout_seconds")))
-	in.ReadTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("read_timeout_seconds")))
-	in.WriteTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("write_timeout_seconds")))
-	in.DataTimeoutSeconds = int(parseNonNegativeInt(r.Form.Get("data_timeout_seconds")))
+	in.MaxRecipients = parseNonNegativeIntField(r.Form.Get("max_recipients"))
+	in.MaxConnections = parseNonNegativeIntField(r.Form.Get("max_connections"))
+	in.DNSTimeoutSeconds = parseNonNegativeIntField(r.Form.Get("dns_timeout_seconds"))
+	in.ReadTimeoutSeconds = parseNonNegativeIntField(r.Form.Get("read_timeout_seconds"))
+	in.WriteTimeoutSeconds = parseNonNegativeIntField(r.Form.Get("write_timeout_seconds"))
+	in.DataTimeoutSeconds = parseNonNegativeIntField(r.Form.Get("data_timeout_seconds"))
 	in.SMTPTLSCert = r.Form.Get("smtp_tls_cert")
 	in.SMTPTLSKey = r.Form.Get("smtp_tls_key")
 	// Checkboxes default checked where noted; an unchecked box is an explicit
@@ -389,4 +390,14 @@ func parseNonNegativeInt(raw string) int64 {
 		return -1
 	}
 	return v
+}
+
+// parseNonNegativeIntField parses a form integer that backs an int field. The
+// clamp satisfies the bounded int64→int conversion no platform can overflow.
+func parseNonNegativeIntField(raw string) int {
+	v := parseNonNegativeInt(raw)
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(v)
 }

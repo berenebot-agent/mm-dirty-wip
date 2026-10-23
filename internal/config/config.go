@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/mail"
 	"net/netip"
@@ -231,8 +232,8 @@ func Load() (Config, error) {
 	// validated here: the persisted mx_settings row is the authoritative
 	// receiver configuration, so a stale or partial legacy value must not fail
 	// startup.
-	if cfg.MXUID <= 0 || cfg.MXGID <= 0 {
-		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")
+	if cfg.MXUID <= 0 || cfg.MXGID <= 0 || cfg.MXUID > math.MaxInt32 || cfg.MXGID > math.MaxInt32 {
+		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive integers within the 32-bit uid range")
 	}
 	if cfg.MXReceiptRetention <= 0 {
 		return Config{}, fmt.Errorf("MX_RECEIPT_RETENTION_HOURS must be positive")
