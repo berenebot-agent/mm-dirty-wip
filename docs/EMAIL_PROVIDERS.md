@@ -350,12 +350,12 @@ URI; no client secret is used. Required delegated permissions are
 `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, and
 `offline_access`.
 
-`MailboxSettings.ReadWrite` is what lets MailMoose create an Outlook **master
-category** — the native equivalent of a label — through
-`POST /users/{mailbox}/outlook/masterCategories`. Without it MailMoose cannot
-create a category in the mailbox, and the categories it already knows about
-stay readable and usable on messages. The permission is only used for category
-creation: renaming and deleting a category remain unsupported.
+`MailboxSettings.ReadWrite` is what lets MailMoose manage Outlook **master
+categories** — the native equivalent of a label — through
+`/users/{mailbox}/outlook/masterCategories`: `POST` creates one, `PATCH` renames
+it, and `DELETE` removes it (which also clears it from every message carrying
+it). Without it MailMoose cannot change a category in the mailbox, and the
+categories it already knows about stay readable and usable on messages.
 
 > **Existing connections must be reconnected once.** A mailbox connected
 > before this permission was added does not carry the grant, and Microsoft
@@ -389,9 +389,9 @@ that inbox's settings if Microsoft access expires or is revoked.
 MailMoose presents Outlook folders and categories in the standalone inbox. Normal
 Inbox and Archive folders are supported; Microsoft's separate Online Archive
 mailbox is not. Outlook keeps its Sent Items copy. A message's location is its
-Outlook folder; its categories are additive labels that can be created but not
-renamed or deleted through the API — creating one needs the
-`MailboxSettings.ReadWrite` permission described above. Some send or reply outcomes
+Outlook folder; its categories are additive labels that can be created, renamed
+and deleted through the API, each applied natively on the provider — all three
+need the `MailboxSettings.ReadWrite` permission described above. Some send or reply outcomes
 can be uncertain; do not repeat a send unless the inbox confirms it failed.
 
 Personal Outlook.com and Microsoft 365 inboxes can receive near-real-time change

@@ -8,6 +8,37 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **A domain inbox's folders report their real message counts.** The folder
+  list only ever filled `message_count` and `unread_count` from the connected
+  inbox's remote index, which holds nothing for a local mailbox, so every
+  folder of a domain inbox reported `0` while its listing returned rows. Each
+  role is now counted with the same membership rule the listing applies (Spam
+  is spam-classified mail, Trash is trashed mail, Sent is completed outbound
+  mail, and Inbox includes the unfiled bucket), so a count is the size of the
+  view a client gets from `folder=<id>`.
+- **An IMAP custom folder can be renamed.** A rename proposes a name that
+  exists nowhere yet, and the scope check only admitted existing folders, so
+  every rename — top-level or nested — answered `400` with "renamed folder
+  would leave the mailbox scope". Rename now admits a new name by the same rule
+  creation uses.
+- **Creating a nested folder no longer hides its parent.** A folder create
+  mirrored only the new path, and the folder reconcile replaces the remote set,
+  so the empty parent (and every sibling) was pruned from the tree and could no
+  longer be addressed. A create and a rename now re-read the discovered tree
+  and reconcile it whole, so a parent survives its child and a rename carries
+  its children.
+- **A move to Trash lands without two extra IMAP round-trips.** The move
+  re-selected the destination for a `UIDVALIDITY` the last sync already
+  recorded, then opened a second connection to refresh the header of the
+  message it had just written. Both are skipped: the cached tree supplies the
+  destination validity (with a live `SELECT` only as fallback) and the moved
+  message is reported from the move's own write.
+- **An Outlook category can be renamed and deleted.** Both were refused with
+  `409 unsupported_operation`, attributed to the provider, although Graph
+  supports `PATCH` and `DELETE` on a master category. Both operations are now
+  applied on the provider, addressed by Graph's category id, and the local
+  catalogue follows; `rename_labels` and `delete_labels` are true for an
+  Outlook inbox.
 - **The legacy `folder=<path>` form finds the same mail as the id form.** A
   path selector (`folder=Spam`) was only resolved from a folder's stable
   `fld_…` id, so on a domain inbox it kept an exact-placement filter the
