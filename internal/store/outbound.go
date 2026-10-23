@@ -177,8 +177,11 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	}
 	// Record the key-to-message mapping as part of enqueueing, so a retry with
 	// the same key replays the queued message regardless of delivery outcome.
+	// The reservation's request fingerprint is kept, not reset: a draft send
+	// replays through IdempotentReplay after its draft row is gone, and only the
+	// stored hash can prove the retry matches.
 	if r.IdemKey != "" {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,'done',?) ON CONFLICT(account_id,idem_key) DO UPDATE SET message_id=excluded.message_id,inbox_id=excluded.inbox_id,status='done'`, r.Inbox.AccountID, r.IdemKey, id, r.Inbox.ID, "{}", now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,COALESCE((SELECT result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=?),'{}'),'done',?) ON CONFLICT(account_id,idem_key) DO UPDATE SET message_id=excluded.message_id,inbox_id=excluded.inbox_id,status='done'`, r.Inbox.AccountID, r.IdemKey, id, r.Inbox.ID, r.Inbox.AccountID, r.IdemKey, now); err != nil {
 			return model.Message{}, model.Event{}, err
 		}
 	}
@@ -1047,6 +1050,39 @@ func (s *Store) IdempotencyRelease(ctx context.Context, accountID, key string) e
 	return err
 }
 
+// IdempotentReplay returns the message an already-completed idempotency key
+// enqueued, when the retry carries the same request fingerprint. ok is false
+// for an unknown or still-pending key, so the caller proceeds normally. A
+// different fingerprint is ErrConflict and never replays.
+//
+// It exists for the draft paths: a successful send deletes the draft row, so an
+// identical retry would otherwise fail before its key is ever consulted.
+func (s *Store) IdempotentReplay(ctx context.Context, accountID, key, requestHash string) (model.Message, bool, error) {
+	if key == "" || requestHash == "" {
+		return model.Message{}, false, nil
+	}
+	result, err := json.Marshal(map[string]string{"request_sha256": requestHash})
+	if err != nil {
+		return model.Message{}, false, err
+	}
+	var mid, savedResult string
+	err = s.read.QueryRowContext(ctx, `SELECT message_id,result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='done'`, accountID, key).Scan(&mid, &savedResult)
+	if err == sql.ErrNoRows {
+		return model.Message{}, false, nil
+	}
+	if err != nil {
+		return model.Message{}, false, err
+	}
+	if savedResult != string(result) {
+		return model.Message{}, false, ErrConflict
+	}
+	m, err := s.GetMessageByID(ctx, accountID, mid)
+	if errors.Is(err, ErrNotFound) {
+		return model.Message{}, false, nil
+	}
+	return m, err == nil, err
+}
+
 // RecoverStaleIdempotency deletes pending reservations left by a crashed
 // process: a pending key with no linked message older than the lease. Keys with
 // an enqueued message are preserved (the send is durable and replayable).
@@ -1065,4 +1101,21 @@ func (s *Store) LatestInboundMessageInThread(ctx context.Context, accountID, inb
 		return m, ErrNotFound
 	}
 	return m, err
+}
+
+// IdempotentMessage returns the message an already-completed idempotency key
+// enqueued. ok is false for an unknown or still-pending key.
+func (s *Store) IdempotentMessage(ctx context.Context, accountID, key string) (string, bool, error) {
+	if key == "" {
+		return "", false, nil
+	}
+	var mid, status string
+	err := s.read.QueryRowContext(ctx, `SELECT message_id,status FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return mid, status == "done" && mid != "", nil
 }

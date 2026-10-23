@@ -6413,3 +6413,32 @@ binding check in the existing reservation transaction. Store only the hash in
 the previously unused `outbound_idempotency.result_json` metadata column and
 preserve it when enqueue completes the reservation. No schema migration,
 dependency, runtime service or new credential handling.
+
+## D155 — Replay a consumed draft send from its idempotency key
+
+**Requirement:** D154 promises that an identical retry returns the original
+message. Draft send and approval checked the draft first, and a successful send
+deletes the draft row in the enqueue transaction, so a retry whose response was
+lost answered 404 before the key was ever consulted. Clients following the docs
+could re-create the draft and send a duplicate.
+
+**Decision (2026-10-23):** When the draft lookup fails with `not found` and the
+request carries an `Idempotency-Key`, both paths match the key against the
+stored request fingerprint instead of failing. The fingerprint is rebuilt from
+the message the key enqueued (its fields plus its MIME attachments are what the
+original send bound) and must match exactly, so a key reused for different
+content still returns 409. The key's fingerprint therefore covers the draft's
+attachment bytes: `CommitOutbound` preserves the reservation's `result_json`
+rather than resetting it to `{}` (a behaviour change from D154, which was
+unobservable until now because nothing read the done record's hash).
+
+Replay deliberately skips the draft-ownership check, which cannot run without
+the draft, and enforces mailbox ownership on the replayed message's inbox
+instead. The key is caller-generated and account-scoped, so a caller must
+already know both the key and this account to reach it; the exposure is limited
+to a message that caller sent.
+
+**Complexity:** One read-only store lookup (`IdempotentMessage`), one replay
+helper shared by send and approval, and the handler change that lets a
+`send` action on a consumed draft reach the service. No migration, dependency or
+new route.

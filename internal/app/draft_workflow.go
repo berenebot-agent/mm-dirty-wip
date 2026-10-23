@@ -328,16 +328,25 @@ func (s *Service) CancelSendRequest(ctx context.Context, p model.Principal, draf
 // through the existing send flow. The message fields are read server-side from
 // the stored draft; no caller-supplied content is trusted.
 func (s *Service) ApproveDraft(ctx context.Context, p model.Principal, draftID, feedback, method, idem string) (SendResult, error) {
+	r, err := s.Store.GetSendRequestByDraft(ctx, p, draftID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	// A retry of an approval whose response was lost arrives after the draft and
+	// its request were consumed, so the key is replayed before the draft lookup.
+	// The hash is rebuilt from the frozen request, which is all a replay needs.
+	if replayed, rerr := s.replayDraftSend(ctx, p, draftID, approvalSendInput(r), idem); rerr != nil || replayed != nil {
+		if rerr != nil {
+			return SendResult{}, rerr
+		}
+		return *replayed, nil
+	}
 	d, err := s.Store.GetDraft(ctx, p, draftID)
 	if err != nil {
 		return SendResult{}, err
 	}
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
-	}
-	r, err := s.Store.GetSendRequestByDraft(ctx, p, draftID)
-	if err != nil {
-		return SendResult{}, err
 	}
 	if r.Status != model.SendRequestPending {
 		return SendResult{}, store.ErrConflict
@@ -357,25 +366,28 @@ func (s *Service) ApproveDraft(ctx context.Context, p model.Principal, draftID, 
 	if err != nil {
 		return SendResult{}, err
 	}
-	in := SendInput{
-		InboxID:          d.InboxID,
-		FromAddress:      d.FromAddress,
-		FromName:         d.FromName,
-		To:               d.To,
-		CC:               d.CC,
-		BCC:              d.BCC,
-		Subject:          d.Subject,
-		Text:             d.Text,
-		HTML:             d.HTML,
-		ReplyToMessageID: d.ReplyToMessageID,
-		DraftID:          draftID,
-		SendRequestID:    r.ID,
-		DecisionActor:    actor.Label,
-		DecisionActorID:  actor.ID(),
-		DecisionMethod:   method,
-		DecisionFeedback: feedback,
-	}
+	in := approvalSendInput(r)
+	in.FromAddress = d.FromAddress
+	in.FromName = d.FromName
+	in.To = d.To
+	in.CC = d.CC
+	in.BCC = d.BCC
+	in.Subject = d.Subject
+	in.Text = d.Text
+	in.HTML = d.HTML
+	in.ReplyToMessageID = d.ReplyToMessageID
+	in.DecisionActor = actor.Label
+	in.DecisionActorID = actor.ID()
+	in.DecisionMethod = method
+	in.DecisionFeedback = feedback
 	return s.SendDraft(ctx, p, draftID, in, idem)
+}
+
+// approvalSendInput is the part of an approval's send input that is known
+// without reading the draft: the frozen request it authorizes. It is also what
+// binds the idempotency key, so a replay matches the original enqueue.
+func approvalSendInput(r model.DraftSendRequest) SendInput {
+	return SendInput{InboxID: r.InboxID, DraftID: r.DraftID, SendRequestID: r.ID}
 }
 
 // RejectDraft records an owner's rejection of a pending send request. The draft

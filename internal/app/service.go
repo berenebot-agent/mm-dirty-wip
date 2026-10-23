@@ -1782,22 +1782,31 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	return s.sendWithLimit(ctx, accountID, in, idem, false)
 }
 
+// idemRequestHash binds an idempotency key to the send inputs. Server-derived
+// fields (the send key's grant and the client identity) are excluded: they
+// follow from the principal, so a replay need not reproduce them.
+func idemRequestHash(in SendInput) string {
+	in.SenderKeyID, in.ClientLabel, in.ClientID = "", "", ""
+	hash := sha256.New()
+	// Hashing cannot fail for these field types; a failure would leave the key
+	// unbound, so it is reported by the empty string instead.
+	if err := json.NewEncoder(hash).Encode(struct {
+		SendInput
+		FromAddress   string
+		FromName      string
+		DraftID       string
+		SendRequestID string
+	}{in, in.FromAddress, in.FromName, in.DraftID, in.SendRequestID}); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendInput, idem string, limited bool) (result SendResult, err error) {
 	if idem != "" {
-		// Bind retries to the caller's inputs before defaults or source content are added.
-		hash := sha256.New()
-		if err := json.NewEncoder(hash).Encode(struct {
-			SendInput
-			FromAddress   string
-			FromName      string
-			DraftID       string
-			SendRequestID string
-		}{in, in.FromAddress, in.FromName, in.DraftID, in.SendRequestID}); err != nil {
-			return SendResult{}, err
-		}
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
-		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID, hex.EncodeToString(hash.Sum(nil)))
+		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID, idemRequestHash(in))
 		if rerr != nil {
 			return SendResult{}, rerr
 		}
@@ -2042,15 +2051,27 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 // files are removed afterwards. The caller supplies the message fields (which
 // may include unsaved edits); the draft's saved attachments are added here.
 func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID string, in SendInput, idem string) (SendResult, error) {
+	// Carry the key's domain-wide sending grant into the principal-free core.
+	in.SenderKeyID = p.APIKeyID
 	d, err := s.Store.GetDraft(ctx, p, draftID)
 	if err != nil {
-		return SendResult{}, err
+		// A retry of a send whose response was lost arrives after the draft row
+		// was consumed, so the key is replayed instead of failing the lookup.
+		if !errors.Is(err, store.ErrNotFound) || idem == "" {
+			return SendResult{}, err
+		}
+		replayed, rerr := s.replayDraftSend(ctx, p, draftID, in, idem)
+		if rerr != nil {
+			return SendResult{}, rerr
+		}
+		if replayed == nil {
+			return SendResult{}, err
+		}
+		return *replayed, nil
 	}
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	// Carry the key's domain-wide sending grant into the principal-free core.
-	in.SenderKeyID = p.APIKeyID
 	if in.InboxID == "" {
 		in.InboxID = d.InboxID
 	}
@@ -2076,6 +2097,58 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 		return SendResult{}, err
 	}
 	return s.sendDraftCore(ctx, p.AccountID, d, in, idem)
+}
+
+// replayDraftSend returns the message an identical earlier draft-send request
+// enqueued, or nil when the key is unknown, pending, or unused by this draft.
+// It runs only when the draft lookup failed, so the retry is matched against
+// the stored request fingerprint rebuilt from what that send bound: the caller's
+// fields plus the sent message's own MIME attachments. Ownership is enforced on
+// the replayed message's inbox — the key proves the request repeats, not who
+// may read the result.
+func (s *Service) replayDraftSend(ctx context.Context, p model.Principal, draftID string, in SendInput, idem string) (*SendResult, error) {
+	if idem == "" {
+		return nil, nil
+	}
+	// The key finds the message; the fingerprint check below proves the retry is
+	// the same request. Anything unreadable or mismatched answers "not found",
+	// as a consumed draft did before replay existed.
+	mid, ok, err := s.Store.IdempotentMessage(ctx, p.AccountID, idem)
+	if err != nil || !ok {
+		return nil, nil
+	}
+	m, err := s.Store.GetMessageByID(ctx, p.AccountID, mid)
+	if err != nil {
+		return nil, err
+	}
+	if !p.CanOwn(m.InboxID) {
+		return nil, store.ErrForbidden
+	}
+	in.DraftID = draftID
+	replayIn := in
+	replayIn.InboxID = m.InboxID
+	replayIn.FromAddress = m.From.Address
+	replayIn.FromName = m.From.Name
+	replayIn.To = m.To
+	replayIn.CC = m.CC
+	replayIn.BCC = m.BCC
+	replayIn.Subject = m.Subject
+	replayIn.Text = m.Text
+	replayIn.HTML = m.HTML
+	replayIn.ReplyToMessageID = m.InReplyTo
+	atts, aerr := s.deliveryAttachments(m)
+	if aerr != nil {
+		return nil, nil
+	}
+	replayIn.Attachments = nil
+	for _, a := range atts {
+		replayIn.Attachments = append(replayIn.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: a.Content})
+	}
+	bound, ok, err := s.Store.IdempotentReplay(ctx, p.AccountID, idem, idemRequestHash(replayIn))
+	if err != nil || !ok || bound.ID != m.ID {
+		return nil, nil
+	}
+	return &SendResult{Message: m, ProviderMessageID: m.ProviderMessageID}, nil
 }
 
 // sendDraftCore adds the draft's stored attachments to the send and enqueues it
