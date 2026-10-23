@@ -102,11 +102,10 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 	if err != nil {
 		return err
 	}
-	// The folder is the location. A role filter then narrows it to that folder's
-	// own classification, so folder=Inbox&trashed=true selects nothing and
-	// folder=Sent&direction=outbound lists Sent — what every other inbox kind
-	// answers. Only a system-role folder is a canonical destination; a legacy
-	// custom folder or Archive has none (the reader selects it by label).
+	// The filter binds a folder id, never the caller's raw selector: a legacy
+	// path resolves to its folder here, so the path and id forms select the same
+	// mail instead of the path form silently selecting nothing.
+	f.MailboxID = item.ID
 	switch item.Role {
 	case model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash:
 		// The folder is the location and its role is its membership rule, exactly
@@ -118,7 +117,7 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 			(!f.SpamOnly || item.Role == model.FolderRoleSpam) &&
 			(f.Direction != "outbound" || item.Role == model.FolderRoleSent)
 		if !matches {
-			f.MailboxID = "unsupported:" + folder
+			f.MailboxID = "unsupported:" + item.ID
 			return nil
 		}
 		f.Direction, f.SentOnly, f.SpamOnly = "", false, false
@@ -139,7 +138,7 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 		}
 	default:
 		// Legacy domain custom folders and Archive have no canonical location.
-		f.MailboxID = "unsupported:" + folder
+		f.MailboxID = "unsupported:" + item.ID
 	}
 	return nil
 }
