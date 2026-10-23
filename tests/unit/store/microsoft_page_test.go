@@ -386,3 +386,65 @@ func TestMicrosoftDedupeFoldsOneMessagesTwoRows(t *testing.T) {
 		t.Fatalf("rows = %+v (%v), want the protected pair untouched", rows, err)
 	}
 }
+
+// TestMicrosoftPageRetargetsBackToFirstProviderID proves a row can be written
+// under a second provider id form and then back to the first without the page
+// colliding: microsoft_message_ids allows a row one provider id, so moving the
+// mapping before the insert is what lets the cursor advance instead of the page
+// rolling back and stalling the folder on it forever.
+func TestMicrosoftPageRetargetsBackToFirstProviderID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, acct, inbox := microsoftPageSetup(t)
+
+	if err := s.SaveMicrosoftDelta(ctx, inbox, "inbox-folder", "seed-cursor", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	// The identity the retarget matches on: same Message-ID, stamp, subject, sender.
+	stamped := "2026-10-11T10:00:00Z"
+	seed := func(provider string) *store.MicrosoftDeltaCache {
+		c := microsoftCache(provider, "MMTEST phantom")
+		c.Input.RFCMessageID = "<dup@graph>"
+		c.Input.ReceivedAt = &stamped
+		return c
+	}
+	apply := func(provider, cursor string) {
+		t.Helper()
+		if _, err := s.ApplyMicrosoftDeltaPage(ctx, store.MicrosoftDeltaPage{
+			AccountID: acct, InboxID: inbox, FolderID: "inbox-folder",
+			Initialized: true, Cursor: cursor,
+			Effects: []store.MicrosoftDeltaEffect{{ProviderID: provider, Cache: seed(provider)}},
+		}); err != nil {
+			t.Fatalf("apply page for %s: %v", provider, err)
+		}
+	}
+
+	// The row is first written by a page, so its mapping carries the folder's
+	// delta generation, as the feed's own rows do.
+	apply("first-id", "cursor-1")
+	id, err := s.MicrosoftLocalID(ctx, acct, inbox, "first-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply("second-id", "cursor-2")
+	moved, err := s.MicrosoftLocalID(ctx, acct, inbox, "second-id")
+	if err != nil || moved != id {
+		t.Fatalf("second id resolved to %q (%v), want %q", moved, err, id)
+	}
+	apply("first-id", "cursor-3")
+	back, err := s.MicrosoftLocalID(ctx, acct, inbox, "first-id")
+	if err != nil || back != id {
+		t.Fatalf("first id resolved to %q (%v), want %q", back, err, id)
+	}
+	if _, err = s.MicrosoftLocalID(ctx, acct, inbox, "second-id"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("retired id still mapped: %v", err)
+	}
+	rows, err := s.ListRemoteMessagesFiltered(ctx, acct, inbox, store.RemoteMessageFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v (%v), want one row per message", rows, err)
+	}
+	cursor, _, _, err := s.MicrosoftDelta(ctx, inbox, "inbox-folder")
+	if err != nil || cursor != "cursor-3" {
+		t.Fatalf("cursor = %q (%v), want the last page's cursor", cursor, err)
+	}
+}
