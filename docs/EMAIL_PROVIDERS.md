@@ -325,6 +325,9 @@ removes the Inbox label and keeps Sent, so an archived message still reports
 the Sent folder. Search runs against Gmail, and new mail is detected by polling rather than push
 notifications. Bodies and attachments are fetched on demand rather than stored as
 a full-message archive. Permanent deletion is not available from this connector.
+Gmail records a deleted message's history entry with a delay, so a sync window can
+name a message that is already gone; that message is dropped from the index and
+skipped, and the sync still completes.
 
 References: [Web OAuth](https://developers.google.com/identity/protocols/oauth2/web-server)
 and [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes).
