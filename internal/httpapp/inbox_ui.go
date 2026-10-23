@@ -1074,7 +1074,7 @@ func (s *Server) bulkMoveDestName(r *http.Request, p model.Principal, box model.
 	if dest == "" {
 		return ""
 	}
-	if folder, err := s.Service.Store.GetFolderByPath(r.Context(), p.AccountID, box.ID, dest); err == nil {
+	if folder, err := s.Service.Store.GetFolderDestination(r.Context(), p.AccountID, box.ID, dest); err == nil {
 		if name := strings.TrimSpace(folder.Name); name != "" {
 			return name
 		}
