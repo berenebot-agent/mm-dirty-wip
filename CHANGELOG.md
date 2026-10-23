@@ -6,6 +6,17 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Draft send and approval retries replay instead of returning 404.** A
+  successful send consumes its draft, so a retry of the same request after a
+  lost response previously failed at the draft lookup and never reached the
+  idempotency check — a client following the retry contract could re-create
+  the draft and send a duplicate. Both paths now match the key against the
+  message it enqueued and return that message. The key's fingerprint now
+  includes the draft's attachment bytes, so a key reused for different content
+  still returns 409. See **D155** and `docs/API.md` §9.
+
 ### Changed
 
 - **Outbound idempotency rejects mismatched reuse (API change explicitly

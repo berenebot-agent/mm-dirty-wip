@@ -258,7 +258,11 @@ func TestIdempotencyReserveIsAtomic(t *testing.T) {
 	if _, _, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1", "different-inbox", "request-1"); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("cross-inbox replay err=%v, want conflict", err)
 	}
-	// Release a pending reservation so a failed send can retry.
+	// Reserve, release, then reserve again: a failed send must free its key.
+	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-2", b[0].ID, "request-2")
+	if err != nil || !claimed {
+		t.Fatalf("reserve key-2 claimed=%v err=%v", claimed, err)
+	}
 	if err = s.IdempotencyRelease(ctx, u.AccountID, "key-2"); err != nil {
 		t.Fatal(err)
 	}

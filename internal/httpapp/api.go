@@ -1556,6 +1556,13 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
+		// A consumed draft is replayed by writeDraftResult through the idempotency
+		// key; any other action, or a retry without a key, needs the draft.
+		_, gerr := s.Service.Store.GetDraft(r.Context(), p, id)
+		if gerr != nil && errors.Is(gerr, store.ErrNotFound) && action == "send" && idemKey(r) != "" {
+			s.writeDraftResult(w, r, p, id, action, in.External, http.StatusOK)
+			return
+		}
 		old, err := s.Service.Store.GetDraft(r.Context(), p, id)
 		if err != nil {
 			mapStoreError(w, err)
@@ -1593,12 +1600,15 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p model.Principal, draftID, action string, external bool, okStatus int) {
 	switch action {
 	case "send":
-		d, err := s.Service.Store.GetDraft(r.Context(), p, draftID)
-		if err != nil {
-			mapStoreError(w, err)
+		// A retry of a send whose draft was already consumed replays through the
+		// idempotency key, so a missing draft is not an error on its own.
+		d, derr := s.Service.Store.GetDraft(r.Context(), p, draftID)
+		if derr != nil && !errors.Is(derr, store.ErrNotFound) {
+			mapStoreError(w, derr)
 			return
 		}
-		res, err := s.Service.SendDraft(r.Context(), p, draftID, app.SendInput{InboxID: d.InboxID, FromAddress: d.FromAddress, FromName: d.FromName, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}, idemKey(r))
+		in := app.SendInput{InboxID: d.InboxID, FromAddress: d.FromAddress, FromName: d.FromName, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}
+		res, err := s.Service.SendDraft(r.Context(), p, draftID, in, idemKey(r))
 		if err != nil {
 			mapStoreError(w, err)
 			return
@@ -1633,21 +1643,28 @@ func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := s.Service.Store.GetDraft(r.Context(), p, id)
-	if err != nil {
+	// A retry of an already-consumed draft reaches the idempotency replay inside
+	// SendDraft, which enforces ownership on the replayed message's inbox.
+	missing := errors.Is(err, store.ErrNotFound)
+	if err != nil && !missing {
 		mapStoreError(w, err)
 		return
 	}
-	if !p.CanOwn(d.InboxID) {
+	if missing && idemKey(r) == "" {
+		mapStoreError(w, store.ErrNotFound)
+		return
+	}
+	if !missing && !p.CanOwn(d.InboxID) {
 		mapStoreError(w, store.ErrForbidden)
 		return
 	}
-	if in.To != nil || in.CC != nil || in.BCC != nil || in.Subject != nil || in.Text != nil || in.HTML != nil || in.FromAddress != "" || in.Sender != "" {
+	if !missing && (in.To != nil || in.CC != nil || in.BCC != nil || in.Subject != nil || in.Text != nil || in.HTML != nil || in.FromAddress != "" || in.Sender != "") {
 		if _, err = s.Service.Store.UpdateDraft(r.Context(), p, patchDraft(in, d)); err != nil {
 			mapStoreError(w, err)
 			return
 		}
 	}
-	if len(in.Attachments) > 0 {
+	if !missing && len(in.Attachments) > 0 {
 		if _, err = s.persistDraftAttachments(r.Context(), p, id, in.Attachments); err != nil {
 			mapStoreError(w, err)
 			return
