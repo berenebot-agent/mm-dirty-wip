@@ -1210,6 +1210,36 @@ now accept `200` for reply. See decision D153.
 
 ### Send
 
+#### Idempotency (all outbound actions)
+
+`Idempotency-Key` is optional. Keys share one account-wide namespace across
+send, reply, forward, draft-send and approval; they are **not** scoped to a route.
+Use a fresh key for each distinct operation and retain it only for retries.
+
+Each key is bound to the parsed send inputs before send-time defaults are
+applied: inbox, reply/forward source (which also identifies the action), sender,
+recipients, subject, text, HTML and attachment names, types and bytes. Draft and
+approval identifiers are included when present. JSON formatting and recipient
+string-versus-array syntax do not affect the binding, but changed input values
+(including an omitted sender versus an explicit sender) do.
+
+- An identical retry after enqueue returns the original message with `200`,
+  without sending again, even while that message is awaiting delivery.
+- A different action, source message, inbox or send input with the same key
+  returns `409` with `code: "conflict"`; no new message is enqueued.
+- Concurrent reuse while enqueue is in flight also returns `409`.
+- Failed enqueue operations release the key. Abandoned pending reservations
+  with no enqueued message expire after 15 minutes.
+
+Existing route validation runs before replay: source messages and drafts must
+still exist and be accessible. In particular, a consumed draft can return
+`404` before reaching the shared outbound idempotency check.
+
+**Upgrade compatibility (D154):** Existing keys created before request binding
+was introduced have no fingerprint and return `409`, even for identical retries.
+Their messages are not sent again. Reconcile the original message's status
+before using a fresh key; blindly changing the key can send a duplicate.
+
 ```http
 POST /v1/send
 Idempotency-Key: <caller-generated-key>

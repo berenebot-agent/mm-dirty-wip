@@ -8,6 +8,16 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **Outbound idempotency rejects mismatched reuse (API change explicitly
+  approved).** Keys remain account-wide across send/reply/forward and draft
+  sends/approvals, but are now bound to the send inputs, action/source, sender
+  and attachments. Reusing a key for a different request returns **409 Conflict**
+  (`code: "conflict"`) rather than silently returning an unrelated message.
+  Identical retries still replay the original message without sending again.
+  Legacy keys without a fingerprint fail closed with 409; reconcile their
+  original messages before choosing a new key to avoid duplicate delivery.
+  See **D154** and `docs/API.md` §9.
+
 - **Common outbound API response (API change explicitly approved).** Send,
   reply, forward, draft-send, draft writes with `action: "send"`, and draft
   approval now return **200 OK** with the same `queued`, `messageId`,

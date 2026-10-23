@@ -6378,3 +6378,38 @@ idempotency controls; no new auth requirement or role is introduced.
 **Complexity:** One new route, thin shared reply/forward handling, one shared
 outbound response writer, and contract/client/test updates. No migration,
 dependency, runtime service or new forwarding engine.
+
+## D154 — Bind outbound idempotency keys to the send request
+
+**Requirement:** UAT demonstrated that forwarding and then replying with the
+same key returned the forward as a successful reply, without enqueueing a
+reply. Send/reply already shared this account-wide key space before D153;
+forwarding exposed another instance of the existing silent mismatch.
+
+**Decision (2026-10-23, API change explicitly human approved):** Retain one
+account-wide namespace but bind each reservation to a SHA-256 fingerprint of
+the parsed send inputs before send-time defaults or original message content
+are added. Include inbox, reply/forward source identifiers, sender address and
+name, recipients, subject, text, HTML, attachment metadata and bytes, plus
+draft/approval identifiers when present. Exclude credential/client attribution
+so rotating a credential does not itself change a retry's content.
+
+Reuse for a different action, source message, inbox or content returns **409
+Conflict**, `code: "conflict"`, instead of 200 with an unrelated message.
+Identical retries after durable enqueue retain 200 and replay the original
+message. In-flight reservations also return 409. Failed enqueues release the
+binding; abandoned reservations with no message retain the 15-minute lease.
+
+**Compatibility:** Old reservations cannot be reliably matched to the original
+request because only the resulting message was stored. Legacy keys without a
+fingerprint therefore return 409, never enqueue or claim a match. Clients must
+reconcile the original message before choosing a fresh key to avoid duplicates.
+Matching uses parsed inputs, not effective message equivalence: for example,
+omitting the sender and explicitly supplying the default sender are different
+inputs. JSON formatting and string-versus-array recipient syntax are not.
+
+**Complexity:** One input hash at the shared outbound boundary and an atomic
+binding check in the existing reservation transaction. Store only the hash in
+the previously unused `outbound_idempotency.result_json` metadata column and
+preserve it when enqueue completes the reservation. No schema migration,
+dependency, runtime service or new credential handling.
