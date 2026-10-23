@@ -390,3 +390,68 @@ func TestLegacySpamFolderPathMatchesIDForm(t *testing.T) {
 		t.Fatal("folder tab by path lists a message that is not Spam")
 	}
 }
+
+// TestLegacyFolderPathMatchesIDFormOnEveryRoute proves a domain inbox's legacy
+// folder= path form selects exactly what the id form selects. The path used to
+// be compared against the message's folder id, so the path form silently
+// selected nothing on every route that reads the local store.
+func TestLegacyFolderPathMatchesIDFormOnEveryRoute(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	filed := seedInbound(t, svc, box, "legacy-path-inbox", "<legacy-path-inbox@test>", "Filed inbox", "needle")
+	inboxFolder, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(inboxFolder.Path, "Inbox") {
+		t.Fatalf("seeded Inbox folder path = %q, the legacy form below assumes Inbox", inboxFolder.Path)
+	}
+	key := adminKey(t, svc, u)
+	// The fixture has one inbox, so the account-wide routes resolve the path
+	// without ambiguity.
+	for _, route := range []struct {
+		prefix, suffix string
+	}{
+		{"/v1/inboxes/" + box.ID + "/messages?", ""},
+		{"/v1/messages?inbox=" + box.ID + "&", ""},
+		{"/v1/messages?", ""},
+		{"/v1/inboxes/" + box.ID + "/search?", "q=needle&"},
+		{"/v1/search?inbox=" + box.ID + "&", "q=needle&"},
+		{"/v1/search?", "q=needle&"},
+		{"/v1/inboxes/" + box.ID + "/threads?", ""},
+		{"/v1/threads?inbox=" + box.ID + "&", ""},
+	} {
+		byPath := apiGet(t, h, route.prefix+route.suffix+"folder=Inbox", key)
+		byID := apiGet(t, h, route.prefix+route.suffix+"folder="+url.QueryEscape(inboxFolder.ID), key)
+		if byPath.Code != http.StatusOK || byID.Code != http.StatusOK {
+			t.Fatalf("%s: path %d %s / id %d %s", route.prefix, byPath.Code, byPath.Body.String(), byID.Code, byID.Body.String())
+		}
+		var pathPage, idPage struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(byPath.Body.Bytes(), &pathPage); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(byID.Body.Bytes(), &idPage); err != nil {
+			t.Fatal(err)
+		}
+		if len(idPage.Items) == 0 {
+			t.Fatalf("%s: the id form is empty, the fixture is wrong", route.prefix)
+		}
+		if len(pathPage.Items) != len(idPage.Items) {
+			t.Fatalf("%s: path form returned %d rows, id form %d", route.prefix, len(pathPage.Items), len(idPage.Items))
+		}
+		found := false
+		for _, item := range pathPage.Items {
+			if item.ID == filed.ID || item.ID == filed.ThreadID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: the path form did not select the Inbox message %s", route.prefix, filed.ID)
+		}
+	}
+}
