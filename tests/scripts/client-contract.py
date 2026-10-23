@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic onboarding-client check; needs Python 3, bash, curl and jq."""
+"""Deterministic client contract check; needs Python 3, bash, curl and jq."""
 
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -11,8 +11,20 @@ from urllib.parse import parse_qs, urlsplit
 
 def main():
     requests = []
+    sends = []
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            sends.append((urlsplit(self.path), body, self.headers["Idempotency-Key"]))
+            response = json.dumps({"queued": True, "messageId": "<test>",
+                                   "provider_message_id": "", "message": {"id": "msg_test"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
         def do_GET(self):
             assert self.headers["Authorization"] == "Bearer test-key"
             requests.append(urlsplit(self.path))
@@ -55,6 +67,22 @@ def main():
                     assert query["folder"] == ["Projects"], query
                     assert query["inbox"] == ["inb_test"], query
                     assert "cursor" not in query, query
+            for action in ["send", "reply", "forward"]:
+                args = [action] + ([] if action == "send" else ["msg_source"])
+                args += ["--to", "friend@example.test", "--cc", "cc@example.test",
+                         "--bcc", "bcc@example.test", "--subject", "Custom",
+                         "--text", "note", "--sender", "alias@example.test",
+                         "--wait", "--idempotency-key", "test-idem"]
+                result = subprocess.run(command + args, capture_output=True, text=True, timeout=10)
+                assert result.returncode == 0, (filename, args, result.stderr)
+                assert json.loads(result.stdout)["queued"] is True
+                path, body, idem = sends.pop()
+                assert path.path == ("/v1/send" if action == "send" else f"/v1/messages/msg_source/{action}")
+                assert parse_qs(path.query) == {"wait": ["true"]}
+                assert body == {"to": ["friend@example.test"], "cc": ["cc@example.test"],
+                                "bcc": ["bcc@example.test"], "subject": "Custom", "text": "note",
+                                "sender": "alias@example.test", **({"inbox_id": "inb_test"} if action == "send" else {})}, body
+                assert idem == "test-idem", idem
     finally:
         server.shutdown()
         worker.join()

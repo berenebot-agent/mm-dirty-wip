@@ -482,6 +482,7 @@ var v1Routes = []apiRoute{
 	{"GET /v1/messages/{id}/attachments/{part}", (*Server).apiMessageAttachmentPart},
 	{"GET /v1/messages/{id}/content", (*Server).apiMessageContent},
 	{"POST /v1/messages/{id}/reply", (*Server).apiReply},
+	{"POST /v1/messages/{id}/forward", (*Server).apiForward},
 	{"GET /v1/attachments/{id}", (*Server).apiAttachment},
 	{"GET /v1/threads", (*Server).apiThreads},
 	{"GET /v1/threads/{id}", (*Server).apiThread},

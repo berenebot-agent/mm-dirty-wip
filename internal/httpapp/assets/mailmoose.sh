@@ -288,6 +288,7 @@ commands:
   remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                    send (Owner)
   reply            POST /v1/messages/{id}/reply    reply (Owner)
+  forward          POST /v1/messages/{id}/forward  forward (Owner)
   mark-read        PATCH  /v1/messages/{id}         set read=true
   mark-unread      PATCH  /v1/messages/{id}         set read=false
   label            PATCH  /v1/messages/{id}         replace labels
@@ -313,7 +314,8 @@ common flags:
   send:          --to ADDR --cc ADDR --bcc ADDR --subject TEXT --text TEXT
                  --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
-  reply:         --text TEXT --html HTML --attach FILE --sender ADDR --wait
+  reply/forward: --to ADDR --cc ADDR --bcc ADDR --subject TEXT --text TEXT
+                 --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
   label:         --labels a,b --clear-labels
   drafts/draft:  --create --to --cc --bcc --subject --text --html --from
@@ -639,15 +641,7 @@ build_send_body() {
 }
 
 build_reply_body() {
-	jq -n -c \
-		--arg text "$TEXT" --arg html "$HTML" --arg sender "$SENDER" \
-		--argjson has_text "$TEXT_SET" --argjson has_html "$HTML_SET" \
-		--slurpfile att "$ATT_JSON_FILE" \
-		'{}
-     + (if $has_text==1 then {text:$text} else {} end)
-     + (if $has_html==1 then {html:$html} else {} end)
-     + (if $sender!="" then {sender:$sender} else {} end)
-     + (if ($att[0]|length)>0 then {attachments:$att[0]} else {} end)'
+	build_send_body | jq -c 'del(.inbox_id) | if (.to|length)==0 then del(.to) else . end'
 }
 
 # build_draft_body INCLUDE_INBOX(0|1)
@@ -876,11 +870,14 @@ cmd_send() {
 cmd_reply() {
 	need_pos "$COMMAND"
 	reject_extra
+	if [ "$COMMAND" = "forward" ] && [ "${#TO_PARTS[@]}" -eq 0 ]; then
+		die_usage "forward: --to is required"
+	fi
 	build_attachments
 	local body idem path
 	body="$(build_reply_body)"
 	idem="$(idem_for_request)"
-	path="/v1/messages/$POSITION/reply"
+	path="/v1/messages/$POSITION/$COMMAND"
 	if [ "$WAIT" -eq 1 ]; then path="$path?wait=true"; fi
 	api POST "$path" "$body" "$idem" "$TABLE_DEFAULT"
 }
@@ -1590,7 +1587,7 @@ main() {
 	handoffs) cmd_handoffs ;;
 	remote-role) cmd_remote_role ;;
 	send) cmd_send ;;
-	reply) cmd_reply ;;
+	reply|forward) cmd_reply ;;
 	mark-read) cmd_mark_read ;;
 	mark-unread) cmd_mark_unread ;;
 	label) cmd_label ;;

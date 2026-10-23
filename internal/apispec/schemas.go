@@ -559,25 +559,30 @@ var schemas = map[string]any{
 	"ReplyBody": obj(map[string]any{
 		"sender":      str("From identity: the inbox primary or one of its aliases."),
 		"to":          stringOrArray("Explicit reply recipients. Required when direction is unknown; otherwise defaults to the sender for inbound mail or the original To recipients for outbound mail."),
+		"cc":          stringOrArray("Optional Cc recipients; a single address or a list."),
+		"bcc":         stringOrArray("Optional Bcc recipients; a single address or a list."),
+		"subject":     str("Optional subject override; defaults to Re: plus the original subject."),
 		"text":        str("Plain-text body."),
 		"html":        str("HTML body."),
 		"attachments": map[string]any{"type": "array", "items": Ref("SendAttachment")},
 	}),
 
+	"ForwardBody": obj(map[string]any{
+		"sender":      str("From identity, with the same permissions as send/reply."),
+		"to":          stringOrArray("Required: at least one recipient; a single address or a list."),
+		"cc":          stringOrArray("Optional Cc recipients; a single address or a list."),
+		"bcc":         stringOrArray("Optional Bcc recipients; a single address or a list."),
+		"subject":     str("Optional subject override; defaults to Fwd: plus the original subject."),
+		"text":        str("Optional note before the automatically included original plain text."),
+		"html":        str("Optional HTML body; the original is quoted in plain text, not HTML."),
+		"attachments": map[string]any{"type": "array", "description": "Additional base64 attachments; original attachments are included automatically.", "items": Ref("SendAttachment")},
+	}, "to"),
+
 	"SendQueued": obj(map[string]any{
-		"queued":              boolean("Whether the message entered the outbox."),
+		"queued":              boolean("True while the message status is pending; false after delivery or failure."),
 		"messageId":           str("RFC 5322 Message-ID."),
 		"provider_message_id": str("Provider-assigned message id."),
 		"message":             Ref("Message"),
-	}),
-	"ReplyResult": obj(map[string]any{
-		"provider_message_id": str("Provider-assigned message id."),
-		"message":             Ref("Message"),
-	}),
-	"ApproveResult": obj(map[string]any{
-		"queued":    boolean("Whether the approved message entered the outbox."),
-		"messageId": str("RFC 5322 Message-ID."),
-		"message":   Ref("Message"),
 	}),
 	"DraftWriteResult": map[string]any{
 		"description": "The saved draft, or the queued send when action=send.",

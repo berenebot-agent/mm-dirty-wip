@@ -111,14 +111,16 @@ const agentGuideNarrative = "## Folders and labels\n" +
 	"- External requests expire after `APPROVAL_EXPIRY_HOURS` (default 48, `0` disables); an expired request returns the draft to `draft` and the token is permanently dead.\n" +
 	"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`, `draft.approval_expired`.\n" +
 	"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
-	"## Send and reply (Owner)\n" +
+	"## Send, reply and forward (Owner)\n" +
 	"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery. Add `\"sender\":\"sales@example.com\"` to send as one of the inbox's aliases (provider resolved from that alias's domain).\n" +
 	"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}` — add `?wait=true` to block until delivery\n" +
-	"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
+	"- `POST /v1/messages/{id}/forward` with `{\"to\":[\"a@b.c\"],\"text\":\"Optional note\"}` — starts a new conversation, defaults to a Fwd: subject, and includes the original plain text and attachments. Works for local and standalone messages; original HTML formatting is not carried. Explicit to recipients are required.\n" +
+	"- Send, reply and forward share optional sender, cc, bcc, subject, text, html and base64 attachments: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`. Reply defaults To and subject from the original; forward defaults only subject.\n" +
+	"- Every outbound enqueue (send, reply, forward, draft send, draft writes with action=send, and approval) returns HTTP 200 with `{\"queued\":true,\"messageId\":\"<...>\",\"provider_message_id\":\"\",\"message\":{...}}`. All support ?wait=true (up to 30 seconds; timeout 504); queued is true only while status is pending. Inspect message.status for sent or failed.\n" +
 	"- Send the JSON body inline in a single command, or use `GET /examples/python` (stdlib only) or `GET /examples/bash` (needs `curl` + `jq`); never stage it in a temporary file or pass `curl --data-binary @file`.\n" +
 	"- Use an `Idempotency-Key` header to make sends retry-safe. Keys are scoped to the account and the inbox used by the request. Repeating a completed key returns the original message without sending again; reusing it concurrently returns a conflict, and a key used for another inbox also conflicts. Failed enqueue operations release the key; abandoned pending reservations expire after 15 minutes.\n\n" +
 	"## Outbox notes\n" +
-	"- Messages are enqueued by send/reply/approved drafts; watch `outbox` for pending and failed sends before retrying or cancelling.\n\n" +
+	"- Messages are enqueued by send/reply/forward/approved drafts; watch `outbox` for pending and failed sends before retrying or cancelling.\n\n" +
 	"Roles are assigned per mailbox: Read, Assistant, Owner. Admin is account-wide.\n"
 
 const agentGuideMailboxContract = "## One mailbox contract\n" +

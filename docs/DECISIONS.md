@@ -154,6 +154,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D148: Connectors return to the dashboard Clients list behind a per-admin toggle](#d148--connectors-return-to-the-dashboard-clients-list-behind-a-per-admin-toggle)
 - [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
 - [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
+- [D153: Forwarding and a common outbound API response](#d153--forwarding-and-a-common-outbound-api-response)
 
 ---
 
@@ -6336,3 +6337,44 @@ connection never looks healthy.
 category-creation path, and a cache write ordered after the provider's
 acceptance. No new dependency, service, secret handling or schema change; the
 permission is delegated by the signed-in user and is not stored separately.
+
+## D153 — Forwarding and a common outbound API response
+
+**Requirement:** UAT found that forwarding was available in the UI but not the
+public API. Before the major beta release, outbound operations should expose
+one predictable response rather than carry separate send/reply/approval shapes.
+
+**Decision (2026-10-23, API change explicitly human approved):** Expose
+`POST /v1/messages/{id}/forward` through the same `Service.Send` forwarding
+path as the UI. The source determines the inbox; Owner/account Admin may
+forward to explicit `to` recipients, with optional `sender`, `cc`, `bcc`,
+`subject`, `text`, `html` and base64 `attachments`. Shared fields retain the
+send types (including string-or-array recipients). Reply additionally accepts
+the existing UI compose controls `cc`, `bcc` and subject override.
+
+Every outbound enqueue response — send, reply, forward, draft-send, draft
+writes with `action: "send"`, and approval — returns **200 OK** with exactly
+`queued`, `messageId`, `provider_message_id` and `message`. All use one response
+writer and support `?wait=true` (30-second maximum; 504 on timeout). `queued`
+means the returned status is pending, not that delivery succeeded. A terminal
+delivery failure is represented by the message's failed status. Draft saves
+and approval-request writes still return Drafts, and errors keep their existing
+envelopes. The new forwarding route uses the common mailbox-error mapping for
+remote source failures; existing reply error statuses remain unchanged.
+
+**Compatibility:** Reply changes from 201 to 200 and gains `queued` and
+`messageId`. Approval gains `provider_message_id` and derives `queued` from the
+actual message status. Send/draft-send retain their existing 200 and field
+names, including the compatibility spelling `messageId`. Keeping 200 avoids
+changing the majority of existing outbound callers. Schemas, agent guidance,
+API documentation and the bundled Python/Bash clients agree on the contract.
+
+**Behavior retained:** A forward starts a new conversation, adds the original
+plain text and attachments automatically, and defaults its subject to `Fwd:`.
+It does not preserve original HTML formatting. Local and live remote sources
+share the existing sender/ownership, spam, internal-message, size, quota and
+idempotency controls; no new auth requirement or role is introduced.
+
+**Complexity:** One new route, thin shared reply/forward handling, one shared
+outbound response writer, and contract/client/test updates. No migration,
+dependency, runtime service or new forwarding engine.
