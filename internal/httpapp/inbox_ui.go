@@ -1722,16 +1722,13 @@ func formAddresses(r *http.Request, name string) []string {
 // came from) and falls back to the inbox folder. Only same-origin relative
 // paths are accepted to avoid open-redirect.
 func returnTo(r *http.Request, inboxID, fallbackFolder string) string {
-	dest := strings.TrimSpace(r.Form.Get("return_to"))
-	// Reject scheme-relative forms ("//host") and any backslash, which browsers
-	// may normalize to a slash and turn into an off-site redirect.
-	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") || strings.Contains(dest, "\\") {
-		dest = "/ui/inboxes/" + inboxID
-		if fallbackFolder != "" {
-			dest += "/" + fallbackFolder
-		}
+	dest := "/ui/inboxes/" + inboxID
+	if fallbackFolder != "" {
+		dest += "/" + fallbackFolder
 	}
-	return dest
+	// safePath rejects the scheme-relative ("//host") and backslash forms
+	// browsers may normalize into an off-site redirect.
+	return safePath(r.Form.Get("return_to"), dest)
 }
 
 func rewriteCIDs(body string, atts []model.Attachment) string {
