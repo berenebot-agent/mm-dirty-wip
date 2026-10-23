@@ -629,6 +629,23 @@ func (s *Store) ListFolders(ctx context.Context, accountID, inboxID string) ([]m
 		return nil, err
 	}
 	rows.Close()
+	// A local mailbox's folders hold local messages, which the remote index does
+	// not count: its counts come from the same membership rules the message
+	// listing uses, so a folder's count is the size of the view a reader gets.
+	if kind, kerr := s.inboxKind(ctx, accountID, inboxID); kerr == nil && kind != model.InboxKindStandalone {
+		counts, cerr := s.localFolderMessageCounts(ctx, accountID, inboxID)
+		if cerr != nil {
+			return nil, cerr
+		}
+		for i := range out {
+			if count, ok := counts[out[i].Role]; ok {
+				out[i].MessageCount, out[i].UnreadCount = int64(count[0]), int64(count[1])
+			}
+		}
+		return out, nil
+	} else if kerr != nil {
+		return nil, kerr
+	}
 	counts, err := s.CountRemoteFolderMessages(ctx, accountID, inboxID)
 	if err != nil {
 		return nil, err
