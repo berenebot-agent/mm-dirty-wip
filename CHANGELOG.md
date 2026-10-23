@@ -8,6 +8,20 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **Common outbound API response (API change explicitly approved).** Send,
+  reply, forward, draft-send, draft writes with `action: "send"`, and draft
+  approval now return **200 OK** with the same `queued`, `messageId`,
+  `provider_message_id` and `message` fields. **Reply previously returned
+  201**; clients checking that status must accept 200 instead. Reply gains
+  `queued`/`messageId`; approval gains `provider_message_id`. All these send
+  paths support `?wait=true`, and `queued` reflects whether the returned
+  message is still pending. Reply also accepts optional `cc`, `bcc` and a
+  `subject` override. New `POST /v1/messages/{id}/forward` exposes the UI's
+  existing forwarding behavior for local and standalone mailboxes: a new
+  conversation containing the original plain text and attachments, with
+  explicit recipients and optional compose fields. Bundled Python/Bash
+  clients include `forward`. See **D153** and `docs/API.md` §9.
+
 - **API Beta 3 — folders and labels are now two separate things (API change
   explicitly approved).** A message's location is its `folder_id`: one stable
   MailMoose folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its

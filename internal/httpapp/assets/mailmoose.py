@@ -122,6 +122,7 @@ commands:
   remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                   send (Owner)
   reply            POST /v1/messages/{id}/reply   reply (Owner)
+  forward          POST /v1/messages/{id}/forward forward (Owner)
   mark-read        PATCH  /v1/messages/{id}        set read=true
   mark-unread      PATCH  /v1/messages/{id}        set read=false
   label            PATCH  /v1/messages/{id}        replace labels
@@ -958,6 +959,12 @@ def cmd_send(client, args):
 
 def cmd_reply(client, args):
     body = {}
+    for field in ("to", "cc", "bcc"):
+        values = split_values(getattr(args, field))
+        if values:
+            body[field] = values
+    if args.subject is not None:
+        body["subject"] = args.subject
     if args.text is not None:
         body["text"] = args.text
     if args.html is not None:
@@ -969,7 +976,7 @@ def cmd_reply(client, args):
     params = {"wait": "true"} if args.wait else None
     response = client.request(
         "POST",
-        "/v1/messages/" + args.id + "/reply",
+        "/v1/messages/" + args.id + "/" + args.message_action,
         params=params,
         body=body,
         headers=idem_headers(args),
@@ -1488,31 +1495,23 @@ def build_parser():
     )
     add_idem(p)
 
-    p = command(
-        "reply",
-        "POST /v1/messages/{id}/reply - reply from the message's inbox (Owner); enqueues and returns unless --wait.",
-        cmd_reply,
-    )
-    p.add_argument("id", metavar="ID", help="message id to reply to")
-    p.add_argument("--text", metavar="TEXT", default=None, help="plain-text body")
-    p.add_argument("--html", metavar="HTML", default=None, help="HTML body")
-    p.add_argument(
-        "--attach",
-        action="append",
-        metavar="FILE",
-        help="attach a file (repeatable); base64-encoded into the JSON body",
-    )
-    p.add_argument(
-        "--sender",
-        metavar="ADDR",
-        help="From identity: the inbox primary or one of its aliases",
-    )
-    p.add_argument(
-        "--wait",
-        action="store_true",
-        help="block until delivery instead of returning as soon as it is queued",
-    )
-    add_idem(p)
+    for action in ("reply", "forward"):
+        p = command(
+            action,
+            "POST /v1/messages/{id}/" + action + " - " + action + " from the message's inbox (Owner); enqueues and returns unless --wait.",
+            cmd_reply,
+        )
+        p.set_defaults(message_action=action)
+        p.add_argument("id", metavar="ID", help="source message id")
+        for field in ("to", "cc", "bcc"):
+            p.add_argument("--" + field, action="append", required=action == "forward" and field == "to", metavar="ADDR", help="repeatable or comma-separated recipients")
+        p.add_argument("--subject", metavar="TEXT", default=None, help="override the derived subject")
+        p.add_argument("--text", metavar="TEXT", default=None, help="plain-text body or forward note")
+        p.add_argument("--html", metavar="HTML", default=None, help="HTML body")
+        p.add_argument("--attach", action="append", metavar="FILE", help="attach a file (repeatable)")
+        p.add_argument("--sender", metavar="ADDR", help="From identity")
+        p.add_argument("--wait", action="store_true", help="block until delivery")
+        add_idem(p)
 
     p = command(
         "mark-read",
