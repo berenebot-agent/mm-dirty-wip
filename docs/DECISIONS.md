@@ -6442,3 +6442,41 @@ to a message that caller sent.
 helper shared by send and approval, and the handler change that lets a
 `send` action on a consumed draft reach the service. No migration, dependency or
 new route.
+
+## D156 — Freeze the common mailbox contract for public Beta 3
+
+**Requirement:** Domain and standalone mailboxes must present one understandable
+client contract before public promotion, without requiring provider-name branches
+for ordinary operations. The review found undiscoverable remote attachments,
+arrival handles that could be read but not mutated, missing capability distinctions,
+truncated threads that looked exhaustive and inaccuracies in OpenAPI.
+
+**Decision (2026-10-23):** Retain existing routes, array/envelope shapes, local
+attachment IDs and remote event payloads. Add portable attachment `download_url`
+descriptors using the existing bounded transient MIME fetch; remote listing can
+perform a full download and fail when offline, but never archives a body or marks
+mail read. Arrival handles are aliases for canonical message IDs on reads and
+mutations; authorization and remote-generation checks remain in force. Mutation
+polling locations use canonical IDs.
+
+Add `archive` and `purge` mailbox support flags, separate from authorization and
+connection readiness. Thread detail exposes preview completeness and a URL for
+the existing paginated message API; remote thread filtering spans indexed folders.
+Legacy thread-message arrays retain their existing behavior. Correct OpenAPI to
+describe the HTTP contract, rather than changing server behavior to match stale
+schema definitions.
+
+**Explicitly approved API shape change:** Ben approved changing unsupported
+mailbox operations from HTTP 409 / `code: "conflict"` to HTTP 409 /
+`code: "unsupported_operation"`. Ordinary conflict codes remain unchanged.
+Action-bearing failures/timeouts also include the standard `error` and `code`
+fields, retaining their existing action records and statuses.
+
+**Tag semantics clarified by Ben:** Tags are their text, not immutable objects.
+`tag:Name` changes on rename, and the rename updates the tag on every message
+carrying it in that inbox. No opaque tag-ID migration is introduced.
+
+**Compatibility:** From Beta 3 onward, v1 additions may introduce optional fields,
+capabilities, routes and event types. Clients ignore unknown response fields/events
+and preserve opaque references. Breaking contract changes require a new API
+version. No new service, dependency or database migration is needed here.

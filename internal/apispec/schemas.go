@@ -116,12 +116,37 @@ var attachmentSchema = obj(map[string]any{
 
 var schemas = map[string]any{
 	"MessageActionControl": obj(map[string]any{"action": str("retry or dismiss")}, "action"),
-	"MessageActionResult":  obj(map[string]any{"queued": boolean("Whether the durable action is still pending."), "action": obj(map[string]any{"id": str("Action handle."), "inbox_id": str(""), "message_id": str(""), "state": str("pending, running, done, failed or ambiguous"), "error": str("Public failure detail."), "attempts": integer("Attempts made."), "empty_trash": Ref("EmptyTrashProgress")})}),
-	"EmptyTrashProgress":   obj(map[string]any{"phase": str("discovering or purging; total is only final once discovery ends."), "total": integer("Targets discovered."), "purged": integer("Targets confirmed gone."), "queued": integer("Targets linked to purge actions."), "failed": integer("Failed purge actions."), "ambiguous": integer("Uncertain purge actions requiring verification.")}),
-	"EmptyTrashResult":     obj(map[string]any{"purged": integer("Total confirmed purged after the entire operation completes."), "action": obj(map[string]any{"id": str("Parent action handle."), "state": str("Action state."), "empty_trash": Ref("EmptyTrashProgress")})}),
+	"MessageActionResult":  obj(map[string]any{"queued": boolean("Whether the durable action is still pending."), "action": Ref("MessageAction")}, "action"),
+	"MessageOrAction":      map[string]any{"oneOf": []any{Ref("Message"), Ref("MessageActionResult")}},
+	"MessageAction": obj(map[string]any{
+		"id": str("Action handle."), "inbox_id": str("Owning inbox."), "message_id": str("Canonical message id; empty for an inbox-wide action."),
+		"input": Ref("MessageActionInput"), "state": str("pending, running, done, failed or ambiguous"), "error": str("Public failure detail."),
+		"attempts": integer("Attempts made."), "created_at": ts("Submission time."), "inbox_name": str("Inbox display name or address, when available."), "empty_trash": Ref("EmptyTrashProgress"),
+	}, "id", "inbox_id", "message_id", "input", "state", "attempts", "created_at"),
+	"MessageActionInput": obj(map[string]any{
+		"kind": str("Action kind."), "destination": str("Move destination."), "read": boolean("Requested read state."), "spam": boolean("Requested spam state."),
+		"labels": stringList("Replacement tags."), "label": str("Tag name."), "label_op": str("add or remove"), "provider_label": boolean("Provider-owned tag."),
+		"trash_target": map[string]any{"type": "object", "description": "Empty Trash coordinator target metadata."},
+	}, "kind"),
+	"MessageActionList": obj(map[string]any{
+		"items": arrayOf("MessageAction", "Visible actions; at most 200."), "syncs": arrayOf("MetadataSyncStatus", "Unsettled remote synchronization."),
+		"connections": map[string]any{"type": "object", "additionalProperties": Ref("InboxConnection")}, "csrf": str("Session CSRF token; empty for bearer clients."),
+	}, "items", "syncs", "connections", "csrf"),
+	"MetadataSyncStatus": obj(map[string]any{
+		"inbox_id": str("Owning inbox."), "name": str("Inbox name."), "address": str("Inbox address."), "provider": str("Mailbox provider."),
+		"state": str("queued, running, waiting, paused or error"), "phase": str("initial or refresh"), "indexed": integer("Indexed messages."),
+		"total": integer("Known total; zero means unknown."), "updated_at": ts("Last update."), "error": str("Safe failure detail."),
+	}, "inbox_id", "state", "indexed", "total"),
+	"InboxConnection": obj(map[string]any{
+		"state": str("connected or disconnected"), "provider": str("Mailbox provider."), "label": str("Provider display name."),
+		"action_label": str("Reconnect control label."), "detail": str("Safe connection detail."), "reconnect": str("Reconnect wizard kind."),
+	}, "state"),
+	"EmptyTrashProgress": obj(map[string]any{"phase": str("discovering or purging; total is only final once discovery ends."), "total": integer("Targets discovered."), "purged": integer("Targets confirmed gone."), "queued": integer("Targets linked to purge actions."), "failed": integer("Failed purge actions."), "ambiguous": integer("Uncertain purge actions requiring verification.")}),
+	"EmptyTrashResult":   obj(map[string]any{"purged": integer("Total confirmed purged after the entire operation completes."), "action": obj(map[string]any{"id": str("Parent action handle."), "state": str("Action state."), "empty_trash": Ref("EmptyTrashProgress")})}),
 	"Error": obj(map[string]any{
-		"error": str("Human-readable error message."),
-		"code":  str("Stable machine-readable error code."),
+		"error":  str("Human-readable error message."),
+		"code":   str("Stable machine-readable error code."),
+		"action": Ref("MessageAction"),
 	}, "error", "code"),
 
 	"Address": obj(map[string]any{
@@ -141,12 +166,13 @@ var schemas = map[string]any{
 	}),
 
 	"Attachment": obj(map[string]any{
-		"id":           str("Attachment id."),
+		"id":           str("Stored attachment id; empty for a remote MIME part. Use download_url for portable downloads."),
 		"message_id":   str("Owning message id."),
 		"filename":     str("File name."),
 		"content_type": str("IANA media type."),
 		"size":         integer("Size in bytes."),
 		"content_id":   str("MIME Content-ID for inline parts."),
+		"download_url": str("Authenticated relative download URL returned by message attachment listings; use verbatim with the same bearer credential."),
 	}),
 
 	"Message": obj(map[string]any{
@@ -211,6 +237,7 @@ var schemas = map[string]any{
 	"MessageList":    arrayOf("Message", "Newest-first list of messages."),
 	"AttachmentList": arrayOf("Attachment", "Message attachments."),
 	"LabelList":      stringList("Distinct labels in use."),
+	"LabelEnvelope":  obj(map[string]any{"items": stringList("Legacy tag names."), "completeness": str("Listing completeness."), "next_cursor": str("Continuation."), "errors": arrayOf("InboxFailure", "Source failures.")}, "items", "completeness"),
 	"MailboxLabel": obj(map[string]any{
 		"id":         str("Label id: tag:Name. Use it verbatim as label_id. Folder ids are not labels."),
 		"name":       str("Human-readable label name."),
@@ -280,6 +307,10 @@ var schemas = map[string]any{
 	"MessageEnvelope": commonEnvelopeSchema("Message", "Message page."),
 	"ThreadEnvelope":  commonEnvelopeSchema("Thread", "Thread page."),
 	"RemoteConfig": obj(map[string]any{
+		"provider":          str("imap, google, microsoft or one"),
+		"poll_seconds":      integer("Effective quick-poll interval in seconds; zero disables it."),
+		"full_sync_minutes": integer("Effective full synchronization interval in minutes."),
+		"connection":        Ref("InboxConnection"),
 		"host":              str("IMAP server hostname."),
 		"port":              integer("IMAP port."),
 		"username":          str("IMAP login identity."),
@@ -339,8 +370,9 @@ var schemas = map[string]any{
 		"indexed_at": ts("When the reconcile completed."),
 	}, "status"),
 	"RemoteRoleMap": obj(map[string]any{
-		"create": boolean("Create the conventional folder for the role when none exists."),
-		"path":   str("An explicit folder name to create; must conventionally map to the role."),
+		"folder_id": str("Existing folder to map to this role when create is false."),
+		"create":    boolean("Create the conventional folder for the role when none exists."),
+		"path":      str("An explicit folder name to create; must conventionally map to the role."),
 	}),
 	"RemoteRoleResult": obj(map[string]any{
 		"role":      str("The special folder role."),
@@ -383,6 +415,8 @@ var schemas = map[string]any{
 		"folders":              boolean("Whether the mailbox exposes named folders. The folder list is the discovery surface for folder ids."),
 		"hierarchical_folders": boolean("Whether folder names may nest."),
 		"move":                 boolean("Whether messages can be moved between folders."),
+		"archive":              boolean("Whether move with folder_id null is supported. This removes INBOX on Gmail and may leave the message in Sent."),
+		"purge":                boolean("Whether permanent deletion is supported; caller authorization and Trash preconditions still apply."),
 		"create_folders":       boolean("Whether the mailbox accepts a new custom folder. False for a domain or Gmail inbox."),
 		"rename_folders":       boolean("Whether an existing custom folder can be renamed. False for a domain or Gmail inbox."),
 		"delete_folders":       boolean("Whether an empty custom folder can be deleted. False for a domain or Gmail inbox."),
@@ -393,12 +427,23 @@ var schemas = map[string]any{
 		"search":               boolean("Whether the server or local index supports search."),
 		"drafts":               boolean("Whether the mailbox holds a server-side Drafts concept."),
 		"outbound":             boolean("Whether the mailbox can send mail itself."),
-		"realtime":             boolean("Whether the mailbox pushes change notifications."),
+		"realtime":             boolean("Whether the mailbox source supports push change detection; not availability of the MailMoose SSE/event API."),
 		"sync":                 boolean("Whether the mailbox is backed by a synchronised remote server."),
 	}),
 
 	"Inbox": obj(map[string]any{
 		"id":                              str("Inbox id."),
+		"kind":                            str("domain or standalone; immutable after creation."),
+		"namespace":                       str("Selected standalone root."),
+		"remote":                          Ref("RemoteConnection"),
+		"remote_configured":               boolean("Whether standalone credentials are configured."),
+		"remote_sent_copy_enabled":        boolean("Whether to create a remote Sent copy."),
+		"remote_sent_copy_folder":         str("Optional remote Sent destination."),
+		"remote_poll_seconds":             integer("Configured quick-poll interval; omitted means inherited."),
+		"remote_full_sync_minutes":        integer("Configured full-sync interval; omitted means inherited."),
+		"trash_retention_days":            integer("Inbox retention override; omitted means inherited."),
+		"storage_quota_bytes":             integer("Inbox storage cap; omitted means no independent cap."),
+		"storage_used_bytes":              integer("Stored bytes used."),
 		"account_id":                      str("Owning account id."),
 		"domain_id":                       str("Owning domain id."),
 		"local_part":                      str("Local part."),
@@ -419,6 +464,10 @@ var schemas = map[string]any{
 		"created_at":                      ts("Creation time."),
 	}),
 	"InboxList": arrayOf("Inbox", "Accessible inboxes."),
+	"RemoteConnection": obj(map[string]any{
+		"host": str("IMAP hostname."), "port": integer("IMAP port."), "username": str("IMAP login."), "security": str("tls, starttls or plain"),
+		"smtp": obj(map[string]any{"host": str("SMTP hostname."), "port": integer("SMTP port."), "username": str("SMTP login."), "security": str("tls, starttls or plain")}),
+	}),
 	"InboxCreate": obj(map[string]any{
 		"kind":         str("Inbox kind: domain (default) or standalone."),
 		"domain_id":    str("Owning domain id (domain kind)."),
@@ -439,6 +488,8 @@ var schemas = map[string]any{
 		}),
 	}),
 	"InboxPatch": obj(map[string]any{
+		"trash_retention_days":            map[string]any{"type": "integer", "nullable": true, "description": "Override retention; null restores inheritance."},
+		"storage_quota_bytes":             map[string]any{"type": "integer", "nullable": true, "description": "Override storage cap; null removes it."},
 		"display_name":                    str("Display name."),
 		"enabled":                         boolean("Whether the inbox accepts mail."),
 		"allowed_senders":                 stringList("Allowed sender patterns when sender_restricted."),
@@ -449,7 +500,7 @@ var schemas = map[string]any{
 		"alias_names":                     stringMap("Alias address to display name."),
 		"default_sender":                  str("Preselected From address; empty clears to the primary."),
 		"auto_mark_read_on_delivery":      boolean("Mark a message read once a connector delivers it."),
-		"auto_trash_after_delivery_hours": integer("Hours after connector delivery to move a message to Trash; null disables, absent leaves unchanged."),
+		"auto_trash_after_delivery_hours": map[string]any{"type": "integer", "nullable": true, "description": "Hours after connector delivery to move a message to Trash; null disables, absent leaves unchanged."},
 		"delivery_trigger":                str("When auto-actions fire: any (first delivery) or all (every connector present at receipt, the default)."),
 	}),
 	"MailboxPermissions": obj(map[string]any{
@@ -523,6 +574,8 @@ var schemas = map[string]any{
 	}),
 	"ThreadList": arrayOf("Thread", "Threads, newest activity first."),
 	"ThreadDetail": obj(map[string]any{
+		"completeness":  str("complete when the embedded messages cover the indexed thread; partial when truncated or the remote index is incomplete."),
+		"messages_url":  str("Relative paginated message-list URL for this thread, newest first. Keep filters when continuing with before."),
 		"id":            str("Thread id."),
 		"inbox_id":      str("Owning inbox id."),
 		"subject":       str("Thread subject."),

@@ -838,16 +838,17 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 				if rawLimit < remoteFilterScanPage {
 					rawLimit = remoteFilterScanPage
 				}
-				res, rerr := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, scopeFolder, rawLimit, scanBefore)
+				res, rerr := s.listRemoteMessagePage(ctx, p, mb, f.ThreadID, scopeFolder, rawLimit, scanBefore)
 				if rerr != nil {
 					// A remote failure is reported as an unavailable inbox; the
 					// caller surfaces it with the common classification (503),
 					// never a misleading empty 200 or a 404.
 					return nil, "", nil, rerr
 				}
+				visible := s.remoteThreadVisibility(ctx, p, mb, res.Items, f, scopeFolder)
 				for _, v := range res.Items {
 					m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-					if !matchMessageFilter(m, applyFilter) {
+					if !matchMessageFilter(m, applyFilter) || (visible != nil && !visible[m.ID]) {
 						continue
 					}
 					out = append(out, m)
@@ -1030,16 +1031,29 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	// A remote message's parts are not cached (only its header is), so the
-	// attachment list is empty and the parts are downloaded structurally from
-	// /v1/messages/{id}/attachments/{part}.
-	_, _, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
 	}
 	if remote {
-		writeJSON(w, 200, []model.Attachment{})
+		path, _, err := mb.remote.FetchRemoteRaw(r.Context(), p, mb.inbox.ID, m.ID)
+		if err != nil {
+			mapMailboxError(w, err)
+			return
+		}
+		defer mb.remote.CleanupRemoteRaw(path)
+		parsed, err := mailparse.ParseFile(path)
+		if err != nil {
+			mapMailboxError(w, model.NewMailboxError(model.ErrKindUnavailable, "the remote attachments could not be parsed", true, err))
+			return
+		}
+		items := make([]attachmentResponse, 0, len(parsed.Attachments))
+		for _, att := range parsed.Attachments {
+			q := url.Values{"filename": {att.Filename}, "content_type": {att.ContentType}}
+			items = append(items, attachmentResponse{Attachment: model.Attachment{MessageID: m.ID, Filename: att.Filename, ContentType: att.ContentType, ContentID: att.ContentID, Size: att.Size}, DownloadURL: "/v1/messages/" + url.PathEscape(m.ID) + "/attachments/" + att.PartPath + "?" + q.Encode()})
+		}
+		writeJSON(w, 200, items)
 		return
 	}
 	items, err := s.Service.Store.ListAttachments(r.Context(), p, r.PathValue("id"))
@@ -1047,7 +1061,17 @@ func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, items)
+	out := make([]attachmentResponse, 0, len(items))
+	for _, att := range items {
+		out = append(out, attachmentResponse{Attachment: att, DownloadURL: "/v1/attachments/" + url.PathEscape(att.ID)})
+	}
+	writeJSON(w, 200, out)
+}
+
+// DownloadURL is an authenticated relative URL, opaque to clients on every backend.
+type attachmentResponse struct {
+	model.Attachment
+	DownloadURL string `json:"download_url"`
 }
 
 // apiMessageContent streams a message's raw RFC5322 MIME. A local message reads
@@ -1068,13 +1092,13 @@ func (s *Server) apiMessageContent(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, path)
 		return
 	}
-	_, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
+	m, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
 	}
 	if remote {
-		s.remoteMessageContent(w, r, p, mb, id)
+		s.remoteMessageContent(w, r, p, mb, m.ID)
 		return
 	}
 	writeError(w, 404, "not found")
@@ -1115,7 +1139,7 @@ func (s *Server) apiMessageAttachmentPart(w http.ResponseWriter, r *http.Request
 	}
 	if remote {
 		part := parsePartPath(r.PathValue("part"))
-		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, id, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
+		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, m.ID, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
 		if ferr != nil {
 			mapMailboxError(w, ferr)
 			return
@@ -1256,7 +1280,7 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	key, inboxID, msgs, remote, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"))
+	key, inboxID, msgs, remote, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"), true)
 	if err != nil {
 		if isRemoteMiss(err) {
 			writeError(w, 404, "thread not found")
@@ -1270,14 +1294,31 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subject := msgs[len(msgs)-1].Subject
-	_ = remote
+	completeness := model.CompletenessComplete
+	if len(msgs) > 200 {
+		msgs = msgs[:200]
+		completeness = model.CompletenessPartial
+	}
+	if !remote && len(msgs) == 200 {
+		older, err := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: inboxID, ThreadID: key, Before: msgs[len(msgs)-1].ID, Limit: 1})
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		if len(older) > 0 {
+			completeness = model.CompletenessPartial
+		}
+	}
+	if remote && s.remoteIndexCompleteness(r.Context(), p.AccountID, inboxID) != model.CompletenessComplete {
+		completeness = model.CompletenessPartial
+	}
 	unread := 0
 	for _, m := range msgs {
 		if !m.Read {
 			unread++
 		}
 	}
-	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "unread_count": unread, "messages": s.messageResponses(r, msgs, false)})
+	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "unread_count": unread, "completeness": completeness, "messages_url": "/v1/messages?inbox=" + url.QueryEscape(inboxID) + "&thread=" + url.QueryEscape(key), "messages": s.messageResponses(r, msgs, false)})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

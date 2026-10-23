@@ -101,7 +101,7 @@ func openAPIOperation(r Route) map[string]any {
 			contentType = "application/json"
 		}
 		op["requestBody"] = map[string]any{
-			"required": true,
+			"required": !optionalRequestBody(r.Method + " " + r.Path),
 			"content":  map[string]any{contentType: map[string]any{"schema": Ref(r.Request)}},
 		}
 	}
@@ -155,8 +155,6 @@ func queryParameters(params []Param) []map[string]any {
 		schema := map[string]any{"type": p.Type}
 		if p.Type == "array" {
 			schema["items"] = map[string]any{"type": "string"}
-			schema["style"] = "form"
-			schema["explode"] = true
 		}
 		param := map[string]any{
 			"name":     p.Name,
@@ -164,12 +162,25 @@ func queryParameters(params []Param) []map[string]any {
 			"required": p.Required,
 			"schema":   schema,
 		}
+		if p.Type == "array" {
+			param["style"], param["explode"] = "form", true
+		}
 		if p.Description != "" {
 			param["description"] = p.Description
 		}
 		out = append(out, param)
 	}
 	return out
+}
+
+func optionalRequestBody(key string) bool {
+	switch key {
+	case "POST /v1/messages/{id}/seen", "POST /v1/inboxes/{id}/remote/roles/{role}",
+		"POST /v1/drafts/{id}/send", "POST /v1/drafts/{id}/request-send",
+		"POST /v1/drafts/{id}/approve", "POST /v1/drafts/{id}/reject":
+		return true
+	}
+	return false
 }
 
 // pathParameters returns one required string path parameter for each
