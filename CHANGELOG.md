@@ -126,6 +126,10 @@ All notable changes to MailMoose are documented here. This project follows
   spam and trashed mail stay out of the Inbox. An account-wide Inbox filter
   still does not reach another inbox's mail.
 
+- Thread lists now accept repeated canonical `label_id` filters. Filters are
+  intersected before thread counts and pagination are computed, for local and
+  connected inboxes alike.
+
 - The mailbox sidebar now separates the two. A **Folders** heading covers the
   system views, a **Custom folders** section lists the mailbox's physical
   custom folders with the native create, rename and delete controls, and a
@@ -137,6 +141,10 @@ All notable changes to MailMoose are documented here. This project follows
   can be moved back to the Inbox.
 
 ### Fixed
+
+- Message placement changes now publish durable lifecycle events consistently,
+  and pending or failed outbound messages no longer appear in Sent. Connected
+  message listings also honor `has_attachment=false`, as well as `true`.
 
 - Restored beta-2 `unread_count` on connected-inbox thread lists and details,
   and included it consistently for domain inboxes and account-wide thread
