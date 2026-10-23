@@ -233,6 +233,11 @@ type fakeRemoteServer struct {
 	moveCalled     int
 	deleteCalled   int
 	closeCalled    int
+	// ensureCalls and headerFetchCalls count the two extra round-trips a move
+	// must not pay when the cached tree already knows the destination: another
+	// destination SELECT, and the post-move live header refresh.
+	ensureCalls      int
+	headerFetchCalls int
 	// moveNoUID makes MoveMessage behave like a server without UIDPLUS: the move
 	// succeeds but reports no COPYUID (DestinationUID 0), forcing the caller to
 	// re-resolve by Message-ID.
@@ -293,6 +298,7 @@ func roleForTestFolder(path string) string {
 func (f *fakeRemoteServer) EnsureFolderExists(_ context.Context, path string) (uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ensureCalls++
 	v, ok := f.folders[path]
 	if !ok {
 		return 0, model.NewMailboxError(model.ErrKindNotFound, "no folder", false, imap.ErrNotFound)
@@ -366,6 +372,7 @@ func containsUID(uids []uint32, uid uint32) bool {
 func (f *fakeRemoteServer) FetchHeader(_ context.Context, loc imap.Locator) (imap.MessageHeader, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.headerFetchCalls++
 	m := f.find(loc)
 	if m == nil {
 		return imap.MessageHeader{}, model.NewMailboxError(model.ErrKindNotFound, "no message", false, imap.ErrNotFound)
@@ -2025,5 +2032,44 @@ func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
 	}
 	if created.ID != parentID {
 		t.Fatalf("create returned %q, tree holds %q", created.ID, parentID)
+	}
+}
+
+// TestRemoteMoveDoesNotRedialForDestination proves a move that the cached tree
+// already covers costs one round-trip: the destination UIDVALIDITY comes from the
+// last sync rather than another SELECT, and the moved message is reported from
+// the row the move itself wrote rather than a second connection's header fetch.
+func TestRemoteMoveDoesNotRedialForDestination(t *testing.T) {
+	t.Parallel()
+	_, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	fake.addFolder("Archive", 100)
+	fake.moveNoUID = true
+	installFake(t, rm, fake)
+	src := fake.addMessage("INBOX", "From: a@b.test\r\nSubject: S\r\nMessage-ID: <one@remote>\r\n\r\nx", "<one@remote>", "S")
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := remoteIDForUID(t, rm, u, box, src.uid)
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	fake.mu.Lock()
+	fake.ensureCalls, fake.headerFetchCalls = 0, 0
+	fake.mu.Unlock()
+	view, err := rm.MoveRemoteMessage(ctx, p, box.ID, id, "Archive")
+	if err != nil || view.FolderPath != "Archive" {
+		t.Fatalf("move = %#v, %v", view, err)
+	}
+	if view.UIDValidity != 100 || view.UID == 0 {
+		t.Fatalf("moved locator = uid %d validity %d, want the destination locator", view.UID, view.UIDValidity)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.ensureCalls != 0 {
+		t.Fatalf("destination SELECTs = %d want 0 (the cached tree already knows it)", fake.ensureCalls)
+	}
+	if fake.headerFetchCalls != 0 {
+		t.Fatalf("header fetches = %d want 0 (the move wrote the row)", fake.headerFetchCalls)
 	}
 }
