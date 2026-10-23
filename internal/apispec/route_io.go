@@ -34,7 +34,8 @@ var (
 	qLimit       = p("limit", "integer", false, "Maximum items to return; the store clamps to the advertised page-size ceiling.")
 	qBefore      = p("before", "string", false, "Opaque keyset cursor; return items older than this.")
 	qInbox       = p("inbox", "string", false, "Scope results to one inbox id.")
-	qLabel       = p("label", "array", false, "Repeatable; a message must carry every listed label.")
+	qLabel       = p("label", "array", false, "Repeatable additive label name; a message must carry every listed label. Unsupported for an IMAP inbox, which has no canonical labels.")
+	qLabelID     = p("label_id", "array", false, "Additive label filter: repeat ids verbatim from the label catalogue (tag:Name). Repeated ids AND together. A folder is not a label: scope a folder with folder= instead. Unsupported for an IMAP inbox, which has no canonical labels.")
 	qFrom        = p("from", "string", false, "Match the RFC5322 From address.")
 	qTo          = p("to", "string", false, "Match a recipient address.")
 	qUnread      = p("unread", "boolean", false, "Filter by read state.")
@@ -46,12 +47,11 @@ var (
 	qWait        = p("wait", "boolean", false, "Block until delivery or action completes instead of returning as soon as queued (up to 30 seconds).")
 	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
 	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
-	qQ           = p("q", "string", true, "FTS5 query string.")
-	qFolder      = p("folder", "string", false, "Scope to one folder (a folder path for a standalone inbox, a folder id for a domain inbox).")
+	qQ           = p("q", "string", false, "Search text. Omit for a filter-only search. Local mail uses FTS5; connected inboxes use provider search. Advanced syntax is not portable.")
+	qFolder      = p("folder", "string", false, "Scope to one canonical folder ID returned by the inbox Folders API. Only messages whose projected folder_id matches are returned. Legacy standalone folder paths remain accepted; prefer stable MailMoose IDs.")
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
-	qContentType = p("content_type", "string", false, "IANA media type to advertise for a remote attachment download.")
-	qLabelID     = p("label_id", "array", false, "Repeatable unified label id from the label catalogue: tag:<Name> for additive labels, or folder:<id> for a folder-backed label (single-inbox scope required account-wide).")
+	qContentType = p("content_type", "string", false, "Remote attachment media-type hint; downloads are served as application/octet-stream with attachment disposition and nosniff.")
 )
 
 // queuedAction is the async-default success payload shared by mutations that
@@ -75,19 +75,21 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/inboxes/{id}/folders":                                {Request: "FolderCreate", Response: "Folder"},
 	"PATCH /v1/inboxes/{id}/folders/{folderId}":                    {Request: "FolderRename", Response: "Folder"},
 	"DELETE /v1/inboxes/{id}/folders/{folderId}":                   {},
-	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qLabelID, qFrom, qTo, qLimit}},
+	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{p("thread", "string", false, "Scope to one thread across indexed folders; paginate with before."), qFolder, qBefore, qLabel, qLabelID, qFrom, qTo, qUnread, qHasAtt, qSpam, qInclSpam, p("trashed", "boolean", false, "Only messages in Trash."), qLimit}},
 	"GET /v1/inboxes/{id}/messages/{messageId}":                    {Response: "Message"},
 	"GET /v1/inboxes/{id}/messages/{messageId}/content":            {},
 	"GET /v1/inboxes/{id}/messages/{messageId}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
-	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qLimit}},
+	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qBefore, qLimit}},
 	"GET /v1/inboxes/{id}/threads/{threadId}":                      {Response: "ThreadDetail"},
-	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qLabel, qLabelID, qLimit}},
-	"GET /v1/inboxes/{id}/labels":                                  {Response: "LabelList"},
+	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qSubject, qUnread, qHasAtt, qLabel, qLabelID, qBefore, qLimit}},
+	"GET /v1/inboxes/{id}/labels":                                  {Response: "LabelEnvelope"},
 	"GET /v1/inboxes/{id}/label-catalog":                           {Response: "MailboxLabelCatalog"},
 	"POST /v1/inboxes/{id}/label-catalog":                          {Request: "MailboxLabelCreate", Response: "MailboxLabel"},
 	"PATCH /v1/inboxes/{id}/label-catalog/{labelId}":               {Request: "MailboxLabelRename"},
 	"DELETE /v1/inboxes/{id}/label-catalog/{labelId}":              {},
 	"POST /v1/inboxes/{id}/messages/{messageId}/labels": {Request: "MailboxLabelAction", Response: "Message",
+		Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 202, Schema: "MessageActionResult"}}},
+	"POST /v1/inboxes/{id}/messages/{messageId}/move": {Request: "MessageMove", Response: "Message",
 		Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 202, Schema: "MessageActionResult"}}},
 	"GET /v1/inboxes/{id}/remote":               {Response: "RemoteConfig"},
 	"PUT /v1/inboxes/{id}/remote":               {Request: "RemoteConfigPut", Response: "Inbox"},
@@ -105,7 +107,7 @@ var routeIOByKey = map[string]routeIO{
 
 	// Messages.
 	"GET /v1/messages": {Response: "MessageEnvelope", Query: []Param{
-		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qLabelID, qSpam, qInclSpam, qBefore, qLimit, qAddress, qFolder,
+		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qLabelID, qSpam, qInclSpam, p("trashed", "boolean", false, "Only messages in Trash."), qBefore, qLimit, qAddress, qFolder,
 	}},
 	"GET /v1/messages/wait": {Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
@@ -113,18 +115,18 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/messages/wait": {Request: "MessageWaitBody", Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
 	}},
-	"GET /v1/messages/{id}":             {Response: "Message", Query: []Param{p("action", "string", false, "Return the scoped action status instead of message content; works after purge.")}},
+	"GET /v1/messages/{id}":             {Response: "MessageOrAction", Query: []Param{p("action", "string", false, "Return the scoped action status instead of message content; works after purge.")}},
 	"PATCH /v1/messages/{id}":           {Request: "MessagePatch", Response: "Message", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
-	"DELETE /v1/messages/{id}":          {Response: "MessageActionResult", Query: []Param{qWait}},
-	"POST /v1/messages/{id}/seen":       {Request: "SeenBody", Response: "MessageActionResult", Query: []Param{qWait}},
+	"DELETE /v1/messages/{id}":          {Response: "MessageActionResult", Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 204}}},
+	"POST /v1/messages/{id}/seen":       {Request: "SeenBody", Response: "MessageActionResult", Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 200, Schema: "SeenResult"}}},
 	"POST /v1/messages/{id}/restore":    {Response: "Message", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
-	"DELETE /v1/messages/{id}/purge":    {Response: "MessageActionResult", Query: []Param{qWait}},
+	"DELETE /v1/messages/{id}/purge":    {Response: "MessageActionResult", Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 204}}},
 	"POST /v1/inboxes/{id}/trash/empty": {Response: "EmptyTrashResult", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
 
 	// Attachments.
-	"GET /v1/actions":                          {},
+	"GET /v1/actions":                          {Response: "MessageActionList"},
 	"GET /v1/actions/{id}":                     {Response: "MessageActionResult"},
-	"POST /v1/actions/{id}":                    {Request: "MessageActionControl"},
+	"POST /v1/actions/{id}":                    {Request: "MessageActionControl", Response: "MessageActionList"},
 	"GET /v1/messages/{id}/attachments":        {Response: "AttachmentList"},
 	"GET /v1/messages/{id}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
 	"GET /v1/messages/{id}/content":            {},
@@ -137,7 +139,7 @@ var routeIOByKey = map[string]routeIO{
 
 	// Search.
 	"GET /v1/search": {Response: "MessageEnvelope", Query: []Param{
-		qQ, qInbox, qLabel, qFrom, qTo, qSubject, qUnread, qHasAtt, qBefore, qLimit, qFolder,
+		qQ, qInbox, qLabel, qLabelID, qFrom, qTo, qSubject, qUnread, qHasAtt, qBefore, qLimit, qFolder,
 	}},
 
 	// Labels.
@@ -148,17 +150,18 @@ var routeIOByKey = map[string]routeIO{
 	"GET /v1/events/wait":   {Response: "EventList", Query: []Param{qAfter, qTimeout, qInbox}},
 	"GET /v1/events/stream": {},
 
-	// Send and reply.
-	"POST /v1/send":                {Request: "SendBody", Response: "SendQueued", Query: []Param{qWait}},
-	"POST /v1/messages/{id}/reply": {Request: "ReplyBody", Response: "ReplyResult", Query: []Param{qWait}},
+	// Send, reply and forward.
+	"POST /v1/send":                  {Request: "SendBody", Response: "SendQueued", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/reply":   {Request: "ReplyBody", Response: "SendQueued", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/forward": {Request: "ForwardBody", Response: "SendQueued", Query: []Param{qWait}},
 
 	// Drafts.
 	"GET /v1/drafts":                             {Response: "DraftList", Query: []Param{qInbox, qBefore, qLimit}},
-	"POST /v1/drafts":                            {Request: "DraftWrite", Response: "DraftWriteResult"},
+	"POST /v1/drafts":                            {Request: "DraftWrite", Response: "DraftWriteResult", Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 200, Schema: "SendQueued"}}},
 	"GET /v1/drafts/{id}":                        {Response: "Draft"},
-	"PATCH /v1/drafts/{id}":                      {Request: "DraftWrite", Response: "DraftWriteResult"},
+	"PATCH /v1/drafts/{id}":                      {Request: "DraftWrite", Response: "DraftWriteResult", Query: []Param{qWait}},
 	"DELETE /v1/drafts/{id}":                     {},
-	"POST /v1/drafts/{id}/send":                  {Request: "DraftWrite", Response: "SendQueued"},
+	"POST /v1/drafts/{id}/send":                  {Request: "DraftWrite", Response: "SendQueued", Query: []Param{qWait}},
 	"GET /v1/drafts/{id}/attachments":            {Response: "DraftAttachmentList"},
 	"POST /v1/drafts/{id}/attachments":           {Request: "DraftAttachmentUpload", RequestContentType: "multipart/form-data", Response: "DraftAttachmentList"},
 	"GET /v1/drafts/{id}/attachments/{attId}":    {},
@@ -167,7 +170,7 @@ var routeIOByKey = map[string]routeIO{
 	// Send requests.
 	"POST /v1/drafts/{id}/request-send":        {Request: "RequestSendBody", Response: "Draft"},
 	"POST /v1/drafts/{id}/cancel-send-request": {Response: "Draft"},
-	"POST /v1/drafts/{id}/approve":             {Request: "FeedbackBody", Response: "ApproveResult"},
+	"POST /v1/drafts/{id}/approve":             {Request: "FeedbackBody", Response: "SendQueued", Query: []Param{qWait}},
 	"POST /v1/drafts/{id}/reject":              {Request: "FeedbackBody", Response: "Draft"},
 	"GET /v1/drafts/{id}/send-request":         {Response: "SendRequest"},
 	"GET /v1/send-requests":                    {Response: "SendRequestList", Query: []Param{qInbox, qActive, qLimit}},

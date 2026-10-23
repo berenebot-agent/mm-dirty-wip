@@ -119,6 +119,11 @@ func TestMessageContractAcrossInboxKinds(t *testing.T) {
 				}
 				return out.(map[string]any)
 			}
+			inbox := get("/v1/inboxes/" + box.ID)
+			caps := inbox["capabilities"].(map[string]any)
+			if caps["archive"] != (kind == "domain" || kind == "google" || kind == "one") || caps["purge"] != (kind == "domain" || kind == "imap" || kind == "microsoft") {
+				t.Fatalf("archive/purge capabilities for %s: %+v", kind, caps)
+			}
 			page := get("/v1/inboxes/" + box.ID + "/messages?folder=" + url.QueryEscape(folder))
 			items, ok := page["items"].([]any)
 			if !ok || len(items) != 1 {

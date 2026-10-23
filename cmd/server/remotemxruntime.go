@@ -80,7 +80,9 @@ func (rt *remoteMXRuntime) RemoteMXStatus(_ context.Context, accountID string) a
 	}
 	st.Configured = true
 	st.Revision = acct.revision
-	st.State, st.Detail = remoteMXState(acct.mgr.ConnectionStatus())
+	live := acct.mgr.ConnectionStatus()
+	st.State, st.Detail = remoteMXState(live)
+	st.HTTPCode = live.HTTPCode
 	return st
 }
 
@@ -90,16 +92,25 @@ func (rt *remoteMXRuntime) RemoteMXStatus(_ context.Context, accountID string) a
 // receiver refused the session (including a session path it does not serve), it
 // cannot be reached, or the destination was refused before the dial — is
 // unavailable with an operator-facing reason, never a connection still in
-// progress.
+// progress. A receiver that is being retried keeps the reason it failed with,
+// so an endpoint that answered with its own status is named rather than shown
+// as a bare token.
 func remoteMXState(live mxdial.Status) (state, detail string) {
 	switch strings.ToLower(strings.TrimSpace(live.State)) {
 	case mxdial.StatusActive:
 		return app.MXStateActive, ""
 	case mxdial.StatusUnreachable, mxdial.StatusRejected, mxdial.StatusUnavailable:
-		return app.MXStateUnavailable, receiverDetail(live.Reason)
+		detail := receiverDetail(live.Reason, live.HTTPCode)
+		if detail == "" {
+			detail = "receiver unreachable"
+		}
+		return app.MXStateUnavailable, detail
 	case mxdial.StatusConnecting, "":
 		return app.MXStateConnecting, ""
 	default:
+		if detail := receiverDetail(live.Reason, live.HTTPCode); detail != "" {
+			return app.MXStateConnecting, detail
+		}
 		return app.MXStateConnecting, live.Reason
 	}
 }

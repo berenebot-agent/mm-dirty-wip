@@ -92,6 +92,7 @@ type fakeIMAPMsg struct {
 	subject          string
 	from             imap.Address
 	internalDate     time.Time
+	flags            []string
 }
 
 func fakMsgDate(m *fakeIMAPMsg) time.Time {
@@ -221,6 +222,12 @@ func (f *fakeIMAP) FetchHeader(_ context.Context, loc imap.Locator) (imap.Messag
 // raw MIME so an attachment filter can be exercised.
 func fakeMessageHeader(m *fakeIMAPMsg) imap.MessageHeader {
 	h := imap.MessageHeader{FolderPath: m.folder, UIDValidity: m.uidValidity, UID: m.uid, MessageID: m.messageID, Subject: m.subject, From: m.from, InternalDate: fakMsgDate(m), Size: int64(len(m.raw))}
+	h.Flags = append([]string(nil), m.flags...)
+	for _, flag := range h.Flags {
+		if flag == imap.FlagSeen {
+			h.Read = true
+		}
+	}
 	if strings.Contains(strings.ToLower(m.raw), "content-disposition: attachment") {
 		h.HasAttach = true
 	}
@@ -371,6 +378,9 @@ func (f *fakeIMAP) Search(_ context.Context, folder string, q imap.SearchQuery) 
 			continue
 		}
 		if q.Subject != "" && !strings.Contains(strings.ToLower(m.subject), strings.ToLower(q.Subject)) {
+			continue
+		}
+		if q.From != "" && !strings.Contains(strings.ToLower(m.from.Address), strings.ToLower(q.From)) {
 			continue
 		}
 		if q.BeforeUID > 0 && m.uid >= q.BeforeUID {
@@ -894,7 +904,7 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 		t.Fatalf("standalone inbox %d: %s", rr.Code, rr.Body.String())
 	}
 	page := rr.Body.String()
-	for _, want := range []string{"/remote", "New label", `data-folder-new`, "Inbox"} {
+	for _, want := range []string{"/remote", "New folder", `data-folder-new`, "Inbox"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("standalone inbox missing %q", want)
 		}
@@ -964,17 +974,18 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 	}
 }
 
-// TestFolderViewBothKinds proves the common custom-folder page lists a local
-// folder's messages for a domain inbox and a remote folder's cached messages for
-// a standalone inbox.
+// TestFolderViewBothKinds proves the common folder page lists a folder's
+// messages for a domain inbox and a remote folder's cached messages for a
+// standalone inbox. A domain mailbox has system folders only, so its half
+// names the system Inbox folder.
 func TestFolderViewBothKinds(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domainBox, standalone, fake := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
 
-	// Create a local folder and file a message into it.
-	localFolder, err := svc.Store.CreateFolder(context.Background(), p, domainBox.ID, store.FolderCreate{Path: "Projects"})
+	// File a message into the domain inbox's system Inbox folder.
+	localFolder, err := svc.Store.GetSystemFolder(context.Background(), u.AccountID, domainBox.ID, model.FolderRoleInbox)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1344,6 +1355,13 @@ func TestRemoteReplyForwardSubmit(t *testing.T) {
 	if !reply || !fwd {
 		t.Fatalf("remote reply/forward not enqueued: %+v", outbound)
 	}
+	for _, action := range []string{"reply", "forward"} {
+		rr := apiDo(h, "POST", "/v1/messages/"+id+"/"+action, key, `{"to":"elsewhere@example.net","text":"api note"}`)
+		m := assertSendResponse(t, rr, true)
+		if action == "forward" && (!strings.Contains(m.Text, "original body") || m.Subject != "Fwd: Original") {
+			t.Fatalf("remote API forward: %+v", m)
+		}
+	}
 }
 
 // TestAuthoringSelectorPerKind proves the authoring endpoint reports the kind
@@ -1461,7 +1479,8 @@ func TestOriginalSearchThreadsEnvelope(t *testing.T) {
 
 // TestOriginalMessageRemoteFallback proves the original /v1/messages/{id} routes
 // resolve a standalone inbox's remote metadata id: GET returns the projection,
-// PATCH sets read/labels, and DELETE moves it to the remote Trash folder.
+// PATCH sets read state, and DELETE moves it to the remote Trash folder.
+// Additive labels are unsupported for IMAP, including through legacy PATCH.
 func TestOriginalMessageRemoteFallback(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
@@ -1484,13 +1503,13 @@ func TestOriginalMessageRemoteFallback(t *testing.T) {
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Remote patch") {
 		t.Fatalf("remote GET %d: %s", rr.Code, rr.Body.String())
 	}
-	// PATCH read + labels
-	req := httptest.NewRequest("PATCH", "/v1/messages/"+id, strings.NewReader(`{"read":true,"labels":["Alpha"]}`))
+	// PATCH read state without attempting unsupported IMAP label writes.
+	req := httptest.NewRequest("PATCH", "/v1/messages/"+id, strings.NewReader(`{"read":true}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"labels":["Alpha"]`) {
+	if rr.Code != 200 {
 		t.Fatalf("remote PATCH %d: %s", rr.Code, rr.Body.String())
 	}
 	// DELETE moves to the remote Trash folder.
@@ -2253,6 +2272,37 @@ func TestRemoteListFiltersAndRoleFolder(t *testing.T) {
 	rr = apiGet(t, h, "/v1/messages?inbox="+standalone.ID+"&trashed=true", key)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Trashed") || strings.Contains(rr.Body.String(), "From A") {
 		t.Fatalf("trashed filter %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRemoteListHasAttachmentBothValues(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	fake.add("INBOX", "From: a@b.test\r\nSubject: With attachment\r\nMessage-ID: <with-attachment@test>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nbody\r\n--x\r\nContent-Type: text/plain; name=note.txt\r\nContent-Disposition: attachment; filename=note.txt\r\n\r\nattachment\r\n--x--\r\n", "<with-attachment@test>", "With attachment")
+	fake.add("INBOX", "From: a@b.test\r\nSubject: Without attachment\r\nMessage-ID: <without-attachment@test>\r\n\r\nbody", "<without-attachment@test>", "Without attachment")
+
+	for _, path := range []string{
+		"/v1/messages?inbox=" + standalone.ID,
+		"/v1/inboxes/" + standalone.ID + "/messages",
+	} {
+		for _, tc := range []struct {
+			filter string
+			want   string
+			omit   string
+		}{
+			{filter: "has_attachment=true", want: "With attachment", omit: "Without attachment"},
+			{filter: "has_attachment=false", want: "Without attachment", omit: "With attachment"},
+		} {
+			separator := "?"
+			if strings.Contains(path, "?") {
+				separator = "&"
+			}
+			rr := apiGet(t, h, path+separator+tc.filter, key)
+			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), tc.want) || strings.Contains(rr.Body.String(), tc.omit) {
+				t.Fatalf("%s&%s: %d %s", path, tc.filter, rr.Code, rr.Body.String())
+			}
+		}
 	}
 }
 
@@ -3019,7 +3069,10 @@ func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
 	}
 }
 
-func TestUnifiedIMAPLabelCatalogExclusive(t *testing.T) {
+// TestUnifiedIMAPLabelCatalogHasNoLabels proves a raw IMAP mailbox owns
+// physical folders, not additive labels: its catalogue is empty and it
+// declares no label support, so a folder is never offered as a label.
+func TestUnifiedIMAPLabelCatalogHasNoLabels(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
 	fake.mu.Lock()
@@ -3031,7 +3084,10 @@ func TestUnifiedIMAPLabelCatalogExclusive(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("IMAP catalogue: %d %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), `"name":"Projects"`) || !strings.Contains(rr.Body.String(), `"membership":"exclusive"`) {
-		t.Fatalf("IMAP folder-backed label missing: %s", rr.Body.String())
+	if strings.Contains(rr.Body.String(), `"name":"Projects"`) {
+		t.Fatalf("IMAP folder listed as a label: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"items":[]`) || !strings.Contains(rr.Body.String(), `"can_create":false`) {
+		t.Fatalf("IMAP catalogue must be empty and declare no label support: %s", rr.Body.String())
 	}
 }

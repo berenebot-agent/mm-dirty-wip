@@ -313,6 +313,18 @@ func TestAgentAPIAndAttachmentDownload(t *testing.T) {
 	if rr.Body.String() != "<script>alert(1)</script>" {
 		t.Fatalf("attachment bytes %q", rr.Body.String())
 	}
+	for _, path := range []string{
+		fmt.Sprintf("/v1/messages/%s/attachments/%d", m.ID, atts[0].PartIndex),
+		fmt.Sprintf("/v1/inboxes/%s/messages/%s/attachments/%d", box.ID, m.ID, atts[0].PartIndex),
+	} {
+		rr := apiGet(t, h, path, key)
+		if rr.Code != 200 || rr.Body.String() != "<script>alert(1)</script>" {
+			t.Fatalf("%s: %d %q", path, rr.Code, rr.Body.String())
+		}
+		if rr.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.HasPrefix(rr.Header().Get("Content-Disposition"), "attachment;") {
+			t.Fatalf("%s unsafe headers: %v", path, rr.Header())
+		}
+	}
 	req = httptest.NewRequest("DELETE", "/v1/messages/"+m.ID, nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr = httptest.NewRecorder()

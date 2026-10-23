@@ -872,6 +872,7 @@ func remoteLastSegment(path string) string {
 // metadata id (the UI's own "load older" cursor), so the id is required here.
 type RemoteMessageFilter struct {
 	FolderPath string
+	ThreadKey  string
 	// Labels filters to messages carrying every listed additive label (AND).
 	// It is a slice so a repeatable label filter cannot silently mean "the
 	// first label only", which is the bug a single-value field allowed.
@@ -889,15 +890,15 @@ type RemoteMessageFilter struct {
 func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inboxID string, f RemoteMessageFilter) ([]RemoteMessage, error) {
 	q := `SELECT ` + remoteMessageColumns + ` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`
 	args := []any{accountID, inboxID}
+	if f.ThreadKey != "" {
+		q += ` AND thread_key=?`
+		args = append(args, f.ThreadKey)
+	}
 	if strings.TrimSpace(f.FolderPath) != "" {
 		if s.IsGoogle(ctx, accountID, inboxID) {
-			if f.FolderPath == "ARCHIVE" {
-				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
-				args = append(args, inboxID)
-			} else {
-				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
-				args = append(args, inboxID, f.FolderPath)
-			}
+			clause, cargs := googleFolderScopeSQL(inboxID, "id", f.FolderPath)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
 			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
 			args = append(args, inboxID, f.FolderPath)
@@ -913,14 +914,13 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 		q += ` AND is_flagged=1`
 	}
 	if f.Before != "" {
-		// Resolve the cursor to its ordering tuple. An unknown cursor is treated
-		// as empty (no rows) rather than silently restarting from the newest,
-		// which would loop a pager forever.
+		// Resolve the cursor to its ordering tuple. An unknown cursor is
+		// invalid, never a silent restart or an apparent end of the mailbox.
 		var beforeRecv sql.NullString
 		cerr := s.read.QueryRowContext(ctx, `SELECT received_at FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, f.Before).Scan(&beforeRecv)
 		switch {
 		case cerr == sql.ErrNoRows:
-			return []RemoteMessage{}, nil
+			return nil, ErrInvalidCursor
 		case cerr != nil:
 			return nil, cerr
 		default:
@@ -1232,13 +1232,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 	args := []any{accountID, inboxID}
 	if strings.TrimSpace(folderPath) != "" {
 		if s.IsGoogle(ctx, accountID, inboxID) {
-			if folderPath == "ARCHIVE" {
-				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
-				args = append(args, inboxID)
-			} else {
-				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
-				args = append(args, inboxID, folderPath)
-			}
+			clause, cargs := googleFolderScopeSQL(inboxID, "id", folderPath)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
 			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
 			args = append(args, inboxID, folderPath)
@@ -1256,6 +1252,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 		cerr := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(received_at,'')) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key=?`, accountID, inboxID, beforeKey).Scan(&latest)
 		if cerr != nil {
 			return nil, cerr
+		}
+		if !latest.Valid {
+			return nil, ErrInvalidCursor
 		}
 		cur := latest.String
 		q += ` HAVING (max(COALESCE(received_at,'')) < ? OR (max(COALESCE(received_at,'')) = ? AND thread_key < ?))`
@@ -1286,14 +1285,83 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 	return out, rows.Err()
 }
 
+// ListRemoteThreadsFiltered aggregates only messages matching catalogue labels.
+// Provider folder paths/IDs are already resolved by the API; no external folder
+// identifiers escape in the public request. Multiple Gmail memberships intersect.
+func (s *Store) ListRemoteThreadsFiltered(ctx context.Context, accountID, inboxID string, folderPaths, labelNames []string, limit int, beforeKey string) ([]RemoteThread, error) {
+	google := s.IsGoogle(ctx, accountID, inboxID)
+	microsoft := !google && s.IsMicrosoft(ctx, accountID, inboxID)
+	where := ` FROM inbox_remote_messages m WHERE m.account_id=? AND m.inbox_id=? AND m.thread_key<>''`
+	args := []any{accountID, inboxID}
+	for _, path := range folderPaths {
+		if google {
+			clause, cargs := googleFolderScopeSQL(inboxID, "m.id", path)
+			where += ` AND ` + clause
+			args = append(args, cargs...)
+		} else if microsoft {
+			where += ` AND EXISTS (SELECT 1 FROM microsoft_message_ids x WHERE x.inbox_id=? AND x.message_id=m.id AND x.folder_id=?)`
+			args = append(args, inboxID, path)
+		} else {
+			where += ` AND m.folder_path=?`
+			args = append(args, path)
+		}
+	}
+	for _, name := range labelNames {
+		where += ` AND EXISTS (SELECT 1 FROM inbox_remote_labels l WHERE l.account_id=? AND l.inbox_id=? AND l.remote_message_id=m.id AND l.label=?)`
+		args = append(args, accountID, inboxID, name)
+	}
+	query := `SELECT m.thread_key,m.inbox_id,MAX(COALESCE(m.subject,'')),COUNT(*),SUM(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END),MAX(COALESCE(m.received_at,''))` + where + ` GROUP BY m.thread_key,m.inbox_id`
+	if strings.TrimSpace(beforeKey) != "" {
+		var latest sql.NullString
+		cursorArgs := append(append([]any{}, args...), beforeKey)
+		if err := s.read.QueryRowContext(ctx, `SELECT MAX(COALESCE(m.received_at,''))`+where+` AND m.thread_key=?`, cursorArgs...).Scan(&latest); err != nil {
+			return nil, err
+		}
+		if !latest.Valid {
+			return nil, ErrInvalidCursor
+		}
+		query += ` HAVING (MAX(COALESCE(m.received_at,'')) < ? OR (MAX(COALESCE(m.received_at,'')) = ? AND m.thread_key < ?))`
+		args = append(args, latest.String, latest.String, beforeKey)
+	}
+	query += ` ORDER BY MAX(COALESCE(m.received_at,'')) DESC,m.thread_key DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.read.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RemoteThread{}
+	for rows.Next() {
+		var th RemoteThread
+		var latest string
+		if err := rows.Scan(&th.Key, &th.InboxID, &th.Subject, &th.MessageCount, &th.UnreadCount, &latest); err != nil {
+			return nil, err
+		}
+		if latest != "" {
+			th.LatestAt = &latest
+		}
+		out = append(out, th)
+	}
+	return out, rows.Err()
+}
+
 // ListRemoteThreadMessages returns the cached messages of a thread, oldest first,
 // scoped to the account and inbox.
-func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID, threadKey string) ([]RemoteMessage, error) {
+func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID, threadKey string, limit ...int) ([]RemoteMessage, error) {
 	threadKey = strings.TrimSpace(threadKey)
 	if threadKey == "" {
 		return []RemoteMessage{}, nil
 	}
-	rows, err := s.read.QueryContext(ctx, `SELECT `+remoteMessageColumns+` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key=? ORDER BY COALESCE(received_at,'') ASC, remote_uid ASC`, accountID, inboxID, threadKey)
+	q := `SELECT ` + remoteMessageColumns + ` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key=? ORDER BY COALESCE(received_at,'') ASC, remote_uid ASC`
+	args := []any{accountID, inboxID, threadKey}
+	if len(limit) > 0 && limit[0] > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit[0])
+	}
+	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1311,15 +1379,61 @@ func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID
 
 // CountRemoteFolderMessages returns the per-folder message and unread counts of the
 // cached remote index, so a folder listing can show counts without a live status
-// round-trip.
+// round-trip. A Gmail message counts in exactly one system folder view (the
+// single-folder precedence); its user labels are additive labels rather than
+// locations, so they are not folder counts.
 func (s *Store) CountRemoteFolderMessages(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
-	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
+	out := map[string][2]int{}
 	if s.IsGoogle(ctx, accountID, inboxID) {
-		query = `SELECT g.label_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.label_id`
-	} else if s.IsMicrosoft(ctx, accountID, inboxID) {
+		views, err := s.googleFolderViewCounts(ctx, accountID, inboxID)
+		if err != nil {
+			return nil, err
+		}
+		for path, count := range views {
+			out[path] = count
+		}
+		return out, nil
+	}
+	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
+	if s.IsMicrosoft(ctx, accountID, inboxID) {
 		query = `SELECT g.folder_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.folder_id`
 	}
 	rows, err := s.read.QueryContext(ctx, query, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		var total, unread int
+		if err = rows.Scan(&path, &total, &unread); err != nil {
+			return nil, err
+		}
+		out[path] = [2]int{total, unread}
+	}
+	return out, rows.Err()
+}
+
+// googleFolderViewCounts counts the cached Gmail messages per system folder
+// view. A message counts in exactly one view: the first system label it
+// carries in the precedence order. A message with no system label counts in no
+// view: there is no derived Archive folder.
+func (s *Store) googleFolderViewCounts(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
+	view := `CASE
+				WHEN MAX(CASE WHEN g.label_id='TRASH' THEN 1 ELSE 0 END)=1 THEN 'TRASH'
+				WHEN MAX(CASE WHEN g.label_id='SPAM' THEN 1 ELSE 0 END)=1 THEN 'SPAM'
+				WHEN MAX(CASE WHEN g.label_id='DRAFT' THEN 1 ELSE 0 END)=1 THEN 'DRAFT'
+				WHEN MAX(CASE WHEN g.label_id='INBOX' THEN 1 ELSE 0 END)=1 THEN 'INBOX'
+				WHEN MAX(CASE WHEN g.label_id='SENT' THEN 1 ELSE 0 END)=1 THEN 'SENT'
+				ELSE '' END`
+	q := `SELECT view, count(*), sum(CASE WHEN unread=1 THEN 1 ELSE 0 END) FROM (
+		SELECT m.id, ` + view + ` AS view, MAX(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) AS unread
+		FROM inbox_remote_messages m
+		LEFT JOIN google_label_memberships g ON g.inbox_id=? AND g.message_id=m.id AND g.label_id IN (` + googleLabelList(GoogleFolderPrecedence) + `)
+		WHERE m.account_id=? AND m.inbox_id=?
+		GROUP BY m.id
+	) WHERE view<>'' GROUP BY view`
+	rows, err := s.read.QueryContext(ctx, q, inboxID, accountID, inboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -1421,8 +1535,11 @@ func (s *Store) RemoteInboxUnreadCounts(ctx context.Context, p model.Principal) 
 		q := `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0`
 		args := []any{p.AccountID, inboxID}
 		if s.IsGoogle(ctx, p.AccountID, inboxID) {
-			q = `SELECT count(*) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.label_id=?`
-			args = append(args, inboxID, root)
+			// The badge counts the Inbox view, so a message that belongs to a
+			// higher-precedence view (Trash, Spam, Drafts) is not unread Inbox mail.
+			clause, cargs := googleFolderScopeSQL(inboxID, "m.id", root)
+			q += ` AND ` + clause
+			args = append(args, cargs...)
 		} else if s.IsMicrosoft(ctx, p.AccountID, inboxID) {
 			q = `SELECT count(*) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.folder_id=?`
 			args = append(args, inboxID, root)

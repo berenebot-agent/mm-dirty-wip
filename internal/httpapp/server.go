@@ -358,6 +358,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/messages/{id}/read", s.withSession(s.withCSRF(s.uiMessageRead)))
 	m.HandleFunc("POST /ui/messages/{id}/spam", s.withSession(s.withCSRF(s.uiMessageSpam)))
 	m.HandleFunc("POST /ui/messages/{id}/labels", s.withSession(s.withCSRF(s.uiMessageLabels)))
+	m.HandleFunc("POST /ui/messages/{id}/move", s.withSession(s.withCSRF(s.uiMessageMove)))
 	m.HandleFunc("GET /ui/messages/{id}/html", s.withSession(s.uiMessageHTML))
 	m.HandleFunc("GET /ui/attachments/{id}", s.withSession(s.uiAttachment))
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
@@ -454,6 +455,7 @@ var v1Routes = []apiRoute{
 	{"PATCH /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
 	{"DELETE /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
 	{"POST /v1/inboxes/{id}/messages/{messageId}/labels", (*Server).apiUnifiedMessageLabels},
+	{"POST /v1/inboxes/{id}/messages/{messageId}/move", (*Server).apiMoveMessage},
 	{"GET /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteGet},
 	{"PUT /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteSave},
 	{"POST /v1/inboxes/{id}/remote/test", (*Server).apiInboxRemoteTest},
@@ -480,6 +482,7 @@ var v1Routes = []apiRoute{
 	{"GET /v1/messages/{id}/attachments/{part}", (*Server).apiMessageAttachmentPart},
 	{"GET /v1/messages/{id}/content", (*Server).apiMessageContent},
 	{"POST /v1/messages/{id}/reply", (*Server).apiReply},
+	{"POST /v1/messages/{id}/forward", (*Server).apiForward},
 	{"GET /v1/attachments/{id}", (*Server).apiAttachment},
 	{"GET /v1/threads", (*Server).apiThreads},
 	{"GET /v1/threads/{id}", (*Server).apiThread},

@@ -15,10 +15,17 @@ import (
 // validates through the same service path the API uses, so the form and the API
 // cannot diverge. Only an account Admin may change it.
 func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
+	if !s.saveRemoteMXForm(w, r) {
+		return
+	}
+	s.accountMXRedirect(w, r, "Remote MX receiver saved", "")
+}
+
+func (s *Server) saveRemoteMXForm(w http.ResponseWriter, r *http.Request) bool {
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
-		return
+		return false
 	}
 	if s.Service.RemoteMXRuntime != nil {
 		defer s.Service.RemoteMXRuntime.WakeRemoteMX()
@@ -31,11 +38,19 @@ func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
 		AllowPrivate: r.Form.Get("rx_allow_private") == "1" || strings.EqualFold(r.Form.Get("rx_allow_private"), "true"),
 		Revision:     rev,
 	}
+	current, err := s.Service.GetAccountMXReceiver(r.Context(), p.AccountID)
+	if err != nil {
+		s.accountMXUIError(w, r, err)
+		return false
+	}
+	if current.URL != "" && current.Revision == rev && current.URL == strings.TrimRight(strings.TrimSpace(in.URL), "/") && strings.TrimSpace(in.BearerKey) == "" && current.CA == strings.TrimSpace(in.CA) && current.AllowPrivate == in.AllowPrivate {
+		return true
+	}
 	if _, err := s.Service.SaveAccountMXReceiver(r.Context(), p, in); err != nil {
 		s.accountMXUIError(w, r, err)
-		return
+		return false
 	}
-	http.Redirect(w, r, "/?notice=Remote+MX+receiver+saved", http.StatusSeeOther)
+	return true
 }
 
 // uiAccountMXClear removes the account's Remote MX receiver. It is refused while
@@ -54,18 +69,56 @@ func (s *Server) uiAccountMXClear(w http.ResponseWriter, r *http.Request) {
 		s.accountMXUIError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/?notice=Remote+MX+receiver+cleared", http.StatusSeeOther)
+	s.accountMXRedirect(w, r, "Remote MX receiver cleared", "")
 }
 
-// accountMXUIError maps a Remote MX save/clear failure back to the dashboard with
-// a user-safe query message. The bearer key and private CA are never echoed.
+// accountMXRedirect returns to the domain receiving dialog the account-level
+// editor was opened from, so a save, clear or validation error lands back on the
+// form instead of closing it. The domain is only honoured when it belongs to the
+// caller's account; otherwise the dashboard is the destination.
+func (s *Server) accountMXRedirect(w http.ResponseWriter, r *http.Request, notice, errMsg string) {
+	values := url.Values{}
+	id := r.PathValue("id")
+	if id == "" {
+		id = strings.TrimSpace(r.Form.Get("rx_domain"))
+	}
+	if id != "" {
+		if _, err := s.Service.Store.GetDomain(r.Context(), principal(r).AccountID, id); err == nil {
+			values.Set("domain", id)
+			values.Set("kind", "receiving")
+			values.Set("provider", "remotemx")
+		}
+	}
+	if notice != "" {
+		values.Set("notice", notice)
+	}
+	if errMsg != "" {
+		values.Set("rx_error", errMsg)
+	}
+	dest := "/"
+	if len(values) > 0 {
+		dest += "?" + values.Encode()
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// accountMXUIError maps a Remote MX save/clear failure back to the originating
+// domain dialog (or the dashboard) with a user-safe query message. The bearer key
+// and private CA are never echoed.
 func (s *Server) accountMXUIError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrAccountMXInvalidInput):
-		dest := "/?" + url.Values{"rx_error": {accountMXUserMessage(err)}, "rx_form": {"1"}}.Encode()
-		http.Redirect(w, r, dest, http.StatusSeeOther)
+		if id := r.PathValue("id"); id != "" {
+			s.domainEditorError(w, r, id, "receiving", "remotemx", accountMXUserMessage(err))
+			return
+		}
+		s.accountMXRedirect(w, r, "", accountMXUserMessage(err))
 	case errors.Is(err, store.ErrConflict):
-		http.Redirect(w, r, "/?"+url.Values{"rx_error": {"The Remote MX configuration changed in another session. Reload and try again."}, "rx_form": {"1"}}.Encode(), http.StatusSeeOther)
+		if id := r.PathValue("id"); id != "" {
+			s.domainEditorError(w, r, id, "receiving", "remotemx", "The Remote MX configuration changed in another session. Reload and try again.")
+			return
+		}
+		s.accountMXRedirect(w, r, "", "The Remote MX configuration changed in another session. Reload and try again.")
 	case errors.Is(err, store.ErrForbidden):
 		http.Error(w, "admin required", 403)
 	default:

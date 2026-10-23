@@ -43,6 +43,12 @@ type DomainLogEntry struct {
 	// mail (which has no message row or detail view) and for attempts whose
 	// message was deleted.
 	MessageID string `json:"message_id,omitempty"`
+	// DeliveryKey groups the rows of one delivery. The delivery log records
+	// every state transition of a send, so a single message contributes several
+	// rows; the key is the message id, the workflow id for a handoff, or the
+	// log row id for a row that stands alone. It is not part of the API
+	// contract.
+	DeliveryKey string `json:"-"`
 }
 
 // ListDomainReceivingLog returns the receiving side of a domain's two-way log:
@@ -236,7 +242,8 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 
 // appendDomainOutbound adds the domain's outbound delivery attempts.
 func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT l.id,l.provider,CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN COALESCE(l.message_id,'') ELSE '' END,l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+	q := `SELECT l.id,l.provider,CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN COALESCE(l.message_id,'') ELSE '' END,
+			COALESCE(l.message_id,l.workflow_id,'log:'||l.id),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,''),COALESCE(l.inbox_id,m.inbox_id,w.inbox_id,''),COALESCE(l.client_label,m.client_label,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
@@ -262,7 +269,7 @@ func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, 
 		var e DomainLogEntry
 		var id int64
 		var created, to string
-		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID, &e.Source); err != nil {
+		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.DeliveryKey, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID, &e.Source); err != nil {
 			return nil, err
 		}
 		e.Kind = e.Status

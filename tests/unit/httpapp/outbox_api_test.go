@@ -157,6 +157,7 @@ func TestBrevoAttachmentRejectionVisibleInSendStatusAndLogs(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("send status %d: %s", rr.Code, rr.Body.String())
 	}
+	assertSendResponse(t, rr, false)
 	var result struct{ Message model.Message }
 	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)

@@ -112,7 +112,7 @@ commands:
   thread           GET  /v1/threads/{id}           thread detail (+ --messages)
   labels           GET  /v1/labels                 distinct labels in use
   folders          GET  /v1/inboxes/{id}/folders   list an inbox's folders (common)
-  folder-add       POST /v1/inboxes/{id}/folders   create a folder
+  folder-add       POST /v1/inboxes/{id}/folders   create a folder (Outlook/IMAP only)
   folder-rename    PATCH /v1/inboxes/{id}/folders/{folderId}
   folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
   remote           GET  /v1/inboxes/{id}/remote    standalone inbox remote config
@@ -122,6 +122,7 @@ commands:
   remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                   send (Owner)
   reply            POST /v1/messages/{id}/reply   reply (Owner)
+  forward          POST /v1/messages/{id}/forward forward (Owner)
   mark-read        PATCH  /v1/messages/{id}        set read=true
   mark-unread      PATCH  /v1/messages/{id}        set read=false
   label            PATCH  /v1/messages/{id}        replace labels
@@ -746,6 +747,7 @@ def cmd_inboxes(client, args):
 def cmd_list(client, args):
     params = {
         "inbox": client.inbox,
+        "folder": args.folder,
         "label": split_values(args.label),
         "from": args.from_,
         "to": args.to,
@@ -801,13 +803,16 @@ def cmd_thread(client, args):
 
 
 def cmd_labels(client, args):
-    response = client.request("GET", "/v1/labels")
+    """List an inbox's additive labels (tag:Name); an IMAP inbox has none."""
+    path = "/v1/inboxes/%s/label-catalog" % client.inbox if client.inbox else "/v1/labels"
+    response = client.request("GET", path)
     emit(response.data, args.table, label_columns())
     return EXIT_OK
 
 
 def cmd_folders(client, args):
-    """List an inbox's folders (common for domain and standalone inboxes)."""
+    """List an inbox's folders: system folders for domain and Gmail inboxes,
+    system and custom folders for Outlook and IMAP inboxes."""
     inbox = args.inbox or client.inbox
     if not inbox:
         raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
@@ -954,6 +959,12 @@ def cmd_send(client, args):
 
 def cmd_reply(client, args):
     body = {}
+    for field in ("to", "cc", "bcc"):
+        values = split_values(getattr(args, field))
+        if values:
+            body[field] = values
+    if args.subject is not None:
+        body["subject"] = args.subject
     if args.text is not None:
         body["text"] = args.text
     if args.html is not None:
@@ -965,7 +976,7 @@ def cmd_reply(client, args):
     params = {"wait": "true"} if args.wait else None
     response = client.request(
         "POST",
-        "/v1/messages/" + args.id + "/reply",
+        "/v1/messages/" + args.id + "/" + args.message_action,
         params=params,
         body=body,
         headers=idem_headers(args),
@@ -1302,7 +1313,7 @@ def build_parser():
         "--label",
         action="append",
         metavar="LABEL",
-        help="only messages carrying this label; repeatable or comma-separated "
+        help="label name or catalogue ID; repeatable or comma-separated "
         "(messages must carry all listed labels)",
     )
     p.add_argument("--from", dest="from_", metavar="ADDR", help="filter by sender address")
@@ -1311,7 +1322,8 @@ def build_parser():
     p.add_argument(
         "--has-attachment", action="store_true", help="only messages with attachments"
     )
-    p.add_argument("--before", metavar="ID", help="keyset pagination: older than this id")
+    p.add_argument("--before", metavar="CURSOR", help="opaque next_cursor from the previous page")
+    p.add_argument("--folder", metavar="FOLDER", help="scope to a folder")
     add_limit(p)
 
     p = command("get", "GET /v1/messages/{id} - one message.", cmd_get)
@@ -1319,16 +1331,16 @@ def build_parser():
 
     p = command(
         "search",
-        "GET /v1/search?q= - FTS5 full-text search.",
+        "GET /v1/search - local or provider search with common pagination.",
         cmd_search,
     )
-    p.add_argument("query", metavar="QUERY", help="search text")
+    p.add_argument("query", metavar="QUERY", nargs="?", help="search text; omit for filter-only search")
     add_inbox(p)
     p.add_argument(
         "--label",
         action="append",
         metavar="LABEL",
-        help="filter by label; repeatable or comma-separated",
+        help="filter by label name or catalogue ID; repeatable or comma-separated",
     )
     p.add_argument("--from", dest="from_", metavar="ADDR", help="filter by sender address")
     p.add_argument("--to", metavar="ADDR", help="filter by recipient address")
@@ -1359,7 +1371,8 @@ def build_parser():
         help="list the thread's messages instead of the thread summary",
     )
 
-    command("labels", "GET /v1/labels - distinct labels currently in use.", cmd_labels)
+    p = command("labels", "With --inbox: provider-aware label catalogue and capabilities; otherwise legacy flat names.", cmd_labels)
+    add_inbox(p)
 
     # Common mailbox surface: folders and the standalone remote connector. These
     # endpoints dispatch on the inbox kind, so they work for a domain inbox and a
@@ -1398,15 +1411,13 @@ def build_parser():
         "GET /v1/inboxes/{id}/remote - show a standalone inbox's remote config (secret-free).",
         cmd_remote,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     p = command(
         "remote-test",
         "POST /v1/inboxes/{id}/remote/test - test a standalone inbox's remote connector.",
         cmd_remote_test,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", required=True, help="standalone inbox id")
+    add_inbox(p)
     p.add_argument("--host", metavar="HOST", help="override the IMAP host to test")
     p.add_argument("--username", metavar="USER", help="override the IMAP username")
     p.add_argument(
@@ -1421,9 +1432,8 @@ def build_parser():
         "POST /v1/inboxes/{id}/remote/roles/{role} - map or create a special folder role.",
         cmd_remote_role,
     )
-    add_table(p)
     p.add_argument("role", metavar="ROLE", help="inbox, sent, drafts, trash or spam")
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     p.add_argument("--folder-id", dest="folder_id", metavar="ID", help="map this existing folder to the role")
     p.add_argument("--create", action="store_true", help="create the conventional folder when none is mapped")
     p.add_argument("--path", metavar="NAME", help="explicit conventional folder name to create")
@@ -1433,8 +1443,7 @@ def build_parser():
         "GET /v1/inboxes/{id}/handoffs - RemoteDraft handoff history.",
         cmd_handoffs,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_inbox(p)
     add_limit(p)
 
     p = command(
@@ -1442,8 +1451,7 @@ def build_parser():
         "GET/PUT /v1/inboxes/{id}/authoring - assistant authoring settings.",
         cmd_authoring,
     )
-    add_table(p)
-    p.add_argument("--inbox", metavar="ID", help="inbox id")
+    add_inbox(p)
     p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft (standalone inboxes only)")
     p.add_argument("--notify", metavar="ADDR", help="notification address override")
 
@@ -1487,31 +1495,23 @@ def build_parser():
     )
     add_idem(p)
 
-    p = command(
-        "reply",
-        "POST /v1/messages/{id}/reply - reply from the message's inbox (Owner); enqueues and returns unless --wait.",
-        cmd_reply,
-    )
-    p.add_argument("id", metavar="ID", help="message id to reply to")
-    p.add_argument("--text", metavar="TEXT", default=None, help="plain-text body")
-    p.add_argument("--html", metavar="HTML", default=None, help="HTML body")
-    p.add_argument(
-        "--attach",
-        action="append",
-        metavar="FILE",
-        help="attach a file (repeatable); base64-encoded into the JSON body",
-    )
-    p.add_argument(
-        "--sender",
-        metavar="ADDR",
-        help="From identity: the inbox primary or one of its aliases",
-    )
-    p.add_argument(
-        "--wait",
-        action="store_true",
-        help="block until delivery instead of returning as soon as it is queued",
-    )
-    add_idem(p)
+    for action in ("reply", "forward"):
+        p = command(
+            action,
+            "POST /v1/messages/{id}/" + action + " - " + action + " from the message's inbox (Owner); enqueues and returns unless --wait.",
+            cmd_reply,
+        )
+        p.set_defaults(message_action=action)
+        p.add_argument("id", metavar="ID", help="source message id")
+        for field in ("to", "cc", "bcc"):
+            p.add_argument("--" + field, action="append", required=action == "forward" and field == "to", metavar="ADDR", help="repeatable or comma-separated recipients")
+        p.add_argument("--subject", metavar="TEXT", default=None, help="override the derived subject")
+        p.add_argument("--text", metavar="TEXT", default=None, help="plain-text body or forward note")
+        p.add_argument("--html", metavar="HTML", default=None, help="HTML body")
+        p.add_argument("--attach", action="append", metavar="FILE", help="attach a file (repeatable)")
+        p.add_argument("--sender", metavar="ADDR", help="From identity")
+        p.add_argument("--wait", action="store_true", help="block until delivery")
+        add_idem(p)
 
     p = command(
         "mark-read",

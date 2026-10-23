@@ -12,9 +12,13 @@ Google uses `internal/transport/gmail`, encrypted per-inbox OAuth grants and
 opaque provider message/thread IDs. The baseline includes binding, OAuth-attempt,
 ID mapping, native label-membership and independent detection-cursor tables.
 Google messages have one cache row and multiple label memberships; `folder_path`
-is an internal `gmail:<provider-id>` storage locator, while public folder views
-project Gmail system labels or user-label IDs. `ARCHIVE` is a derived view.
-Read/star/label/archive/trash operations execute live, as do send, raw/attachment
+is an internal `gmail:<provider-id>` storage locator, while the public
+projection reports one canonical folder — the first of Trash, Spam, Drafts,
+Inbox, Sent that the message carries — and the user labels as additive
+`tag:Name` labels. A Gmail inbox exposes exactly those five system
+destinations: there is no All Mail, no virtual folder and no derived Archive
+view. Read/star/
+label/archive/trash operations execute live, as do send, raw/attachment
 reads and native draft creation. Metadata backfill is progressive and History API
 updates catch up external changes; API list reads synchronize, UI navigation
 schedules synchronization. Search uses string continuation tokens (including
@@ -80,8 +84,12 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   seeded system or operator-created) or `remote` (mirrored from the provider).
   `IsSystem` marks a protected seeded folder; `RoleLocked` marks an explicit
   operator role mapping that a reconcile must never re-infer. Folders are
-  **not** aliases or labels: managed aliases belong to inboxes and labels are
-  free-text message metadata, both independent of the folder tree.
+  **not** aliases: managed aliases belong to inboxes. A folder is also not a
+  label: a message's location is its `folder_id` and its metadata is the
+  additive `label_ids` (`tag:Name`, empty for IMAP). Capability descriptors
+  on the inbox (`folders`, `move`, `create_folders`, `rename_folders`,
+  `delete_folders`, `labels`, `create_labels`, `rename_labels`,
+  `delete_labels`) determine what is supported (D151).
 - `RemoteLocator{FolderPath, UIDValidity, UID, MessageID}` — the remote routing
   address. `Empty()` reports a local record. A locator is valid only while its
   `UIDValidity` still matches the folder.
@@ -93,7 +101,17 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
   deployment may refuse it (see the UI warnings and `docs/SELFHOSTING.md`).
 - `Capabilities{...}` with `DomainCapabilities()` / `StandaloneCapabilities()`
   (`StandaloneCapabilities` sets `Sync=true`; `Outbound` is refined per inbox to
-  whether an SMTP binding exists).
+  whether an SMTP binding exists). The folder and label half of the surface is
+  explicit: `Folders`, `Move`, `CreateFolders`, `RenameFolders`,
+  `DeleteFolders`, `Labels`, `CreateLabels`, `RenameLabels`, `DeleteLabels`.
+  A domain or Gmail inbox exposes system folders only (`CreateFolders`,
+  `RenameFolders`, `DeleteFolders` false); Outlook and IMAP expose physical
+  custom folders. An IMAP inbox has no canonical labels (`Labels`,
+  `CreateLabels`, `RenameLabels`, `DeleteLabels` false); Outlook categories
+  can be created but not renamed or deleted — creation writes a native
+  master category and needs the `MailboxSettings.ReadWrite` grant (D152). The
+  capability block on the inbox is the authoritative discovery surface
+  (D151).
 - `ListEnvelope[T]{Items, NextCursor, Completeness, Errors []InboxFailure}` —
   the common listing shape. `Completeness` describes whether the source could
   enumerate the whole result set and is **independent of pagination**: having a
@@ -108,9 +126,10 @@ and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDER
 
 ## 2. Persistence (`internal/store`)
 
-The schema is the public baseline `001` in `internal/dbschema/baseline.sql`,
-applied as one versioned migration and validated by `internal/dbschema`.
-Future changes use versioned public migrations. Key tables:
+The schema starts with public baseline `001` in `internal/dbschema/baseline.sql`.
+Public migration `002` adds the retained domain-folder-to-label mapping;
+`internal/dbschema` validates both versions and the resulting fingerprint.
+The data conversion is transactional and idempotent. Key tables:
 
 - `inboxes` — `kind`, `address`, `namespace`, `remote_*`, `smtp_*`,
   `remote_configured`, `remote_sent_copy_enabled`, `remote_sent_copy_folder`,
@@ -119,8 +138,13 @@ Future changes use versioned public migrations. Key tables:
 - `inbox_folders` — the single folder table for BOTH inbox kinds: `path`, `name`,
   `parent_path`, `role`, `selectable`, `is_system`, `origin`, `role_locked`,
   `remote_uid_validity`, `remote_indexed_at`, and opaque `remote_metadata_json`.
-- `messages.mailbox_id` — a message's single folder membership; `NULL` is the
-  implicit system Inbox bucket.
+- `messages.mailbox_id` — retained internal location. `NULL` permits an implicit
+  Inbox for incoming mail or Sent for successfully sent mail; it is not the
+  public nullable `folder_id`. Domain archive and legacy custom-folder records
+  remain stored while their public location is `null`.
+- `inbox_folder_labels` — the durable domain custom-folder-to-label mapping.
+  Original folder paths and message relationships are retained, and conversion
+  never returns previously filed messages to Inbox.
 - `inbox_remote_credentials` — the encrypted IMAP and optional SMTP secrets
   under `APP_ENCRYPTION_KEY`.
 - `inbox_remote_messages` (header/thread metadata cache only), `inbox_remote_labels`,
@@ -203,6 +227,8 @@ External aliases are removed, so sending has one target shape per kind:
   metadata. List reads stay metadata-only.
 - **Threads and search:** `ListRemoteThreads`, `GetRemoteThread`, `SearchRemote`,
   `ListRemoteLabels`, `SetRemoteLabels` / `AddRemoteLabels` / `RemoveRemoteLabels`.
+  These low-level methods retain legacy IMAP data internally, but the public
+  message PATCH rejects IMAP `labels` writes; canonical IMAP labels are unsupported.
 - **Sending / copies:** `RemoteStandaloneSender.ResolveInboxSendingConfig` (the
   injected `StandaloneSenderResolver`), `RemoteHandoffPublisher` (append the
   frozen draft to the remote Drafts folder and verify),
@@ -342,8 +368,9 @@ transient scope/`LIST` shortfall or a generation flip.
   `From`; see the accepted risk below). `RemoteDraft` is a standalone-only mode:
   a domain inbox cannot be set to it (the write is rejected, and a legacy domain
   row stored as `remote_draft` normalizes back to the kind default on read), and
-  `requestRemoteDraft` requires `kind=standalone` and a mapped remote Drafts
-  folder.
+  `requestRemoteDraft` requires `kind=standalone`. A remote Drafts folder that
+  does not exist is not a request-time refusal: the remote server refuses the
+  append and the handoff settles terminally as `failed` (see "Settlement").
 - **Publication and Sent-copy are separate state machines.** A
   handoff's publication state (`pending`/`published`/`ambiguous`/`failed`) is
   independent of its Sent-copy, which is a separate durable job that never
@@ -361,9 +388,11 @@ transient scope/`LIST` shortfall or a generation flip.
   non-secret fields. A handoff never queues a notification job and never sends a
   notification email; the web UI exposes no handoff surface at all.
 - **Settlement is automatic, bounded and never a blind retry.** A handoff that
-  publishes is cleaned up. A terminal outcome (a permanent append failure, an
-  unverifiable append after the bounded attempt budget, or more than one remote
-  match) **unfreezes its local draft** so it is never trapped now that no resolve
+  publishes is cleaned up. A terminal outcome (a permanent append failure — a
+  remote refusal that cannot resolve itself, such as a destination folder that
+  does not exist or a server that refuses the operation — an unverifiable append
+  after the bounded attempt budget, or more than one remote match) **unfreezes
+  its local draft** so it is never trapped now that no resolve
   or retry UI remains: the human acts on the draft directly. An append is
   **never automatically retried** once terminal — an `ambiguous` outcome is not
   re-appended (a second copy could be created). A **transient verification
@@ -439,17 +468,42 @@ transient scope/`LIST` shortfall or a generation flip.
   IMAP arrivals are queued for bounded background prefix reads in the existing worker;
   existing mail is not back-generated. `created_at` is never replaced
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
-- **Account-wide listings merge into one globally ordered stream.**
-  `internal/httpapp/mailbox_merge.go` merges the local store with every
-  authorized remote inbox into a single date-sorted page (not per-inbox
-  concatenation). The opaque cursor (`commonCursor`) records each source's own
-  native progress plus the **global stable key** (`<RFC3339Nano>|<id>`) of the
-  last returned item, so a later page resumes each source strictly after its own
-  progress and drops anything not strictly older than the global key — no
-  duplicates, no gaps, even when items interleave across sources or share a
-  timestamp. The per-source key is the message/thread **id** (not a timestamp),
-  because a timestamp is not unique and would drop same-second siblings on the
-  next page. A source failure is recorded per-inbox and never fails the page.
+- **One location, one additive label set (D151).**
+  `internal/httpapp/message_response.go` projects a message's location as
+  `folder_id` (one stable MailMoose folder id, `null` when there is none) and
+  its labels as the additive `label_ids` (`tag:Name` only, empty for IMAP).
+  A folder is never a label: the `folder:<id>` catalogue identity and the
+  exclusive/system label classification are gone. Gmail's overlapping native
+  system labels collapse to one deterministic folder (Trash, Spam, Drafts,
+  Inbox, Sent; first match wins), and a Gmail inbox exposes exactly those five
+  system destinations — no All Mail, no virtual folder, no derived Archive
+  view. Outlook and IMAP additionally expose custom physical folders. A domain
+  inbox's internal archive and retained legacy custom folders project
+  `folder_id: null`; legacy custom-folder organisation becomes additive labels
+  without changing the retained original folder relationships. The legacy
+  `mailbox_id` and `folder_path` fields now describe
+  that same canonical folder and are omitted when there is none. Folder CRUD is
+  provider-scoped (domain and Gmail have no custom folders), label operations
+  are refused on IMAP, and a `folder:` label id is refused everywhere.
+  See `docs/API.md` §3b.
+- **Account-wide listings merge sources rather than concatenate inboxes.**
+  `internal/httpapp/mailbox_merge.go` resumes each source through its native
+  keyset or provider continuation, carried inside an opaque `commonCursor`.
+  Message/search pages select the newest available source head without
+  reordering an individual provider's results: provider tie-breaking need not
+  match MailMoose IDs, and sorting a provider window then resuming its native
+  cursor could skip unreturned messages. Local message/search ordering uses
+  received time (creation time if unavailable), then ID. Thread merging also
+  carries a global stable key. A source failure is recorded per-inbox and never
+  fails the account-wide page; a single-inbox request reports its source failure.
+  Provider ordering remains provider-defined; pagination is not a frozen snapshot
+  when mail changes between requests.
+- **One pagination input for native mailbox listings.** Both inbox-scoped and
+  equivalent `?inbox=` message/thread/search routes use the same handlers.
+  Continue with `before=<next_cursor>` and unchanged filters. Tokens are opaque,
+  not dates or IMAP UIDs; the old standalone search `cursor` input is rejected
+  with an instruction to use `before`. See `docs/API.md` §3a for the capability
+  matrix and §6 for the portable search boundary.
 - **Search and filtered lists continue correctly under local filtering.**
   Because the remote source cannot express every local filter (notably
   `has_attachment`), the merge and the scoped remote list pull successive raw
@@ -460,8 +514,11 @@ transient scope/`LIST` shortfall or a generation flip.
   non-matches. When a bounded scan reaches its per-request page cap without
   finding a match, it carries a **scan continuation** (`commonCursor.Scan`, or the
   returned `next_cursor` for the scoped list) so the next request resumes deeper
-  instead of silently omitting a match beyond the cap. Completeness is `partial`
-  whenever a remote source participates or a failure occurs.
+  instead of silently omitting a match beyond the cap. Completeness describes
+  source coverage, not the existence of a next page: completed indexes/provider
+  enumerations can be `complete`; known incomplete coverage or source failures
+  are `partial`; indeterminate coverage is `unknown`. Remote participation alone
+  does not force `partial`.
 - Routes are registered in `internal/httpapp/server.go`; the API reference is a
   generated artifact (`make docs`) and `tests/unit/apispec` guards its counts.
   The external-alias UI/API/routes/schemas are removed with no compatibility

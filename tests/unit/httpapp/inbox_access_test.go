@@ -343,6 +343,122 @@ func TestBootstrapExposesDomainWideSending(t *testing.T) {
 	}
 }
 
+// TestBootstrapAdvertisesAdminDomainWideSending proves an account Admin key is
+// told about the domain-wide sending grant on the domain's enabled catch-all,
+// with the domain it covers, and is told nothing about the other inboxes. The
+// advertisement disappears with the catch-all, so a client is never told it may
+// send as any address on a domain where the send would be refused.
+func TestBootstrapAdvertisesAdminDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "other", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, adminToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bootstrap := func() map[string]map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/v1/bootstrap", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("bootstrap = %d body=%s", rr.Code, rr.Body.String())
+		}
+		var out struct {
+			Permissions map[string]map[string]any `json:"permissions"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Permissions
+	}
+
+	perms := bootstrap()
+	gp, ok := perms[box.ID]
+	if !ok {
+		t.Fatalf("no permissions for the catch-all: %#v", perms)
+	}
+	if gp["send_any_in_domain"] != true {
+		t.Fatalf("catch-all send_any_in_domain = %#v, want true", gp["send_any_in_domain"])
+	}
+	if gp["send_any_domain"] != d.Name {
+		t.Fatalf("catch-all send_any_domain = %#v, want %q", gp["send_any_domain"], d.Name)
+	}
+	// Another inbox on the same domain is not the catch-all, so it advertises
+	// nothing.
+	op := perms[other.ID]
+	if op["send_any_in_domain"] != false {
+		t.Fatalf("non-catch-all send_any_in_domain = %#v, want false", op["send_any_in_domain"])
+	}
+	if _, present := op["send_any_domain"]; present {
+		t.Fatalf("non-catch-all advertised send_any_domain: %#v", op)
+	}
+
+	// Clearing the catch-all takes the advertised grant away with it.
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	gp = bootstrap()[box.ID]
+	if gp["send_any_in_domain"] != false {
+		t.Fatalf("send_any_in_domain after clearing the catch-all = %#v, want false", gp["send_any_in_domain"])
+	}
+	if _, present := gp["send_any_domain"]; present {
+		t.Fatalf("send_any_domain present after clearing the catch-all: %#v", gp)
+	}
+}
+
+// TestAdminKeySendsAsAnyAddressOnDomain proves the whole path an agent takes:
+// an account Admin key reads the domain-wide sending grant from
+// GET /v1/bootstrap and the send that grant authorises is accepted, instead of
+// being refused with sender_not_allowed.
+func TestAdminKeySendsAsAnyAddressOnDomain(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, adminToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{
+		"inbox_id": box.ID,
+		"to":       []string{"friend@example.net"},
+		"subject":  "Invoice",
+		"text":     "Body",
+		"sender":   "billing@" + d.Name,
+	})
+	req := httptest.NewRequest("POST", "/v1/send", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("send = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Message struct {
+			From model.Address `json:"from"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Message.From.Address != "billing@"+d.Name {
+		t.Fatalf("from = %#v, want billing@%s", resp.Message.From, d.Name)
+	}
+}
+
 // TestKeyDialogDomainWideSending proves the Clients tab's key dialog carries the
 // domain-wide sending control: the matrix renders the Domain send box only on
 // the domain's enabled catch-all inbox, the checkbox sets the grant (forcing

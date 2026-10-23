@@ -58,6 +58,8 @@ Put the IP allowlist in the proxy: deny by default and allow only the addresses 
 
 Tunnels and local proxies (for example Cloudflare Tunnel, Tailscale, or a sidecar proxy) connect to MailMoose from the tunnel client's address — usually loopback or a Docker network address, not the remote user's address. That is the peer MailMoose sees, so allow the tunnel client's address in the host firewall (bind the port to loopback when the tunnel runs on the host) and restrict who may use the tunnel in the tunnel's own configuration. MailMoose neither sees nor allowlists the remote client's address.
 
+A [separate SMTP receiver](REMOTE_MX.md) is a different path with its own requirements: the session endpoint it serves speaks HTTP/2 only and streams one long-lived request, so a proxy in front of it has to speak HTTP/2 and never buffer the request body. See [Reverse proxies in front of the receiver](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
+
 ### Forwarded headers and `TRUSTED_PROXIES`
 
 Set `TRUSTED_PROXIES` to the exact addresses or CIDRs your proxy connects from — never a wider range than the proxy itself. A catch-all entry such as `0.0.0.0/0` is refused at startup.
@@ -79,7 +81,7 @@ Set `DEDICATED_RECEIVER_URL=https://inbound.example.com`. The listener defaults 
 
 **This does not automatically secure port `8081`.** Restrict that port with your firewall and reverse proxy, and do not publish it directly to the internet if you want private-only access. The main listener also has inbound webhook routes for compatible setups.
 
-You do **not** need a publicly accessible webhook listener for Antler MX. MailMoose connects outbound to Antler instead. For Direct MX receiving, publish host port `25:2525` and select Direct MX in the relevant domain; publishing a port alone does not enable receiving.
+You do **not** need a publicly accessible webhook listener for Antler MX. MailMoose connects outbound to Antler instead. For Direct MX receiving, publish host port `25:2525` and select Direct MX in the relevant domain; publishing a port alone does not enable receiving, and the domain receives no mail until the installation's receiver is configured in its Direct MX panel.
 
 Set `FORCE_HTTPS=true` when using a public HTTPS origin, and include the proxy in `TRUSTED_PROXIES` so its `X-Forwarded-Proto` is believed (see [Forwarded headers and `TRUSTED_PROXIES`](#forwarded-headers-and-trusted_proxies)).
 

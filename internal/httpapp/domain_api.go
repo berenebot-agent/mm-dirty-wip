@@ -69,6 +69,11 @@ type mxdialStatusView struct {
 	Reason       string     `json:"reason,omitempty"`
 	SMTPHostname string     `json:"smtp_hostname,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	// HTTPCode is the HTTP status the receiver URL answered the session with, or
+	// 0 when it never answered. A proxy in front of the receiver answers in its
+	// own right, and the core cannot tell the two apart, so the code is returned
+	// and nothing is attributed.
+	HTTPCode int `json:"http_code,omitempty"`
 }
 
 // domainDNSView is one published-record check. State is "ok" (published and

@@ -184,6 +184,75 @@ func TestSetBindingDomainSendRequiresCatchAll(t *testing.T) {
 	_ = d
 }
 
+// TestAdminKeyHoldsDomainWideSending proves an account Admin key holds the
+// domain-wide sending grant implicitly: it may send as any address on a domain
+// from that domain's enabled catch-all, and nowhere else. A session holds no
+// key, so it keeps the primary/alias rule.
+func TestAdminKeyHoldsDomainWideSending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, d, boxes := testStore(t)
+	catch, notCatch := boxes[0], boxes[1]
+	if err := s.SetDomainCatchAll(ctx, u.AccountID, d.ID, catch.ID); err != nil {
+		t.Fatal(err)
+	}
+	adminKey, _, err := s.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The Admin key may send as any address on the domain, from the catch-all.
+	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, catch.ID, adminKey.ID, "anything@example.com")
+	if err != nil || from.Address != "anything@example.com" || target.DomainID != d.ID {
+		t.Fatalf("admin wildcard -> %+v target=%+v err=%v", from, target, err)
+	}
+	// Another inbox on the same domain is not the catch-all, so it is refused.
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, notCatch.ID, adminKey.ID, "anything@example.com"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("admin wildcard from a non-catch-all err=%v, want forbidden", err)
+	}
+	// A session holds no key and keeps the primary/alias rule.
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, catch.ID, "", "anything@example.com"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("session wildcard err=%v, want forbidden", err)
+	}
+	// Clearing the catch-all makes the implicit grant dormant.
+	if err := s.SetDomainCatchAll(ctx, u.AccountID, d.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, catch.ID, adminKey.ID, "anything@example.com"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("admin wildcard after catch-all cleared err=%v, want forbidden", err)
+	}
+	// Pointing the catch-all back restores it.
+	if err := s.SetDomainCatchAll(ctx, u.AccountID, d.ID, catch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, catch.ID, adminKey.ID, "anything@example.com"); err != nil {
+		t.Fatalf("admin wildcard after catch-all restored err=%v", err)
+	}
+}
+
+// TestAdminKeyDemotedLosesDomainWideSending proves the implicit grant follows
+// the key's admin flag: demoting the key to an ordinary key takes the grant
+// away, because the key then holds no binding row.
+func TestAdminKeyDemotedLosesDomainWideSending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, d, boxes := testStore(t)
+	catch := boxes[0]
+	if err := s.SetDomainCatchAll(ctx, u.AccountID, d.ID, catch.ID); err != nil {
+		t.Fatal(err)
+	}
+	adminKey, _, err := s.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateAPIKey(ctx, u.AccountID, adminKey.ID, "demoted", false, map[string]string{catch.ID: "owner"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, catch.ID, adminKey.ID, "anything@example.com"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("demoted key wildcard err=%v, want forbidden", err)
+	}
+}
+
 func findKey(t *testing.T, keys []model.APIKey, id string) model.APIKey {
 	t.Helper()
 	for _, k := range keys {

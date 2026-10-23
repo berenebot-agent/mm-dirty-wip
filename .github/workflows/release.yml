@@ -131,7 +131,16 @@ jobs:
           tags: ${{ steps.mx_meta.outputs.tags }}
           labels: ${{ steps.mx_meta.outputs.labels }}
 
-      - name: Create GitHub release
+      # Idempotent: skip creation if the GitHub Release already exists.
+      # A genuine release-creation failure must fail the workflow.
+      - name: Create GitHub release if needed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "MailMoose $GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release already exists; skipping."
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "MailMoose $GITHUB_REF_NAME" \
+              --generate-notes
+          fi

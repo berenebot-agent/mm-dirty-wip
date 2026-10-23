@@ -8,26 +8,41 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	t.Parallel()
-	svc, _, u, _, _, _ := standaloneFixture(t)
+	st, dir := testdb.OpenDir(t)
+	svc, err := app.New(config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901"}, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	box, e := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "google@example.net"})
 	if e != nil {
 		t.Fatal(e)
 	}
-	labels := []string{"INBOX", "UNREAD", "Label_1"}
+	labels := []string{"INBOX", "SENT", "UNREAD", "Label_1"}
 	history := "10"
+	var mu sync.Mutex
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		if r.Header.Get("Authorization") != "Bearer access" {
 			t.Errorf("missing bearer")
 			w.WriteHeader(401)
@@ -42,6 +57,13 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/history"):
 			json.NewEncoder(w).Encode(map[string]any{"historyId": history, "history": []any{map[string]any{"id": history, "labelsRemoved": []any{map[string]any{"message": map[string]string{"id": "a"}}}}}})
 		case strings.HasSuffix(r.URL.Path, "/messages"):
+			// Gmail excludes Spam and Trash unless explicitly requested. Both
+			// backfill and live search must request the complete mailbox.
+			if r.URL.Query().Get("includeSpamTrash") != "true" {
+				t.Errorf("Gmail message listing omitted includeSpamTrash=true: %s", r.URL)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			w.Write([]byte(`{"messages":[{"id":"a","threadId":"th"}]}`))
 		case strings.HasSuffix(r.URL.Path, "/messages/a/modify"):
 			var v struct {
@@ -84,16 +106,179 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 		t.Fatalf("page %#v", page)
 	}
 	id := page.Items[0].ID
+	// A Gmail user label is an additive label, not a folder: it is not a folder
+	// scope, so listing by it returns nothing. The label itself is reachable
+	// through the catalogue below.
 	other, e := rm.ListRemoteMessages(ctx, p, box.ID, "Label_1", 50, "")
-	if e != nil || len(other.Items) != 1 || other.Items[0].ID != id {
-		t.Fatalf("label membership %#v %v", other, e)
+	if e != nil || len(other.Items) != 0 {
+		t.Fatalf("user label folder scope %#v %v", other, e)
+	}
+	all, e := rm.ListRemoteMessages(ctx, p, box.ID, "", 50, "")
+	if e != nil || len(all.Items) != 1 || all.Items[0].ID != id {
+		t.Fatalf("unfiltered listing %#v %v", all, e)
 	}
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
-	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
-	if catalog.Code != http.StatusOK || strings.Count(catalog.Body.String(), `"name":"Projects"`) != 1 ||
-		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
-		t.Fatalf("Gmail label should be additive and deduplicated: %d %s", catalog.Code, catalog.Body.String())
+	h := settledActionFixture(t, svc, rm, srv.Handler(), u.AccountID)
+	key := adminKey(t, svc, u)
+	catalog := apiGet(t, h, "/v1/inboxes/"+box.ID+"/label-catalog", key)
+	if catalog.Code != http.StatusOK {
+		t.Fatalf("Gmail label catalogue: %d %s", catalog.Code, catalog.Body.String())
+	}
+	// The catalogue holds the additive user label only: a Gmail system label is
+	// a location, not a label.
+	var catalogue struct {
+		Items []struct {
+			ID, Name, Kind, Membership, Role string
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(catalog.Body.Bytes(), &catalogue); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogue.Items) != 1 || catalogue.Items[0].ID != "tag:Projects" ||
+		catalogue.Items[0].Kind != "tag" || catalogue.Items[0].Membership != "multiple" || catalogue.Items[0].Role != "" {
+		t.Fatalf("Gmail label catalogue: %+v", catalogue.Items)
+	}
+	// A nonexistent Gmail label must agree with the cached listing and never
+	// leak the provider-specific messages.list error through the search API.
+	// This fixture deliberately returns a message even for an invalid label,
+	// so the test also verifies that the invalid query is not sent upstream.
+	assertThreadUnreadRoutes(t, h, key, box.ID, page.Items[0].ThreadKey, 1, 1)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/threads?label_id=tag:Projects",
+		"/v1/threads?inbox=" + box.ID + "&label_id=tag:Projects",
+		"/v1/threads?label_id=tag:Projects",
+	} {
+		res := apiGet(t, h, path, key)
+		var page struct {
+			Items []threadUnreadResponse `json:"items"`
+		}
+		if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+			t.Fatalf("Gmail filtered thread: %d %s", res.Code, res.Body.String())
+		}
+		assertThreadUnread(t, page.Items[0], 1, 1)
+	}
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/search?q=Hello&folder=NoSuchFolder",
+		"/v1/search?inbox=" + box.ID + "&q=Hello&folder=NoSuchFolder",
+		"/v1/inboxes/" + box.ID + "/messages?folder=NoSuchFolder",
+	} {
+		rr := apiGet(t, h, path, key)
+		var env struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &env) != nil || len(env.Items) != 0 {
+			t.Fatalf("unknown Google folder %s: %d %s", path, rr.Code, rr.Body.String())
+		}
+	}
+	valid := apiGet(t, h, "/v1/inboxes/"+box.ID+"/search?q=Hello&folder=INBOX", key)
+	var validEnv struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if valid.Code != http.StatusOK || json.Unmarshal(valid.Body.Bytes(), &validEnv) != nil || len(validEnv.Items) != 1 {
+		t.Fatalf("valid Google folder search must still reach provider: %d %s", valid.Code, valid.Body.String())
+	}
+	// The system folders are discovered through the folder endpoint, with the
+	// stable ids a message's folder_id refers to.
+	folders := apiGet(t, h, "/v1/inboxes/"+box.ID+"/folders", key)
+	var folderPage struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Path string `json:"path"`
+		} `json:"items"`
+	}
+	if folders.Code != http.StatusOK || json.Unmarshal(folders.Body.Bytes(), &folderPage) != nil {
+		t.Fatalf("Gmail folders: %d %s", folders.Code, folders.Body.String())
+	}
+	inboxFolder := ""
+	for _, f := range folderPage.Items {
+		if f.Path == "INBOX" {
+			inboxFolder = f.ID
+		}
+	}
+	if inboxFolder == "" {
+		t.Fatalf("missing Gmail Inbox folder: %s", folders.Body.String())
+	}
+	// The message projects one canonical folder and keeps its user label.
+	assertMembership := func() {
+		t.Helper()
+		for _, path := range []string{
+			"/v1/inboxes/" + box.ID + "/messages?",
+			"/v1/messages?inbox=" + box.ID + "&",
+			"/v1/inboxes/" + box.ID + "/search?",
+			"/v1/search?inbox=" + box.ID + "&",
+		} {
+			w := apiGet(t, h, path+"label_id="+url.QueryEscape("tag:Projects"), key)
+			var page struct {
+				Items []struct {
+					ID       string
+					LabelIDs []string `json:"label_ids"`
+					FolderID *string  `json:"folder_id"`
+				} `json:"items"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].ID != id {
+				t.Fatalf("Gmail membership %s: %d %s", path, w.Code, w.Body.String())
+			}
+			if len(page.Items[0].LabelIDs) != 1 || page.Items[0].LabelIDs[0] != "tag:Projects" {
+				t.Fatalf("Gmail label_ids: %v", page.Items[0].LabelIDs)
+			}
+			if page.Items[0].FolderID == nil || *page.Items[0].FolderID != inboxFolder {
+				t.Fatalf("Gmail folder_id = %v, want the Inbox %s", page.Items[0].FolderID, inboxFolder)
+			}
+		}
+	}
+	assertMembership()
+	// A system folder is not a label: it is refused, and it never files the
+	// message.
+	applyLabel := func(labelID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+id+"/labels?wait=true", strings.NewReader(`{"label_id":"`+labelID+`","operation":"add"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if got := applyLabel("folder:" + inboxFolder); got.Code == http.StatusOK {
+		t.Fatalf("a Gmail system folder must not be applicable as a label: %s", got.Body.String())
+	}
+	// Archiving removes INBOX, so the message leaves the Inbox view while it
+	// keeps its user label.
+	archive := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+id+"/move?wait=true", strings.NewReader(`{"folder_id":null}`))
+	archive.Header.Set("Authorization", "Bearer "+key)
+	archive.Header.Set("Content-Type", "application/json")
+	archived := httptest.NewRecorder()
+	h.ServeHTTP(archived, archive)
+	if archived.Code != http.StatusOK {
+		t.Fatalf("Gmail archive: %d %s", archived.Code, archived.Body.String())
+	}
+	archivedSeen := false
+	for _, view := range []string{"INBOX", "SENT", "ARCHIVE"} {
+		w := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?folder="+view, key)
+		var page struct {
+			Items []struct {
+				ID       string
+				LabelIDs []string `json:"label_ids"`
+				FolderID *string  `json:"folder_id"`
+			} `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil {
+			t.Fatalf("Gmail %s listing: %d %s", view, w.Code, w.Body.String())
+		}
+		for _, item := range page.Items {
+			if item.ID != id {
+				continue
+			}
+			archivedSeen = true
+			if len(item.LabelIDs) != 1 || item.LabelIDs[0] != "tag:Projects" {
+				t.Fatalf("archiving must keep the label: %v", item.LabelIDs)
+			}
+			if item.FolderID != nil && *item.FolderID == inboxFolder {
+				t.Fatal("an archived message must not stay in the Inbox")
+			}
+		}
+	}
+	if !archivedSeen {
+		t.Fatal("the archived message disappeared from every view")
 	}
 	if _, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "ARCHIVE"); e != nil {
 		t.Fatal(e)
@@ -102,9 +287,19 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	if e != nil || len(page.Items) != 0 {
 		t.Fatalf("archived inbox %#v %v", page, e)
 	}
-	page, e = rm.ListRemoteMessages(ctx, p, box.ID, "ARCHIVE", 50, "")
-	if e != nil || len(page.Items) != 1 || page.Items[0].ID != id {
-		t.Fatalf("archive %#v %v", page, e)
+	// A Gmail message projects exactly one canonical view: the first system
+	// label it carries (Trash, Spam, Drafts, Inbox, Sent), or the derived
+	// Archive view when it carries none.
+	sentView, e := rm.ListRemoteMessages(ctx, p, box.ID, "SENT", 50, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	archiveView, e := rm.ListRemoteMessages(ctx, p, box.ID, "ARCHIVE", 50, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(sentView.Items)+len(archiveView.Items) != 1 {
+		t.Fatalf("archived message must be in one view: sent=%d archive=%d", len(sentView.Items), len(archiveView.Items))
 	}
 	if _, e = rm.GetRemoteMessage(ctx, model.Principal{AccountID: u.AccountID}, box.ID, id); e == nil {
 		t.Fatal("unauthorized read succeeded")

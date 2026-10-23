@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime"
@@ -118,11 +119,13 @@ const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-s
 const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}{{if .StandaloneAdmin}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="secondary btn-sm" data-one-reconnect data-inbox="{{$.Inbox.ID}}">{{$.InboxConnLabel}}</button>{{else if eq $.InboxConnReconnect "imap"}}<a class="btn secondary btn-sm" href="{{$.RemoteConnectorURL}}">{{$.InboxConnLabel}}</a>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}"{{if eq $.InboxConnReconnect "microsoft"}} data-microsoft-reconnect{{else}} data-google-reconnect-now{{end}} data-inbox="{{$.Inbox.ID}}">{{$.InboxConnLabel}}</a>{{end}}</div>{{else}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}} Ask an account administrator to reconnect it.</span></div>{{end}}{{end}}{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
-// Compose sits at the very top; folders follow with their counts, then a
-// Labels section listing the inbox's labels one level in. It relies on
-// .Inbox, .Folder, .ActiveLabel, .Labels and the count fields being populated
-// on pageData.
-const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a><div class="navgroup labelgroup-head"><span>Labels</span>{{if .Principal.CanAssist .Inbox.ID}}<button type="button" data-folder-new class="label-new-icon" title="New label" aria-label="New label">+</button>{{end}}</div>{{if .UnifiedLabels}}{{range .UnifiedLabels}}<div class="folder-row"><a class="folder label{{if or .Selected (and .FolderID (eq $.ActiveFolderID .FolderID)) (and (eq .Kind "tag") (eq $.ActiveLabel .Name))}} active{{end}}" {{if eq .Kind "tag"}}data-folder="label" data-label="{{.Name}}"{{end}} href="{{.URL}}" title="{{if eq .Membership "exclusive"}}Applying this label moves the message{{else}}Can apply alongside other labels{{end}}"><span class="labelname">{{.Name}}</span>{{if eq .Membership "exclusive"}}<span class="label-location" title="Moves message">↦</span>{{else}}{{with index $.LabelUnread .Name}}<span class="count unread" data-count="label">{{.}}</span>{{end}}{{end}}</a>{{if and ($.Principal.CanAssist $.Inbox.ID) .CanRename .CanDelete}}<button type="button" class="folder-manage" data-folder-manage data-label-id="{{.ID}}" data-folder-id="{{.FolderID}}" data-folder-name="{{.Name}}" title="Manage label" aria-label="Manage label {{.Name}}">` + iconFolderSvg + `</button>{{end}}</div>{{end}}{{end}}{{if .Principal.CanAssist .Inbox.ID}}<dialog id="folder-new-dialog" class="folder-dialog" aria-labelledby="folder-new-title"><h2 id="folder-new-title">New label</h2><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/labels"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Label name</label><input name="name" required autocomplete="off"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Create</button></div></form></dialog><dialog id="folder-manage-dialog" class="folder-dialog" aria-labelledby="folder-manage-title"><h2 id="folder-manage-title">Manage label</h2><form method="post" action="" data-folder-rename-form id="folder-rename-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" data-folder-rename-input required autocomplete="off"></form><div class="dialog-actions"><form method="post" action="" data-folder-delete-form><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger" data-confirm="Delete this label? This will remove the label from its messages.">Delete label</button></form><button type="button" class="secondary" data-close-dialog>Cancel</button><button form="folder-rename-form">Rename</button></div></dialog>{{end}}</aside>`
+// Compose sits at the very top, then the system views, then two independent
+// sections: Folders, the mailbox's physical folders (only a mailbox that owns
+// them has any), and Labels, the additive classifications. A label never moves
+// a message, so the two sections never offer each other's controls. It relies
+// on .Inbox, .Folder, .ActiveLabel, .Folders, .UnifiedLabels and the count
+// fields being populated on pageData.
+const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a><div class="navgroup navgroup-head"><span>Folders</span></div>{{if or .Folders .CanManageFolders}}<div class="navgroup navgroup-head"><span>Custom folders</span>{{if and .CanManageFolders (.Principal.CanAssist .Inbox.ID)}}<button type="button" data-folder-new class="navgroup-new" title="New folder" aria-label="New folder">+</button>{{end}}</div>{{range .Folders}}<div class="folder-row"><a class="folder{{if eq $.ActiveFolderID .ID}} active{{end}}" data-folder="folder" href="/ui/inboxes/{{$.Inbox.ID}}/folder?folder={{.ID | querystring}}">{{.Name}}{{if .Count}} <span class="count">{{.Count}}</span>{{end}}</a>{{if and $.CanManageFolders ($.Principal.CanAssist $.Inbox.ID)}}<button type="button" class="folder-manage" data-folder-manage data-manage-kind="folder" data-folder-id="{{.ID}}" data-folder-name="{{.Name}}" title="Manage folder" aria-label="Manage folder {{.Name}}">` + iconFolderSvg + `</button>{{end}}</div>{{end}}{{end}}{{if or .UnifiedLabels .Capabilities.Labels}}<div class="navgroup navgroup-head"><span>Labels</span>{{if and .Capabilities.CreateLabels (.Principal.CanAssist .Inbox.ID)}}<button type="button" data-label-new class="navgroup-new" title="New label" aria-label="New label">+</button>{{end}}</div>{{range .UnifiedLabels}}<div class="folder-row"><a class="folder label{{if or .Selected (and .FolderID (eq $.ActiveFolderID .FolderID)) (and (eq .Kind "tag") (eq $.ActiveLabel .Name))}} active{{end}}" data-folder="label" data-label="{{.Name}}" href="{{.URL}}" title="Can apply alongside other labels"><span class="labelname">{{.Name}}</span>{{with index $.LabelUnread .Name}}<span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{if and ($.Principal.CanAssist $.Inbox.ID) .CanRename .CanDelete}}<button type="button" class="folder-manage" data-folder-manage data-manage-kind="label" data-label-id="{{.ID}}" data-folder-name="{{.Name}}" title="Manage label" aria-label="Manage label {{.Name}}">` + iconFolderSvg + `</button>{{end}}</div>{{end}}{{end}}{{if .Principal.CanAssist .Inbox.ID}}{{if .CanManageFolders}}<dialog id="folder-new-dialog" class="folder-dialog" aria-labelledby="folder-new-title"><h2 id="folder-new-title">New folder</h2><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/folders"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Folder name</label><input name="path" required autocomplete="off" placeholder="Projects"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Create</button></div></form></dialog>{{end}}{{if .Capabilities.CreateLabels}}<dialog id="label-new-dialog" class="folder-dialog" aria-labelledby="label-new-title"><h2 id="label-new-title">New label</h2><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/labels"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Label name</label><input name="name" required autocomplete="off"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Create</button></div></form></dialog>{{end}}<dialog id="folder-manage-dialog" class="folder-dialog" aria-labelledby="folder-manage-title"><h2 id="folder-manage-title">Manage</h2><form method="post" action="" data-folder-rename-form id="folder-rename-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" data-folder-rename-input required autocomplete="off"></form><div class="dialog-actions"><form method="post" action="" data-folder-delete-form><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger" data-manage-delete data-confirm="Delete this?">Delete</button></form><button type="button" class="secondary" data-close-dialog>Cancel</button><button form="folder-rename-form">Rename</button></div></dialog>{{end}}</aside>`
 
 // selectBanner is the Gmail-style two-state "select all" bar. Its two spans are
 // toggled by app.js: the first (after checking the header box on a paginated
@@ -328,33 +331,31 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
-	s.renderMail(w, r, draftsBody, pageData{
-		Title:       box.Address + " · Drafts",
-		Page:        "inbox",
-		Principal:   p,
-		CSRF:        csrf(r),
-		Account:     acc,
-		Inbox:       &box,
-		Drafts:      drafts,
-		Folder:      "drafts",
-		HasMore:     hasMore,
-		Before:      cursor,
-		PagerURL:    pagerURL,
-		TotalCount:  draftCount,
-		Labels:      inboxLabels,
-		LabelUnread: labelUnread,
-		UnreadCount: unread[box.ID],
-		SpamCount:   spamCount,
-		TrashCount:  trashCount,
-		DraftCount:  draftCount,
-		OutboxCount: outboxCount,
-		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
-		UnifiedLabels: func() []mailLabel {
-			labels, _ := s.mailboxLabels(r.Context(), p, box)
-			return labels
-		}(),
-		Notice: r.URL.Query().Get("notice"),
-	})
+	data := pageData{
+		Title:         box.Address + " · Drafts",
+		Page:          "inbox",
+		Principal:     p,
+		CSRF:          csrf(r),
+		Account:       acc,
+		Inbox:         &box,
+		Drafts:        drafts,
+		Folder:        "drafts",
+		HasMore:       hasMore,
+		Before:        cursor,
+		PagerURL:      pagerURL,
+		TotalCount:    draftCount,
+		Labels:        inboxLabels,
+		LabelUnread:   labelUnread,
+		UnreadCount:   unread[box.ID],
+		SpamCount:     spamCount,
+		TrashCount:    trashCount,
+		DraftCount:    draftCount,
+		OutboxCount:   outboxCount,
+		UnifiedLabels: s.sidebarLabelsFor(r.Context(), p, box),
+		Notice:        r.URL.Query().Get("notice"),
+	}
+	s.applyMailboxSidebar(r.Context(), p, box, &data)
+	s.renderMail(w, r, draftsBody, data)
 }
 
 func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
@@ -386,31 +387,29 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
-	s.renderMail(w, r, outboxBody, pageData{
-		Title:       box.Address + " · Outbox",
-		Page:        "inbox",
-		Principal:   p,
-		CSRF:        csrf(r),
-		Account:     acc,
-		Inbox:       &box,
-		Messages:    msgs,
-		Folder:      "outbox",
-		HasMore:     hasMore,
-		PagerURL:    pagerURL,
-		Labels:      inboxLabels,
-		LabelUnread: labelUnread,
-		UnreadCount: unread[box.ID],
-		SpamCount:   spamCount,
-		TrashCount:  trashCount,
-		DraftCount:  draftCount,
-		OutboxCount: outboxCount,
-		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
-		UnifiedLabels: func() []mailLabel {
-			labels, _ := s.mailboxLabels(r.Context(), p, box)
-			return labels
-		}(),
-		Notice: r.URL.Query().Get("notice"),
-	})
+	data := pageData{
+		Title:         box.Address + " · Outbox",
+		Page:          "inbox",
+		Principal:     p,
+		CSRF:          csrf(r),
+		Account:       acc,
+		Inbox:         &box,
+		Messages:      msgs,
+		Folder:        "outbox",
+		HasMore:       hasMore,
+		PagerURL:      pagerURL,
+		Labels:        inboxLabels,
+		LabelUnread:   labelUnread,
+		UnreadCount:   unread[box.ID],
+		SpamCount:     spamCount,
+		TrashCount:    trashCount,
+		DraftCount:    draftCount,
+		OutboxCount:   outboxCount,
+		UnifiedLabels: s.sidebarLabelsFor(r.Context(), p, box),
+		Notice:        r.URL.Query().Get("notice"),
+	}
+	s.applyMailboxSidebar(r.Context(), p, box, &data)
+	s.renderMail(w, r, outboxBody, data)
 }
 
 func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
@@ -683,6 +682,86 @@ func (s *Server) draftAttachmentPath() string {
 	return filepath.Join(s.Service.Config.DataDir, "drafts", id[4:6], id[6:8], id+".bin")
 }
 
+// ownsPhysicalFolders reports whether the mailbox has real folders the
+// operator may create, rename and delete. A domain mailbox classifies with
+// labels, and a Gmail mailbox's folders are its user labels, so both have
+// system folders only.
+func (s *Server) ownsPhysicalFolders(ctx context.Context, p model.Principal, box model.Inbox) bool {
+	return box.Kind == model.InboxKindStandalone && !s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID)
+}
+
+// archiveAction reports whether the mailbox can archive a message with a null
+// destination: a domain mailbox files it in its internal archive, a Gmail
+// mailbox removes INBOX. Everywhere else a physical folder is required.
+func (s *Server) archiveAction(ctx context.Context, p model.Principal, box model.Inbox) bool {
+	return box.Kind == model.InboxKindDomain || (box.Kind == model.InboxKindStandalone && s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID))
+}
+
+// mailboxFolders returns the mailbox's physical custom folders, for the
+// sidebar's Custom folders section, and the destinations the reader's move
+// control offers: the system views a message may be filed into, the custom
+// folders, and the archive action a domain or Gmail mailbox supports. It
+// reuses the API's folder list, so the UI and the API describe the same
+// mailbox: a domain or Gmail mailbox has system folders only, and a mailbox
+// that owns real folders keeps them.
+func (s *Server) mailboxFolders(ctx context.Context, p model.Principal, box model.Inbox) (custom, moves []folderSidebarItem) {
+	folders, err := s.mailboxFolderList(ctx, p, mailboxBackend{inbox: box})
+	if err != nil {
+		return nil, nil
+	}
+	system := map[string]folderSidebarItem{}
+	var customMoves []folderSidebarItem
+	for _, f := range folders {
+		if !f.Selectable {
+			continue
+		}
+		switch f.Role {
+		case model.FolderRoleFolder:
+			custom = append(custom, folderSidebarItem{ID: f.ID, Path: f.Path, Name: f.Name, Role: f.Role, Count: f.MessageCount})
+			customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: f.Name})
+		case model.FolderRoleInbox, model.FolderRoleSpam, model.FolderRoleTrash:
+			// The system views a message may be filed into. Sent, Drafts and
+			// Outbox are provider-managed, so they are never destinations.
+			system[f.Role] = folderSidebarItem{ID: f.ID, Name: f.Name}
+		case model.FolderRoleArchive:
+			// A provider's own archive folder is a physical destination. A
+			// domain or Gmail mailbox archives with a null destination instead.
+			if box.Kind == model.InboxKindStandalone {
+				customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: f.Name})
+			}
+		}
+	}
+	for _, role := range []string{model.FolderRoleInbox, model.FolderRoleSpam, model.FolderRoleTrash} {
+		if item, ok := system[role]; ok {
+			moves = append(moves, item)
+		}
+	}
+	moves = append(moves, customMoves...)
+	if s.archiveAction(ctx, p, box) {
+		moves = append(moves, folderSidebarItem{Name: "Archive"})
+	}
+	return custom, moves
+}
+
+// sidebarLabelsFor returns the additive labels the sidebar lists. A label is a
+// classification, never a location, so it never appears in the folder section.
+func (s *Server) sidebarLabelsFor(ctx context.Context, p model.Principal, box model.Inbox) []mailLabel {
+	labels, _ := s.mailboxLabels(ctx, p, box)
+	return sidebarLabels(labels)
+}
+
+// applyMailboxSidebar fills the mailbox page's sidebar sections. Physical
+// folders and additive labels are independent: each is listed only when the
+// mailbox supports it, so a raw IMAP mailbox shows folders without labels and
+// a domain or Gmail mailbox shows labels without folders.
+func (s *Server) applyMailboxSidebar(ctx context.Context, p model.Principal, box model.Inbox, data *pageData) {
+	data.Capabilities = s.Service.Store.MailboxCapabilities(ctx, box)
+	// The folder controls follow the same predicate the API's folder write
+	// guard uses, so the UI never offers a control the API would refuse.
+	data.CanManageFolders = s.ownsPhysicalFolders(ctx, p, box)
+	data.Folders, data.MoveFolders = s.mailboxFolders(ctx, p, box)
+}
+
 func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder string) {
 	s.renderMailboxFiltered(w, r, folder, "")
 }
@@ -727,7 +806,6 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, id)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
 	// Sending readiness follows the inbox domain's sending config.
 	outboundReady := true
@@ -755,8 +833,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		Before:                     cursor,
 		CurrentPageBefore:          before,
 		Folder:                     folder,
-		Folders:                    folderSidebar,
-		UnifiedLabels:              unifiedLabels,
+		UnifiedLabels:              sidebarLabels(unifiedLabels),
 		PagerURL:                   pagerURL,
 		TotalCount:                 totalCount,
 		Labels:                     inboxLabels,
@@ -777,6 +854,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		Notice:                     r.URL.Query().Get("notice"),
 	}
 	s.applyStandaloneMailbox(r, p, box, &data)
+	s.applyMailboxSidebar(r.Context(), p, box, &data)
 	s.pendingMessageOverlay(r, &data)
 	s.renderMail(w, r, inboxBody, data)
 }
@@ -1443,6 +1521,50 @@ func (s *Server) formAttachments(r *http.Request) ([]app.SendAttachment, error) 
 
 func (s *Server) uiMessageLabels(w http.ResponseWriter, r *http.Request) {
 	s.uiUnifiedMessageLabels(w, r)
+}
+
+// uiMessageMove files one message into a folder, or archives it when no folder
+// is named. It reuses the API's folder action, so the UI and the API apply the
+// same safeguards: a label never moves a message, and a destination the
+// provider manages is refused.
+func (s *Server) uiMessageMove(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	m, mb, err := s.resolveActionMessage(r, p, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	box, err := s.Service.Store.GetInbox(r.Context(), p, mb.inbox.ID)
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if !p.CanAssist(box.ID) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	var folderID *string
+	if id := strings.TrimSpace(r.Form.Get("folder_id")); id != "" {
+		folderID = &id
+	}
+	action, err := s.folderMoveAction(r.Context(), p, box, folderID)
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if _, err := s.Service.EnqueueInboxAction(r.Context(), p, box.ID, m.ID, action); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	dest := "Archive"
+	if folderID != nil {
+		dest = ""
+		if f, ferr := s.Service.Store.GetFolderByID(r.Context(), p.AccountID, box.ID, *folderID); ferr == nil {
+			dest = f.Name
+		}
+	}
+	notice := queuedNotice(actionLabel(action), 1, dest)
+	http.Redirect(w, r, "/ui/messages/"+url.PathEscape(m.ID)+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
 }
 
 func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {

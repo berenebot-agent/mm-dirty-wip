@@ -109,7 +109,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 					continue
 				}
 			}
-			v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: hostname}
+			v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: hostname, HTTPCode: st.HTTPCode}
 			if !st.ExpiresAt.IsZero() {
 				t := st.ExpiresAt
 				v.ExpiresAt = &t

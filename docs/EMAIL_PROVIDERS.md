@@ -4,17 +4,27 @@ MailMoose supports a wide range of options for receiving and sending email, or c
 
 | | Providers |
 | --- | --- |
-| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) |
+| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Remote MX](#inbound-remote-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) · [SendGrid](#inbound-sendgrid) |
 | **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
 | **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
+
+The API names for these providers — the value that goes in `"provider"` when you
+configure a domain over the API — are `mx` (Direct MX), `dialmx` (Antler MX),
+`remotemx` (Remote MX), `mailgun`, `cloudflare`, `resend`, `postmark`,
+`sendgrid`, `brevo` and `smtp`. Each provider's section below names its own.
+The label the interface shows and the API name are different strings — the
+picker says "Remote MailMoose MX" where the API says `remotemx` — so copy the
+name from the provider's section rather than from the dropdown.
 
 Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
 
 Domains can inherit their parent's sending and receiving settings. Provider credentials are encrypted using `APP_ENCRYPTION_KEY`.
 
-For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md).
+For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md) — including the [proxy requirements for the receiver session](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
 
 ## Inbound: Direct MX
+
+**API provider name:** `mx`
 
 **Direct MX (SMTP delivery)** receives email directly from other mail servers using the SMTP receiver bundled with MailMoose.
 
@@ -26,11 +36,30 @@ You also need the correct **public DNS records**:
 2. Set your domain's **MX** record to that hostname, not an IP address. Use the hostname shown in the MailMoose receiving setup.
 3. Configure **SPF** and other sender-authentication records separately if you also send mail from this domain.
 
-In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. Opening the port or publishing DNS records alone does not enable the receiver for a domain.
+In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. The system administrator can adjust the receiver's shared SMTP settings in that Direct MX panel; all Direct MX domains use the same receiver. Opening the port or publishing DNS records alone does not enable the receiver for a domain. For a receiver you run separately, use [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
 
-Direct MX is not needed for Antler MX or provider-webhook receiving. Advanced setups can use a [separate SMTP receiver](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
+The provider list offers Direct MX before the receiver exists, and saving a domain does not configure the receiver. **A Direct MX domain receives no mail at all until the installation's receiver is configured**, which a system administrator does in that same Direct MX panel. A domain that reads as set up for Direct MX is therefore not necessarily receiving yet.
+
+Direct MX is not needed for Antler MX or provider-webhook receiving. For a separately operated receiver, configure [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account) instead.
+
+## Inbound: Remote MX
+
+**API provider name:** `remotemx`
+
+**Remote MX** receives email through a separate SMTP receiver that you run
+yourself. MailMoose opens an outbound connection to that receiver and never
+needs an inbound port of its own. Choose it when the receiver is dedicated to
+this account; for one public receiver shared by many domains, choose **Dial
+MX** instead.
+
+The receiver's session endpoint speaks **HTTP/2 only** and needs a
+non-buffering reverse proxy in front of it. Both requirements, the failure
+signatures and the `curl --http2` check are in the
+[Remote SMTP receiving guide](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
 
 ## Inbound: Antler MX
+
+**API provider name:** `dialmx`
 
 **Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
 
@@ -58,6 +87,8 @@ To send outbound mail, configure a separate provider under the domain's **Sendin
 
 ## Inbound: Mailgun
 
+**API provider name:** `mailgun`
+
 **Website:** [www.mailgun.com](https://www.mailgun.com/)
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
@@ -80,6 +111,8 @@ https://your-host.example/internal/ingest/mailgun/raw-mime
 MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Inbound: Cloudflare Email Routing
+
+**API provider name:** `cloudflare`
 
 **Website:** [developers.cloudflare.com](https://developers.cloudflare.com/email-routing/)
 
@@ -104,6 +137,8 @@ network addresses. See [Cloudflare's Email Routing guide](https://developers.clo
 
 ## Inbound: Resend
 
+**API provider name:** `resend`
+
 **Website:** [resend.com](https://resend.com/)
 
 Resend sends a signed notification to MailMoose, which fetches the original
@@ -122,6 +157,8 @@ cannot read received mail.
 If several domains use the same Resend webhook, configure its signing secret and API key for each domain.
 
 ## Inbound: Postmark
+
+**API provider name:** `postmark`
 
 **Website:** [postmarkapp.com](https://postmarkapp.com/)
 
@@ -142,6 +179,26 @@ webhook caller, not the envelope sender; see the relevant note in
 [SECURITY.md](../SECURITY.md). Postmark is inbound-only; choose a separate
 sending provider.
 
+## Inbound: SendGrid
+
+**API provider name:** `sendgrid`
+
+**Website:** [sendgrid.com](https://sendgrid.com/)
+
+1. In SendGrid, open **Settings → Inbound Parse** and click **Add Host & URL**.
+2. Point the receiving domain's **MX** record at `mx.sendgrid.net` with
+   priority 10.
+3. In MailMoose, open the domain's **Receiving** panel, choose **SendGrid**, and
+   save. MailMoose displays the webhook URL to paste into SendGrid.
+4. Set the receiving domain in SendGrid and paste that webhook URL.
+5. Tick **POST the raw, full MIME message**, then create a webhook security
+   policy with signature verification and attach it to the parse setting.
+6. Copy the public key the policy returns, paste it into the MailMoose panel and
+   save.
+7. Send a test message and confirm it appears in the intended inbox.
+
+SendGrid is inbound-only; choose a separate sending provider.
+
 ## Outbound
 
 Sending is configured per domain. Open a domain's page, choose a **Sending**
@@ -154,11 +211,15 @@ sending for that domain only.
 
 #### Outbound: Mailgun
 
+**API provider name:** `mailgun`
+
 **Website:** [www.mailgun.com](https://www.mailgun.com/)
 
 Enter the API key and sending domain shown in the Mailgun account.
 
 #### Outbound: Brevo
+
+**API provider name:** `brevo`
 
 **Website:** [www.brevo.com](https://www.brevo.com/)
 
@@ -166,15 +227,21 @@ Enter an API key and verify the sender address with Brevo.
 
 #### Outbound: Resend
 
+**API provider name:** `resend`
+
 **Website:** [resend.com](https://resend.com/)
 
 Enter an API key and verify the sending domain with Resend.
 
 #### Outbound: SMTP
 
+**API provider name:** `smtp`
+
 Enter the relay hostname, port, credentials and connection security requested by the form.
 
 #### Outbound: Direct MX
+
+**API provider name:** `mx`
 
 No relay credentials are used. The operator must be able to send directly to recipient mail servers on port 25.
 
@@ -248,9 +315,14 @@ an unverified app does not remove that limit and can block access instead.
 
 ### Mailbox behaviour
 
-Gmail system labels supply Inbox, Sent, Drafts, Spam and Trash views. Archive
-removes the Inbox label; a message can appear in multiple user-label views.
-Search runs against Gmail, and new mail is detected by polling rather than push
+Gmail system labels supply the Trash, Spam, Drafts, Inbox and Sent folders —
+the five system destinations a Gmail inbox exposes, and no virtual folder. A
+message can sit under several Gmail labels at once, so MailMoose reports one
+canonical folder per message — the first of Trash, Spam, Drafts, Inbox, Sent
+that it carries — and lists the rest as additive labels. A message that
+carries none of them is archived and reports no canonical folder. Archive
+removes the Inbox label and keeps Sent, so an archived message still reports
+the Sent folder. Search runs against Gmail, and new mail is detected by polling rather than push
 notifications. Bodies and attachments are fetched on demand rather than stored as
 a full-message archive. Permanent deletion is not available from this connector.
 
@@ -272,7 +344,22 @@ Self-hosters can register a Microsoft Entra public-client application and set
 `common` for work/school and personal accounts, or a tenant ID/domain to restrict
 the app to one organisation. Add the `http://localhost` mobile/desktop redirect
 URI; no client secret is used. Required delegated permissions are
-`User.Read`, `Mail.ReadWrite`, `Mail.Send`, and `offline_access`.
+`User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, and
+`offline_access`.
+
+`MailboxSettings.ReadWrite` is what lets MailMoose create an Outlook **master
+category** — the native equivalent of a label — through
+`POST /users/{mailbox}/outlook/masterCategories`. Without it MailMoose cannot
+create a category in the mailbox, and the categories it already knows about
+stay readable and usable on messages. The permission is only used for category
+creation: renaming and deleting a category remain unsupported.
+
+> **Existing connections must be reconnected once.** A mailbox connected
+> before this permission was added does not carry the grant, and Microsoft
+> will not add it to an existing token. Reconnect the inbox from its settings
+> (or connect it again) to grant `MailboxSettings.ReadWrite`. A reconnect that
+> does not carry the new permission is refused with
+> `Microsoft mailbox permissions were not granted`.
 
 For shared mailboxes, enable `Mail.ReadWrite.Shared`, `Mail.Send.Shared`, and
 `User.ReadBasic.All` in the app registration. Your organisation may require
@@ -298,7 +385,10 @@ that inbox's settings if Microsoft access expires or is revoked.
 
 MailMoose presents Outlook folders and categories in the standalone inbox. Normal
 Inbox and Archive folders are supported; Microsoft's separate Online Archive
-mailbox is not. Outlook keeps its Sent Items copy. Some send or reply outcomes
+mailbox is not. Outlook keeps its Sent Items copy. A message's location is its
+Outlook folder; its categories are additive labels that can be created but not
+renamed or deleted through the API — creating one needs the
+`MailboxSettings.ReadWrite` permission described above. Some send or reply outcomes
 can be uncertain; do not repeat a send unless the inbox confirms it failed.
 
 Personal Outlook.com and Microsoft 365 inboxes can receive near-real-time change
@@ -350,3 +440,7 @@ outbound server, the inbox can still receive and read mail but cannot send from
 the connected account. Use the provider's documented server names and ports;
 MailMoose does not guess them. Connection credentials are encrypted with
 `APP_ENCRYPTION_KEY`.
+
+An IMAP mailbox has folders, not labels: a message's location is its IMAP
+folder, and MailMoose does not expose IMAP mail with canonical labels. Tag a
+message by moving it into a folder.

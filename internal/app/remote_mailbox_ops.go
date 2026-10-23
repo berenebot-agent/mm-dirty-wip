@@ -689,6 +689,8 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 			folderPath = model.NamespaceINBOX
 		}
 	}
+	// A client may address a folder by its stable id.
+	folderPath = m.remoteFolderScope(ctx, p.AccountID, inboxID, folderPath)
 	// Bootstrap API reads on first use; UI reads schedule the same work and return
 	// the cache immediately. Discovery still enforces the personal namespace.
 	reconciled := false
@@ -917,6 +919,20 @@ func (m *RemoteMailboxService) authorizeAssist(ctx context.Context, p model.Prin
 // shared/other namespaces, so this never falls back to the whole login. A folder
 // that has never been admitted (for example a shared namespace) is out of scope.
 // This is the single place folder scoping is enforced for remote operations.
+// remoteFolderScope resolves a folder scope to the provider path it names. A
+// client may address a folder by its stable id or by its path; the scope is
+// always the path the provider knows.
+func (m *RemoteMailboxService) remoteFolderScope(ctx context.Context, accountID, inboxID, scope string) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return ""
+	}
+	if f, e := m.Service.Store.GetFolderByID(ctx, accountID, inboxID, scope); e == nil {
+		return f.Path
+	}
+	return scope
+}
+
 func (m *RemoteMailboxService) folderInScope(inbox model.Inbox, folderPath string) bool {
 	if m.IsGoogle(context.Background(), inbox.AccountID, inbox.ID) || m.IsMicrosoft(context.Background(), inbox.AccountID, inbox.ID) {
 		return true

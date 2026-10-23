@@ -105,6 +105,8 @@ func normalizeMailboxStoreError(err error) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, store.ErrInvalidCursor):
+		return model.NewMailboxError(model.ErrKindInvalid, "invalid cursor", false, err)
 	case errors.Is(err, store.ErrNotFound):
 		return model.NewMailboxError(model.ErrKindNotFound, "not found", false, err)
 	case errors.Is(err, store.ErrForbidden):
@@ -236,15 +238,19 @@ func isRemoteMiss(err error) bool {
 // scopes the lookup to one inbox (and is enforced as a boundary). It returns the
 // owning inbox id and whether the thread is remote. A remote-unavailable error is
 // preserved rather than masked as a 404.
-func (s *Server) resolveThreadAny(ctx context.Context, p model.Principal, threadID, inboxQuery string) (threadIDOut, inboxID string, msgs []model.Message, remote bool, err error) {
+func (s *Server) resolveThreadAny(ctx context.Context, p model.Principal, threadID, inboxQuery string, preview ...bool) (threadIDOut, inboxID string, msgs []model.Message, remote bool, err error) {
 	threadID = strings.TrimSpace(threadID)
+	var remoteLimit []int
+	if len(preview) > 0 && preview[0] {
+		remoteLimit = []int{201}
+	}
 	if inboxQuery != "" {
 		mb, merr := s.resolveMailbox(ctx, p, inboxQuery)
 		if merr != nil {
 			return "", "", nil, false, merr
 		}
 		if mb.routed {
-			_, views, rerr := mb.remote.GetRemoteThread(ctx, p, mb.inbox.ID, threadID)
+			_, views, rerr := mb.remote.GetRemoteThread(ctx, p, mb.inbox.ID, threadID, remoteLimit...)
 			if rerr != nil {
 				return "", "", nil, true, rerr
 			}
@@ -272,7 +278,7 @@ func (s *Server) resolveThreadAny(ctx context.Context, p model.Principal, thread
 		if !mb.routed || !mb.remoteConfigured() {
 			continue
 		}
-		view, views, rerr := mb.remote.GetRemoteThread(ctx, p, mb.inbox.ID, threadID)
+		view, views, rerr := mb.remote.GetRemoteThread(ctx, p, mb.inbox.ID, threadID, remoteLimit...)
 		if rerr != nil {
 			if isRemoteMiss(rerr) {
 				continue
@@ -348,6 +354,10 @@ func mapMailboxError(w http.ResponseWriter, err error) {
 	msg := mb.Message
 	if msg == "" {
 		msg = mb.Kind
+	}
+	if mb.Kind == model.ErrKindUnsupported {
+		writeJSON(w, status, map[string]string{"error": msg, "code": "unsupported_operation"})
+		return
 	}
 	writeError(w, status, msg)
 }

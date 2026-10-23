@@ -157,3 +157,25 @@ func TestRemoteMXDomainSelectRequiresReceiver(t *testing.T) {
 		t.Fatalf("select without receiver = %v, want ErrInvalidConfig", err)
 	}
 }
+
+// TestRemoteMXDomainEnforcement proves the per-domain spam policy is the one
+// receiving setting a Remote MX domain stores: it persists, and an unknown
+// option is rejected rather than silently stored.
+func TestRemoteMXDomainEnforcement(t *testing.T) {
+	t.Parallel()
+	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
+	ctx := context.Background()
+	if _, err := svc.SaveAccountMXReceiver(ctx, adminP(u), app.AccountMXReceiverInput{URL: "https://mx.example.test", BearerKey: "k"}); err != nil {
+		t.Fatalf("receiver: %v", err)
+	}
+	saved, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, app.RemoteMXProvider, map[string]any{"enforcement": "hard"}, false)
+	if err != nil {
+		t.Fatalf("select with enforcement: %v", err)
+	}
+	if values, _ := svc.DecryptDomainReceivingConfig(saved); values["enforcement"] != "hard" {
+		t.Fatalf("stored enforcement = %v, want hard", values["enforcement"])
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, app.RemoteMXProvider, map[string]any{"enforcement": "bogus"}, false); !errors.Is(err, app.ErrInvalidConfig) {
+		t.Fatalf("bogus enforcement = %v, want ErrInvalidConfig", err)
+	}
+}

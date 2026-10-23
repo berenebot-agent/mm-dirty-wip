@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -540,6 +541,21 @@ func (s *Store) DeleteFolder(ctx context.Context, p model.Principal, inboxID, fo
 // returns the current message and no event. It returns a message.folder_changed
 // event carrying the old and new folder ids.
 func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string) (model.Message, *model.Event, error) {
+	m, events, err := s.moveMessageToFolder(ctx, p, messageID, destFolderID, false)
+	if err != nil || len(events) == 0 {
+		return m, nil, err
+	}
+	return m, &events[0], nil
+}
+
+// ClassifyMessage applies an exclusive system classification atomically and returns
+// every durable event so the worker can publish both placement and lifecycle changes.
+func (s *Store) ClassifyMessage(ctx context.Context, p model.Principal, messageID, destFolderID string) ([]model.Event, error) {
+	_, events, err := s.moveMessageToFolder(ctx, p, messageID, destFolderID, true)
+	return events, err
+}
+
+func (s *Store) moveMessageToFolder(ctx context.Context, p model.Principal, messageID, destFolderID string, classify bool) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -557,6 +573,7 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 	}
 	dest := strings.TrimSpace(destFolderID)
 	destPath := ""
+	role := model.FolderRoleInbox
 	if dest != "" {
 		folder, ferr := scanFolder(tx.QueryRowContext(ctx, `SELECT `+folderColumns+` FROM inbox_folders WHERE inbox_id=? AND id=?`, m.InboxID, dest))
 		if ferr == sql.ErrNoRows {
@@ -569,9 +586,28 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 			return model.Message{}, nil, fmt.Errorf("%w: folder is not selectable", ErrConflict)
 		}
 		destPath = folder.Path
+		role = folder.Role
 	}
 	oldID := m.MailboxID
-	if oldID == dest {
+	spam, deleted := m.Spam, m.DeletedAt
+	if classify {
+		switch role {
+		case model.FolderRoleInbox:
+			spam, deleted = false, nil
+		case model.FolderRoleArchive:
+			spam, deleted = false, nil
+		case model.FolderRoleSpam:
+			spam, deleted = true, nil
+		case model.FolderRoleTrash:
+			if deleted == nil {
+				now := time.Now().UTC()
+				deleted = &now
+			}
+		default:
+			return model.Message{}, nil, ErrConflict
+		}
+	}
+	if oldID == dest && spam == m.Spam && deleted == m.DeletedAt {
 		if err = tx.Commit(); err != nil {
 			return model.Message{}, nil, err
 		}
@@ -581,22 +617,146 @@ func (s *Store) MoveMessageToFolder(ctx context.Context, p model.Principal, mess
 	if dest != "" {
 		destArg = dest
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET mailbox_id=? WHERE id=? AND account_id=?`, destArg, messageID, p.AccountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET mailbox_id=?,is_spam=?,deleted_at=? WHERE id=? AND account_id=?`, destArg, spam, nullTimePtr(deleted), messageID, p.AccountID); err != nil {
 		return model.Message{}, nil, err
+	}
+	// The event carries the canonical folder ids, the same ones the message
+	// projection reports, so a listener never sees a folder the reader cannot
+	// select: a domain message filed in the Archive or in a custom folder has
+	// no canonical folder.
+	oldCanonical, err := s.canonicalFolderID(ctx, tx, p.AccountID, m.InboxID, m, oldID)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	moved := m
+	moved.Spam, moved.DeletedAt, moved.MailboxID = spam, deleted, dest
+	newCanonical, err := s.canonicalFolderID(ctx, tx, p.AccountID, m.InboxID, moved, dest)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	newPath := ""
+	if newCanonical != "" {
+		newPath, err = folderPathByIDTx(ctx, tx, m.InboxID, newCanonical)
+		if err != nil {
+			return model.Message{}, nil, err
+		}
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageFolderChanged, messageID, map[string]any{
 		"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
-		"old_folder_id": oldID, "new_folder_id": dest, "new_folder_path": destPath,
+		"old_folder_id": nullableFolderID(oldCanonical), "new_folder_id": nullableFolderID(newCanonical), "new_folder_path": newPath,
 	})
 	if err != nil {
 		return model.Message{}, nil, err
+	}
+	events := []model.Event{ev}
+	if classify {
+		record := func(eventType string, detail map[string]any) error {
+			lifecycle, e := insertEventTx(ctx, tx, p.AccountID, m.InboxID, eventType, messageID, detail)
+			if e != nil {
+				return e
+			}
+			events = append(events, lifecycle)
+			return nil
+		}
+		if spam != m.Spam {
+			if err := record(model.EventMessageSpamChanged, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+				"old": m.Spam, "new": spam, "is_spam": spam,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
+		if m.DeletedAt == nil && deleted != nil {
+			if err := record(model.EventMessageTrashed, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
+		if m.DeletedAt != nil && deleted == nil {
+			if err := record(model.EventMessageRestored, map[string]any{
+				"message_id": messageID, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+			}); err != nil {
+				return model.Message{}, nil, err
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return model.Message{}, nil, err
 	}
 	m.MailboxID = dest
 	m.FolderPath = destPath
-	return m, &ev, nil
+	m.Spam, m.DeletedAt = spam, deleted
+	return m, events, nil
+}
+
+// canonicalFolderID projects a message's location onto the canonical folder id
+// the API reports for it.
+//
+// A domain mailbox has one folder per classification: Inbox, Sent, Spam and
+// Trash. A message filed in the Archive or in a custom folder has no
+// canonical folder — the reader selects that mail by label — so its id is
+// empty. A remote mailbox keeps its own folder, whose id is already canonical.
+func (s *Store) canonicalFolderID(ctx context.Context, tx *sql.Tx, accountID, inboxID string, m model.Message, mailboxID string) (string, error) {
+	var kind string
+	if err := tx.QueryRowContext(ctx, `SELECT kind FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&kind); err != nil {
+		return "", err
+	}
+	if kind != model.InboxKindDomain {
+		return mailboxID, nil
+	}
+	// Trash and Spam classify the message itself.
+	if m.DeletedAt != nil {
+		return folderIDByRoleTx(ctx, tx, inboxID, model.FolderRoleTrash)
+	}
+	if m.Spam {
+		return folderIDByRoleTx(ctx, tx, inboxID, model.FolderRoleSpam)
+	}
+	sent, err := folderIDByRoleTx(ctx, tx, inboxID, model.FolderRoleSent)
+	if err != nil {
+		return "", err
+	}
+	if m.Direction == "outbound" && m.Status == "sent" && (mailboxID == "" || mailboxID == sent) {
+		return sent, nil
+	}
+	inbox, err := folderIDByRoleTx(ctx, tx, inboxID, model.FolderRoleInbox)
+	if err != nil {
+		return "", err
+	}
+	if (m.Direction == "inbound" && mailboxID == "") || mailboxID == inbox {
+		return inbox, nil
+	}
+	// The Archive and a custom folder are not canonical locations.
+	return "", nil
+}
+
+// folderIDByRoleTx resolves the folder carrying a mailbox role in an inbox.
+func folderIDByRoleTx(ctx context.Context, tx *sql.Tx, inboxID, role string) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND role=? ORDER BY path LIMIT 1`, inboxID, role).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+// folderPathByIDTx resolves a folder's path by its id.
+func folderPathByIDTx(ctx context.Context, tx *sql.Tx, inboxID, folderID string) (string, error) {
+	var path string
+	err := tx.QueryRowContext(ctx, `SELECT path FROM inbox_folders WHERE inbox_id=? AND id=?`, inboxID, folderID).Scan(&path)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return path, err
+}
+
+// nullableFolderID reports a folder id as null when the message has no
+// canonical folder, so an event never names a folder the reader cannot select.
+func nullableFolderID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }
 
 // SetFolderRemoteMetadata replaces the opaque adapter metadata of a folder. It is

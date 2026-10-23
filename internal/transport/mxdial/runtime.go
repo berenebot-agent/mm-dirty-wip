@@ -51,6 +51,12 @@ type Status struct {
 	Reason       string
 	SMTPHostname string
 	ExpiresAt    time.Time
+	// HTTPCode is the HTTP status the receiver URL answered the session POST
+	// with, or 0 when the attempt was never answered at all. Whatever answered
+	// at that URL — the receiver, or a proxy in front of it — answers in its own
+	// right, and the core cannot tell the two apart; the code is shown, the
+	// attribution is not.
+	HTTPCode int
 }
 
 // Status state vocabulary, shared by the per-domain rows and the single-mode
@@ -264,7 +270,7 @@ func (s *session) connectionStatus(state, reason string) {
 	}
 	s.m.mu.Lock()
 	prev := s.m.connection
-	next := Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: s.ready.SMTPHostname}
+	next := Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: s.ready.SMTPHostname, HTTPCode: s.httpCode}
 	s.m.connection = next
 	obs := s.m.onStatus
 	changed := prev != next
@@ -695,7 +701,7 @@ func (m *Manager) setStatus(s *session, domain, state, reason, host string, expi
 	if !m.stopping {
 		k := statusKey(domain, s.url)
 		if m.owner[k] == s {
-			next := Status{ReceiverURL: s.url, KeyID: keyID, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
+			next := Status{ReceiverURL: s.url, KeyID: keyID, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires, HTTPCode: s.httpCode}
 			changed = m.status[k] != next
 			m.status[k] = next
 		}
@@ -867,6 +873,9 @@ type session struct {
 	ready   mxwire.Ready
 	txs     map[uint64]*tx
 	sawAuth bool // an auth reached active during this connection
+	// httpCode is the HTTP status the last session attempt was answered with, or
+	// 0 when it was never answered. It is loop-owned and reset per attempt.
+	httpCode int
 	// authInflight is the number of initial authentications this session has
 	// outstanding, bounded by authLimit so one shard cannot burst the receiver.
 	authInflight int
@@ -1198,6 +1207,9 @@ func (e sessionRejectedError) Is(target error) bool { return target == ErrSessio
 // auth and transaction state for the connection's lifetime; backend workers
 // report back through s.jobs.
 func (s *session) connect() error {
+	// A new attempt knows no status: the previous attempt's code must never be
+	// reported for this one.
+	s.httpCode = 0
 	s.connectionStatus(StatusConnecting, "")
 	pr, pw := io.Pipe()
 	s.lifeMu.Lock()
@@ -1298,6 +1310,12 @@ func (s *session) connect() error {
 			return r.err
 		}
 		resp = r.resp
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Whatever answered at this URL — the receiver, or a proxy in front of
+		// it — answered with a status of its own. Keep it: the code is what
+		// tells an operator that the endpoint answered at all.
+		s.httpCode = resp.StatusCode
 	}
 	if resp.ProtoMajor != 2 {
 		return errHTTP1

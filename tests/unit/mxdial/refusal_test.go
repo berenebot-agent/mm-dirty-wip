@@ -58,6 +58,39 @@ func TestTransientReceiverErrorKeepsRetrying(t *testing.T) {
 	}
 }
 
+// TestAnsweredStatusIsCarriedOnTheRow proves the HTTP status the receiver URL
+// answered with is carried on the status row, so a panel can name an endpoint's
+// own 4xx/5xx instead of a bare "unreachable". Whatever answered at that URL —
+// the receiver, or a proxy in front of it — owns that status, and the core
+// cannot tell the two apart, so the code is carried and nothing is attributed.
+func TestAnsweredStatusIsCarriedOnTheRow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		code       int
+		wantState  string
+		wantReason string
+	}{
+		{"server error", http.StatusBadGateway, mxdial.StatusDisconnected, mxdial.ReasonReceiverError},
+		{"refusal", http.StatusMethodNotAllowed, mxdial.StatusRejected, mxdial.ReasonRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			receiverURL, tlsCfg := startRefusingReceiver(t, tc.code)
+			m, _ := startReceiverManager(t, receiverURL, tlsCfg)
+
+			waitState(t, m, "example.test", tc.wantState, 5*time.Second)
+			rows := m.Status("example.test")
+			if rows[0].HTTPCode != tc.code {
+				t.Fatalf("http code = %d, want %d", rows[0].HTTPCode, tc.code)
+			}
+			if rows[0].Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", rows[0].Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
 // TestModeMismatchIsReportedRejected proves a receiver that answers the other
 // session mode is a settled, incompatible pairing rather than a connection still
 // being authorized.
