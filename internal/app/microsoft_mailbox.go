@@ -625,14 +625,16 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	case status.Status != store.RemoteIndexComplete:
 		m.ScheduleRefresh(p.AccountID, inbox)
 	}
+	// One filter, so the store orders and pages in a single pass. An unscoped read
+	// spans the whole mailbox, like every other inbox kind and the documented
+	// contract: Spam and Trash are excluded by default and nothing else is,
+	// including user-created folders. (A message whose provider folder is
+	// unknown is still listed: the exclusion only names mirrored role folders.)
+	filter := store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before}
 	if folder == "" {
-		f, e := m.Service.Store.GetSystemFolder(ctx, p.AccountID, inbox, model.FolderRoleInbox)
-		if e != nil {
-			return RemoteListResult{Items: []RemoteMessageView{}, Completeness: model.CompletenessPartial}, nil
-		}
-		folder = f.Path
+		filter.ExcludeSpam, filter.ExcludeTrash = true, true
 	}
-	rows, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before})
+	rows, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, filter)
 	if e != nil {
 		return RemoteListResult{}, e
 	}
@@ -643,7 +645,12 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	}
 	for _, r := range rows {
 		v := m.remoteView(ctx, r)
-		v.FolderPath = folder
+		// The row's folder is its provider membership, projected as the stable
+		// MailMoose folder id by the response layer. The cached folder_path is
+		// not the Microsoft location once a read spans folders.
+		if path, me := m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inbox, r.ID); me == nil {
+			v.FolderPath = path
+		}
 		v.Labels, _ = m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inbox, r.ID)
 		out.Items = append(out.Items, v)
 	}

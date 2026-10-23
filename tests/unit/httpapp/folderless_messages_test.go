@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestStableFolderIDScopesAccountWideRoutes(t *testing.T) {
@@ -138,4 +139,56 @@ func TestFolderlessUnlabelledDomainMessageStaysAccessible(t *testing.T) {
 		t.Fatalf("folderless thread: %d %s", thread.Code, thread.Body.String())
 	}
 	assertMembership(messages[0])
+}
+
+// TestSentFolderFilesCompletedSend proves a completed send is filed in the Sent
+// folder that the message reports, so folder=<Sent> lists it. The system folder
+// set is seeded on demand by the send path, because an inbox can complete its
+// first send before anything has listed its folder tree.
+func TestSentFolderFilesCompletedSend(t *testing.T) {
+	t.Parallel()
+	svc, handler, user, _, inbox := httpFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, user)
+	before, err := svc.Store.ListFolders(ctx, user.AccountID, inbox.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("fixture expected an unseeded folder tree, got %d folders", len(before))
+	}
+	message, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: inbox, Provider: "smtp", RFCMessageID: "<sent-folder@test>",
+		From: model.Address{Address: inbox.Address}, To: []string{"recipient@example.test"},
+		Subject: "Sent folder", Text: "body", RawPath: "messages/sent-folder.eml", SizeBytes: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Store.MarkSent(ctx, user.AccountID, message.ID, "<wire-sent@test>", "smtp", ""); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := svc.Store.GetSystemFolder(ctx, user.AccountID, inbox.ID, model.FolderRoleSent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filed, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: user.AccountID, Admin: true}, message.ID)
+	if err != nil || filed.MailboxID != sent.ID {
+		t.Fatalf("completed send mailbox = %q, want the Sent folder %q (err %v)", filed.MailboxID, sent.ID, err)
+	}
+	for _, route := range []string{
+		"/v1/inboxes/" + inbox.ID + "/messages?folder=" + sent.ID,
+		"/v1/messages?inbox=" + inbox.ID + "&folder=" + sent.ID,
+	} {
+		var page struct {
+			Items []struct{ ID string } `json:"items"`
+		}
+		result := apiGet(t, handler, route, key)
+		if result.Code != http.StatusOK || json.Unmarshal(result.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", route, result.Code, result.Body.String())
+		}
+		if len(page.Items) != 1 || page.Items[0].ID != message.ID {
+			t.Fatalf("%s returned %s, want only %s", route, result.Body.String(), message.ID)
+		}
+	}
 }

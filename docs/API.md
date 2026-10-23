@@ -863,6 +863,15 @@ On the account-wide route it applies to the inbox named by `inbox=`; without tha
 scope it narrows the connected (standalone) inboxes by folder path and leaves the
 local store unfiltered.
 
+A listing with no `folder` spans **every folder of the mailbox**, not the Inbox
+alone: an Outlook or IMAP user-created folder and a Gmail view are included on
+the same terms as the system folders. The exceptions are `spam` and Trash, which
+are excluded by default (see below) unless `spam=true`/`include_spam=true` or
+`trashed=true` selects them. An explicit `folder` always stays the location, and
+a role filter then narrows it, so `folder=<fld_id>&trashed=true` selects that
+folder's trashed mail (usually none) rather than the mailbox's Trash. An unknown
+folder id selects nothing.
+
 `spam=true` lists only Spam; `include_spam=true` includes Spam and non-Spam.
 By default (neither set) Spam is excluded from ordinary reads. `trashed=true`
 lists only messages in Trash; by default trashed messages are excluded from

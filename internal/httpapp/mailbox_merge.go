@@ -766,6 +766,16 @@ func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
 	return true
 }
 
+// remoteFilterFolder resolves the remote folder a common listing reads. A role
+// filter (trashed, spam, direction) selects the folder mapped to that role only
+// when the caller named no folder; an explicit folder always wins and a role
+// then narrows it, so trashed=true on a folder outside Trash selects nothing and
+// folder=Sent&direction=outbound is Sent. A standalone folder is named by its
+// stable MailMoose id or by its provider path: the id is resolved to the
+// provider path, because a provider does not know our ids (Microsoft's path is
+// the Graph folder id, so passing a fld_ id through reads the whole mailbox).
+// The bool reports whether anything can match. An unknown path is passed
+// through so the backend's own scope check answers 404 rather than an empty 200.
 func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, folder string, f store.MessageFilter) (string, bool) {
 	role := ""
 	switch {
@@ -776,11 +786,31 @@ func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, fol
 	case f.Direction == "outbound":
 		role = model.FolderRoleSent
 	}
-	if role == "" {
+	mapped, hasMapped := model.Folder{}, false
+	if role != "" {
+		mapped, hasMapped = s.remoteRoleFolder(ctx, accountID, inboxID, role)
+	}
+	if folder == "" {
+		if role != "" && !hasMapped {
+			return "", false
+		}
+		return mapped.Path, true
+	}
+	// A standalone folder is named by its stable MailMoose id or by its provider
+	// path. A folder this inbox does not know keeps the caller's value so the
+	// backend's own scope check answers "not in this mailbox's scope" (404)
+	// instead of silently turning it into a whole-mailbox read.
+	known, err := s.Service.Store.GetFolderDestination(ctx, accountID, inboxID, folder)
+	if err != nil {
 		return folder, true
 	}
-	mapped, ok := s.remoteRoleFolder(ctx, accountID, inboxID, role)
-	return mapped.Path, ok
+	path := known.Path
+	// A role the mapped folder does not carry selects nothing: Trash narrowed to
+	// Inbox is empty, not Inbox's rows.
+	if role != "" && (mapped.Path == "" || mapped.Path != path) {
+		return "", false
+	}
+	return path, true
 }
 
 // decodeCursorOrLegacy parses an opaque merged cursor, falling back to treating a

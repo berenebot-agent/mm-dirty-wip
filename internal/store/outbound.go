@@ -241,6 +241,17 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	if err := consumeOutboundWriteFault("MarkSent", id); err != nil {
 		return model.Message{}, nil, err
 	}
+	// A completed send lives in the domain inbox's Sent folder. Seed the system
+	// folders before opening the write transaction: an inbox can receive its
+	// first completed send before anything has listed its folder tree, and the
+	// seeding helper needs its own connection. A custom folder a user filed the
+	// message in is kept.
+	var targetInbox, targetKind string
+	if qerr := s.read.QueryRowContext(ctx, `SELECT i.id,i.kind FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&targetInbox, &targetKind); qerr == nil && targetKind == model.InboxKindDomain {
+		if _, ferr := s.EnsureSystemFolders(ctx, accountID, targetInbox); ferr != nil {
+			return model.Message{}, nil, ferr
+		}
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -295,6 +306,14 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	update += ` WHERE id=? AND account_id=?`
 	args = append(args, id, accountID)
 	if _, err = tx.ExecContext(ctx, update, args...); err != nil {
+		return model.Message{}, nil, err
+	}
+	// A completed send lives in the domain inbox's Sent folder: file it there, the
+	// same location the message reports, so folder=<Sent> lists it. A custom
+	// folder a user already filed it in is kept.
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET mailbox_id=(SELECT f.id FROM inbox_folders f WHERE f.inbox_id=messages.inbox_id AND f.role='sent' ORDER BY f.path LIMIT 1)
+		WHERE id=? AND account_id=? AND COALESCE(mailbox_id,'')=''
+		AND EXISTS(SELECT 1 FROM inbox_folders f WHERE f.inbox_id=messages.inbox_id AND f.role='sent')`, id, accountID); err != nil {
 		return model.Message{}, nil, err
 	}
 	// A message cancelled (deleted) between the initial read and this write is
