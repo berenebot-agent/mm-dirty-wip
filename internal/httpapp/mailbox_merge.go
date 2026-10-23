@@ -164,8 +164,17 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 	// Local source.
 	localFilter := f
 	if folder != "" && !localFilter.FolderScoped {
-		localFilter.FolderScoped = true
-		localFilter.MailboxID = folder
+		// A domain inbox resolves the folder to its canonical membership rule
+		// through the same mapping the inbox-scoped route applies, so one query
+		// means one answer on every route; other kinds scope to the exact id.
+		if box, err := s.Service.Store.GetInboxInternal(ctx, p.AccountID, localFilter.InboxID); err == nil && box.Kind == model.InboxKindDomain {
+			if err := s.applyLocalFolder(ctx, p, localFilter.InboxID, folder, &localFilter); err != nil {
+				return nil, "", nil, err
+			}
+		} else {
+			localFilter.FolderScoped = true
+			localFilter.MailboxID = folder
+		}
 	}
 	// Preserve the independent folder selector in account-wide queries.
 	localFilter.Before = cur.sourceCursor("local")
