@@ -16,6 +16,22 @@ All notable changes to MailMoose are documented here. This project follows
   Gmail could not find the resource`), while cheap detection already skipped it.
   Reconcile now drops the stale cached row and skips the message, as detection
   does, so the index completes and the error stops recurring.
+- **A plain listing spans the whole mailbox on every inbox kind.** An unscoped
+  listing is no longer narrowed to a single default folder on a connected
+  mailbox: an Outlook inbox now returns the mail in every folder (user-created
+  folders included) rather than only its Inbox, and Outlook, IMAP, Gmail and
+  domain inboxes all apply the same Spam/Trash exclusion. A plain read is not a
+  Trash or Spam view anywhere.
+- **`folder=<fld_id>` and role filters compose the same way everywhere.** An
+  explicit folder is the location and `trashed`/`spam`/`direction` narrow it,
+  so `folder=<Sent>&direction=outbound` lists Sent, `folder=<Inbox>&trashed=true`
+  lists nothing, and `folder=<Trash>&trashed=true` still lists Trash. A `fld_…`
+  id is resolved to the provider's own folder for a connected mailbox instead of
+  being passed through as a provider id, which returned no rows. An unknown
+  folder id selects nothing.
+- **A completed send is filed in the Sent folder it reports.** Domain system
+  folders are seeded when the first send completes, so `folder=<Sent>` lists the
+  message instead of an empty folder.
 - **Common mailbox contract before Beta 3.** Attachment listings now return
   descriptors with authenticated relative `download_url` values for both domain
   and connected mailboxes. Remote enumeration fetches size-limited MIME live,
