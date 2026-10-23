@@ -1555,24 +1555,30 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 // safeNextPath returns a same-origin next path for a post-login redirect, or "/"
-// when none is valid. It rejects scheme-relative and backslash forms that
-// browsers may normalize to an off-site redirect, and any control character:
-// browsers strip ASCII tab/newline from a URL, so "/\t/evil.com" would resolve
-// to "//evil.com" off-site. Failing closed on anything that does not parse as a
-// scheme-less, host-less, root-relative path covers both.
+// when none is valid.
 func safeNextPath(next string) string {
+	return safePath(next, "/")
+}
+
+// safePath returns a same-origin root-relative redirect path, or fallback when
+// none is valid. It rejects scheme-relative and backslash forms that browsers
+// may normalize to an off-site redirect, and any control character: browsers
+// strip ASCII tab/newline from a URL, so "/\t/evil.com" would resolve to
+// "//evil.com" off-site. Failing closed on anything that does not parse as a
+// scheme-less, host-less, root-relative path covers both.
+func safePath(next, fallback string) string {
 	next = strings.TrimSpace(next)
 	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
-		return "/"
+		return fallback
 	}
 	for _, r := range next {
 		if r < 0x20 || r == 0x7f {
-			return "/"
+			return fallback
 		}
 	}
 	u, err := url.Parse(next)
 	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
-		return "/"
+		return fallback
 	}
 	return next
 }
