@@ -220,6 +220,63 @@ type unavailableForwardSource struct {
 	app.RemoteMessageResolver
 }
 
+// A draft send consumes its draft, so an identical retry arrives with no draft
+// row left. The idempotency key must replay the original message instead of
+// failing at the draft lookup.
+func TestAPIIdempotencyReplaysConsumedDraft(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	key := adminKey(t, svc, u)
+	post := func(method, path, body, idem string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", idem)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Draft send.
+	draft := createDraft(t, h, key, box.ID)
+	path := "/v1/drafts/" + draft.ID
+	first := assertSendResponse(t, post("PATCH", path, `{"action":"send"}`, "draft-send"), true)
+	if rr := apiDo(h, "GET", path, key, ""); rr.Code != 404 {
+		t.Fatalf("draft not consumed: %d %s", rr.Code, rr.Body.String())
+	}
+	if replay := assertSendResponse(t, post("PATCH", path, `{"action":"send"}`, "draft-send"), true); replay.ID != first.ID {
+		t.Fatalf("draft send replay: %s != %s", replay.ID, first.ID)
+	}
+	// A different key against the consumed draft is a stale request, not a replay.
+	if rr := post("PATCH", path, `{"action":"send"}`, "draft-send-other"); rr.Code != 404 {
+		t.Fatalf("consumed draft with a fresh key = %d %s", rr.Code, rr.Body.String())
+	}
+
+	// Approval.
+	approved := createDraft(t, h, key, box.ID)
+	if rr := apiDo(h, "POST", "/v1/drafts/"+approved.ID+"/request-send", key, `{}`); rr.Code != 200 {
+		t.Fatalf("request-send %d %s", rr.Code, rr.Body.String())
+	}
+	approvePath := "/v1/drafts/" + approved.ID + "/approve"
+	first = assertSendResponse(t, post("POST", approvePath, `{}`, "draft-approve"), true)
+	if rr := apiDo(h, "GET", "/v1/drafts/"+approved.ID, key, ""); rr.Code != 404 {
+		t.Fatalf("approved draft not consumed: %d %s", rr.Code, rr.Body.String())
+	}
+	if replay := assertSendResponse(t, post("POST", approvePath, `{}`, "draft-approve"), true); replay.ID != first.ID {
+		t.Fatalf("approval replay: %s != %s", replay.ID, first.ID)
+	}
+	// Reusing an approval key for a different approval conflicts rather than
+	// returning the first draft's message.
+	other := createDraft(t, h, key, box.ID)
+	if rr := apiDo(h, "POST", "/v1/drafts/"+other.ID+"/request-send", key, `{}`); rr.Code != 200 {
+		t.Fatalf("second request-send %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := post("POST", "/v1/drafts/"+other.ID+"/approve", `{}`, "draft-approve"); rr.Code != 409 {
+		t.Fatalf("mismatched approval key = %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAPIIdempotencyRejectsDifferentRequests(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
