@@ -8,6 +8,35 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **A message mutation answers with its result when it settles quickly.** A move,
+  delete, label change, read/spam change, restore, purge or seen call now waits
+  up to five seconds for its own action and returns the settled body (the
+  message, `204`, or `{id,seen}`). A provider slower than that still returns
+  `202` with the durable action and its `Location`, and `?wait=true` keeps its
+  30-second bound, so a 23-second IMAP move no longer looks like a failed write
+  to a client that reads straight back. The web UI stays asynchronous.
+- **Re-issuing a move does not queue it twice.** While an identical move is
+  pending or running, submitting it again returns the queued action instead of a
+  second one that would apply the move again.
+- **Deleting a folder that is already gone at the provider finishes locally.**
+  A provider answering "no such folder" (a retry after the first delete landed,
+  or an answer lost to a timeout) now prunes the cached row and reports success,
+  so the folder disappears from `GET /folders` and its parent stops refusing
+  deletion with `409`.
+- **A confirmed folder delete always updates the local index.** The prune and the
+  folder-tree mirror run on their own bounded context, so a client that gave up
+  or a gateway that timed out cannot leave a deleted folder cached. A folder
+  mutation with an unresolved provider outcome queues a reconcile instead of
+  waiting for an operator refresh.
+- **The Sent-placement backfill covers every inbox kind.** Migration `003` filed
+  completed sends into the Sent folder only for domain inboxes; it now applies to
+  a connected inbox's own Sent folder too, matching the placement every new send
+  records. The statement changes data only, so the schema hash is unchanged.
+- **The running build is reported.** `/healthz`, `/v1/health`, `/health` and
+  `/.well-known/mailmoose` carry a `build` value (the commit passed as
+  `MAILMOOSE_BUILD`, otherwise the build timestamp), so a deployed instance can
+  be identified without shell access.
+
 - **A domain inbox's folders report their real message counts.** The folder
   list only ever filled `message_count` and `unread_count` from the connected
   inbox's remote index, which holds nothing for a local mailbox, so every
@@ -264,6 +293,35 @@ All notable changes to MailMoose are documented here. This project follows
   can be moved back to the Inbox.
 
 ### Fixed
+
+- **A message mutation answers with its result when it settles quickly.** A move,
+  delete, label change, read/spam change, restore, purge or seen call now waits
+  up to five seconds for its own action and returns the settled body (the
+  message, `204`, or `{id,seen}`). A provider slower than that still returns
+  `202` with the durable action and its `Location`, and `?wait=true` keeps its
+  30-second bound, so a 23-second IMAP move no longer looks like a failed write
+  to a client that reads straight back. The web UI stays asynchronous.
+- **Re-issuing a move does not queue it twice.** While an identical move is
+  pending or running, submitting it again returns the queued action instead of a
+  second one that would apply the move again.
+- **Deleting a folder that is already gone at the provider finishes locally.**
+  A provider answering "no such folder" (a retry after the first delete landed,
+  or an answer lost to a timeout) now prunes the cached row and reports success,
+  so the folder disappears from `GET /folders` and its parent stops refusing
+  deletion with `409`.
+- **A confirmed folder delete always updates the local index.** The prune and the
+  folder-tree mirror run on their own bounded context, so a client that gave up
+  or a gateway that timed out cannot leave a deleted folder cached. A folder
+  mutation with an unresolved provider outcome queues a reconcile instead of
+  waiting for an operator refresh.
+- **The Sent-placement backfill covers every inbox kind.** Migration `003` filed
+  completed sends into the Sent folder only for domain inboxes; it now applies to
+  a connected inbox's own Sent folder too, matching the placement every new send
+  records. The statement changes data only, so the schema hash is unchanged.
+- **The running build is reported.** `/healthz`, `/v1/health`, `/health` and
+  `/.well-known/mailmoose` carry a `build` value (the commit passed as
+  `MAILMOOSE_BUILD`, otherwise the build timestamp), so a deployed instance can
+  be identified without shell access.
 
 - Message placement changes now publish durable lifecycle events consistently,
   and pending or failed outbound messages no longer appear in Sent. Connected

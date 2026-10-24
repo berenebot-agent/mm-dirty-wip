@@ -7,7 +7,10 @@
 services:
   mailmoose:
     image: mailmoose:latest
-    build: .
+    build:
+      context: .
+      args:
+        MAILMOOSE_BUILD: ${MAILMOOSE_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # Direct MX is configured in each domain's Receiving settings and uses the

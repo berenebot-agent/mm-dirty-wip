@@ -102,8 +102,12 @@ Set your administrator credentials and change `BASE_URL` to the address you'll u
 **2. Start MailMoose:**
 
 ```bash
-docker compose up -d
+MAILMOOSE_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
+
+`MAILMOOSE_BUILD` stamps the deployed commit into the binary; `GET /healthz` and
+`/.well-known/mailmoose` report it as `build`. When it is omitted the image
+records its build time instead.
 
 Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
 

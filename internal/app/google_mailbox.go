@@ -704,9 +704,9 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		}
 		l, e = client.CreateLabel(ctx, t, name)
 	} else {
-		fs, e := m.Service.Store.ListFolders(ctx, p.AccountID, inbox)
-		if e != nil {
-			return model.Folder{}, e
+		fs, ferr := m.Service.Store.ListFolders(ctx, p.AccountID, inbox)
+		if ferr != nil {
+			return model.Folder{}, ferr
 		}
 		var f *model.Folder
 		for i := range fs {
@@ -723,8 +723,19 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		}
 		if mode == "rename" {
 			l, e = client.RenameLabel(ctx, t, f.Path, name)
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
 		} else {
 			e = client.DeleteLabel(ctx, t, f.Path)
+			var mb *model.MailboxError
+			if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+				// Gmail no longer has the label: the delete already landed.
+				e = nil
+			}
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
 			l.ID = f.Path
 		}
 	}
@@ -732,6 +743,13 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		return model.Folder{}, e
 	}
 	if e = m.googleFolders(ctx, p.AccountID, inbox, t); e != nil {
+		if mode == "delete" {
+			// The label is deleted at Gmail; a failed mirror leaves a stale row, so
+			// queue the reconcile rather than report a failed delete that happened.
+			m.Service.Log.Warn("mirror deleted Gmail label", "inbox_id", inbox, "error", e)
+			m.ScheduleRefresh(p.AccountID, inbox)
+			return model.Folder{}, nil
+		}
 		return model.Folder{}, e
 	}
 	if mode == "delete" {
