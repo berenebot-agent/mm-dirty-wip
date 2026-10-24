@@ -18,7 +18,13 @@ services:
   mailmoose:
     container_name: mailmoose
     image: mailmoose:latest
-    build: .
+    build:
+      context: .
+      args:
+        # Stamp the deployed commit: MAILMOOSE_BUILD=$(git rev-parse --short HEAD)
+        # docker compose up -d --build. Empty records the build timestamp instead;
+        # either is reported by /healthz as "build".
+        MAILMOOSE_BUILD: ${MAILMOOSE_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # System administrator credentials: when set in .env they are authoritative

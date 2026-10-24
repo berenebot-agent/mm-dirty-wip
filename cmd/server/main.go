@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -27,6 +28,40 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
+// buildVersion is stamped at build time with -ldflags. When it is empty (a plain
+// `go build`), the build identity falls back to the VCS revision, then to the
+// binary's own build time, so /healthz always names something an operator can
+// compare with the commit they deployed.
+var buildVersion = ""
+
+// buildIdentity resolves the running build's identity.
+func buildIdentity(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if buildVersion != "" {
+		return buildVersion
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		revision := ""
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+			case "vcs.modified":
+				if s.Value == "true" && revision != "" {
+					revision += "-dirty"
+				}
+			}
+		}
+		if revision != "" {
+			return revision
+		}
+		return info.Main.Version
+	}
+	return "unknown"
+}
+
 func main() {
 	// Operator commands run in the same binary but before any server setup, so
 	// they do not require a full application configuration (or an encryption
@@ -41,7 +76,8 @@ func main() {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
-	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir)
+	cfg.Build = buildIdentity(cfg.Build)
+	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir, "build", cfg.Build)
 
 	// Install ordered resolver failover before any network client or goroutine
 	// starts, so outbound provider HTTP, SMTP, direct MX, SPF/DKIM/DMARC and

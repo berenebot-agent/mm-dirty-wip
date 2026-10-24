@@ -123,6 +123,11 @@ type Config struct {
 	// MAILMOOSE_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
 	// defaults and "off" disables failover.
 	DNSFallbackServers []string
+	// Build identifies the running binary: the commit stamped at build time, or
+	// the build timestamp when only that is known. It is reported by /healthz
+	// and the discovery document so an operator can tell "not fixed" from "not
+	// deployed".
+	Build string
 }
 
 func Load() (Config, error) {
@@ -197,6 +202,7 @@ func Load() (Config, error) {
 		InboundTLSKeyFile:       strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 		DNSFallbackServers:      dnsFallbackServers,
+		Build:                   strings.TrimSpace(os.Getenv("MAILMOOSE_BUILD")),
 	}
 	if cfg.Mode != "selfhosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted")

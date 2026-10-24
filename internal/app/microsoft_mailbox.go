@@ -782,16 +782,29 @@ func (m *RemoteMailboxService) microsoftFolderMutation(ctx context.Context, p mo
 		} else {
 			live, le := m.Microsoft.Folder(ctx, t, c.Mailbox, target.Path)
 			if le != nil {
-				return model.Folder{}, le
+				var mb *model.MailboxError
+				if !errors.As(le, &mb) || mb.Kind != model.ErrKindNotFound {
+					return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, le)
+				}
+				// Graph no longer has the folder, so the delete already landed and
+				// only the cached row is stale.
+				m.forgetRemoteFolder(p.AccountID, inbox, target.Path)
+				return model.Folder{}, nil
 			}
 			if live.TotalItemCount > 0 || live.ChildFolderCount > 0 {
 				return model.Folder{}, model.NewMailboxError(model.ErrKindConflict, "Folder is not empty", false, nil)
 			}
-			e = m.Microsoft.DeleteFolder(ctx, t, c.Mailbox, target.Path)
-			if e == nil {
-				e = m.Service.Store.DeleteRemoteFolderRow(ctx, p.AccountID, inbox, target.Path)
+			if e = m.Microsoft.DeleteFolder(ctx, t, c.Mailbox, target.Path); e != nil {
+				var mb *model.MailboxError
+				if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+					e = nil
+				}
 			}
-			return model.Folder{}, e
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
+			m.forgetRemoteFolder(p.AccountID, inbox, target.Path)
+			return model.Folder{}, nil
 		}
 	}
 	if e != nil {

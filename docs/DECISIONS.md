@@ -155,6 +155,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
 - [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
 - [D153: Forwarding and a common outbound API response](#d153--forwarding-and-a-common-outbound-api-response)
+- [D158: A bounded synchronous answer for message mutations, and a build identity](#d158--a-bounded-synchronous-answer-for-message-mutations-and-a-build-identity)
 
 ---
 
@@ -6509,3 +6510,41 @@ D152's decision paragraph only; its permission and creation rules stand.
 **Complexity:** Two client calls, two service methods and one capability flag
 flip. No new dependency, service, secret handling or schema change; the
 `MailboxSettings.ReadWrite` grant D152 added already covers both calls.
+
+## D158 — A bounded synchronous answer for message mutations, and a build identity
+
+**Requirement:** UAT on a live connected mailbox found a move answering `202`
+while the provider took up to 31 s, so a client that read back immediately saw
+the old folder and could take the move for failed (and re-issue it). The same
+run could not confirm which build was deployed: no surface reported a version,
+so "not fixed" and "not deployed" were indistinguishable.
+
+**Decision (2026-10-24):** A message mutation still enqueues its durable action
+(the durable order, retry and ambiguity handling do not change), but the REST
+submission now waits up to five seconds for it and returns the settled body when
+it lands: the message for patch/move/restore, `204` for delete/purge, `{id,seen}`
+for seen. A provider slower than that returns the existing `202` with the action
+and its `Location`. `?wait=true` keeps its 30-second bound. The web UI keeps
+submitting asynchronously and following the queue. A provider call is never
+moved onto the request goroutine unbounded, so a slow IMAP move cannot turn into
+a gateway timeout. Re-issuing an identical move/classify action while one is
+pending or running returns that action instead of queueing a second one.
+
+**Explicitly approved API shape change (Ben, 2026-10-24):** message mutation
+routes (PATCH, move, labels, restore, delete, purge, seen) now answer `200`/`204`
+when they settle within the grace, where they previously always answered `202`
+unless `?wait=true`. `200`/`204` were already documented outcomes of those
+routes, so the status set is unchanged; only the default is now "settle if fast".
+The `POST /v1/inboxes/{id}/trash/empty` parent operation stays `202`.
+
+`GET /healthz` and `GET /.well-known/mailmoose` gain a `build` field naming the
+running binary (commit stamped at build time, otherwise the build timestamp).
+The Dockerfile accepts `MAILMOOSE_BUILD` for that stamp. No `/version` route.
+
+**Explicitly approved API shape change (Ben, 2026-10-24):** the new `build`
+field on the health and discovery responses. It is additive and needs no
+credential.
+
+**Complexity:** One grace constant, one wait already available in the app layer,
+one duplicate-action lookup, one build string threaded through config. No new
+dependency, service or table.
