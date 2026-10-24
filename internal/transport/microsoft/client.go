@@ -241,7 +241,24 @@ func (c *Client) request(ctx context.Context, t, method, path, cursor string, bo
 				retry = true
 			}
 		}
-		err := failure(kind, "provider rejected the request", retry)
+		// Graph names the reason in the body (error.code); without it every
+		// rejection reads the same and an operator cannot tell a bad folder id
+		// from missing consent or throttling. The status is always included; a
+		// body that is not the documented shape is simply omitted.
+		var g struct {
+			Error struct {
+				Code, Message string
+			}
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&g)
+		detail := strconv.Itoa(resp.StatusCode)
+		if g.Error.Code != "" {
+			detail += " " + g.Error.Code
+		}
+		if g.Error.Message != "" {
+			detail += ": " + g.Error.Message
+		}
+		err := failure(kind, "provider rejected the request ("+detail+")", retry)
 		if ambiguous && resp.StatusCode >= 500 {
 			return &transport.AmbiguousError{Err: err}
 		}
