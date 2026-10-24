@@ -36,6 +36,16 @@ All notable changes to MailMoose are documented here. This project follows
   `/.well-known/mailmoose` carry a `build` value (the commit passed as
   `MAILMOOSE_BUILD`, otherwise the build timestamp), so a deployed instance can
   be identified without shell access.
+- **A folder keeps its id when it is renamed, or when a folder above it is
+  renamed.** Renaming a parent used to re-mint the `fld_...` id of every folder
+  beneath it, so a client holding a child id then got `404 folder not found`.
+  The renamed folder and its whole subtree now keep their ids (only `path` and
+  `parent_path` change), for every inbox kind: a domain inbox, Gmail, Outlook,
+  IMAP and One. A Gmail label id and an Outlook folder entry id survive a rename
+  at the provider, so they are reused rather than replaced; an IMAP rename
+  carries its subtree in the local index first, since an IMAP mailbox has no
+  stable folder identity. The rename response still returns only the renamed
+  folder, so re-read `GET /v1/inboxes/{id}/folders` for descendant paths.
 
 - **A domain inbox's folders report their real message counts.** The folder
   list only ever filled `message_count` and `unread_count` from the connected

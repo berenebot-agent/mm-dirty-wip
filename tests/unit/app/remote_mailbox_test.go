@@ -2025,7 +2025,7 @@ func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
 	}
 	// The parent survives its child's creation, and both are addressable.
 	parentID := folderID("Projects")
-	folderID("Projects/Child")
+	childID := folderID("Projects/Child")
 	renamed, err := rm.RenameRemoteFolder(ctx, p, box.ID, parentID, "Projects Renamed")
 	if err != nil {
 		t.Fatalf("rename top-level: %v", err)
@@ -2033,9 +2033,13 @@ func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
 	if renamed.Path != "Projects Renamed" {
 		t.Fatalf("renamed path = %q want Projects Renamed", renamed.Path)
 	}
-	// The server moved the child with its parent, and the mirror followed it.
-	if moved := folderID("Projects Renamed/Child"); moved == "" {
-		t.Fatal("the child did not follow the parent's rename")
+	if renamed.ID != parentID {
+		t.Fatalf("rename re-minted the folder id: %q -> %q", parentID, renamed.ID)
+	}
+	// The server moved the child with its parent, and the mirror followed it —
+	// keeping the child's id, so a client holding it does not get a 404.
+	if moved := folderID("Projects Renamed/Child"); moved != childID {
+		t.Fatalf("the child's id changed across the parent rename: %q -> %q", childID, moved)
 	}
 	// A nested folder renames in place, keeping its parent.
 	nested := folderID("Projects Renamed/Child")
@@ -2045,6 +2049,9 @@ func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
 	}
 	if child.Path != "Projects Renamed/Renamed Child" {
 		t.Fatalf("nested renamed path = %q", child.Path)
+	}
+	if child.ID != childID {
+		t.Fatalf("nested rename re-minted the folder id: %q -> %q", childID, child.ID)
 	}
 	if created.ID != parentID {
 		t.Fatalf("create returned %q, tree holds %q", created.ID, parentID)

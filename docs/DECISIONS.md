@@ -156,6 +156,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
 - [D153: Forwarding and a common outbound API response](#d153--forwarding-and-a-common-outbound-api-response)
 - [D158: A bounded synchronous answer for message mutations, and a build identity](#d158--a-bounded-synchronous-answer-for-message-mutations-and-a-build-identity)
+- [D159: A remote folder keeps its id across a rename](#d159--a-remote-folder-keeps-its-id-across-a-rename)
 
 ---
 
@@ -6548,3 +6549,51 @@ credential.
 **Complexity:** One grace constant, one wait already available in the app layer,
 one duplicate-action lookup, one build string threaded through config. No new
 dependency, service or table.
+
+## D159 — A remote folder keeps its id across a rename
+
+**Context:** Renaming a parent folder on a connected mailbox silently re-minted
+the `fld_...` id of every folder beneath it. The rename itself answered `200` and
+the tree stayed correct, but a client holding a child id then got `404 folder not
+found`. `docs/API.md` promised the ids were stable, and the local path already
+kept them (`Store.RenameFolder` rewrites the subtree's paths and preserves every
+row's id), so the remote path was the inconsistent one.
+
+The cause was that `Store.ReconcileRemoteFolders` keys a folder by `path` and
+mints a fresh `idgen.New("fld")` for any path it has not seen. A remote rename is
+applied by re-discovering the whole tree, so every descendant arrived at an
+unfamiliar path and became a new row.
+
+**Decision (2026-10-24):** A folder id is an address; its name is data. Both
+remote paths now keep ids the way the local path already did.
+
+- A provider with its own rename-stable folder identity passes it as
+  `RemoteFolderSync.StableID`: the Gmail label id and the Graph folder entry id,
+  both of which are already what the `path` column holds. When the reconcile
+  finds no row at the discovered path, it looks the row up by that identity and
+  moves it to the new path in place, keeping its id.
+- IMAP has no entity id at all (its path *is* the mailbox name), which is why the
+  protocol itself keys cache invalidation on `UIDVALIDITY` rather than a stable
+  handle. A rename there hands the old and new path to
+  `Store.RenameRemoteFolderPaths`, which rewrites the renamed folder and every
+  descendant before the reconcile — the same subtree rewrite the local path uses.
+
+A global or account-wide folder id was considered and rejected: it would not
+have fixed the symptom (the id was re-minted per path, not colliding per inbox),
+it changes an id format nothing depends on, and inbox scoping in
+`GetFolderByID` is a security boundary that a global id would invite callers to
+drop.
+
+**Not a shape change:** no route, field, type, status or error code moves. The
+`id` a response carries is the same field; it now keeps its value the way the
+contract already said it would. `StableID` is internal to `store` and is never
+serialised. No migration: no column or table is added, and the anchor is a
+column that already exists.
+
+**Trade-off:** the rename response still carries only the renamed folder.
+Descendant *paths* change even though their ids do not, so a client displaying
+child paths re-reads `GET /v1/inboxes/{id}/folders`. Documented in `API.md`.
+
+**Complexity:** One field on the reconcile input, one id-preserving lookup in
+`ReconcileRemoteFolders`, one subtree-rewrite method, one provider check. No new
+dependency, service, table or column.
