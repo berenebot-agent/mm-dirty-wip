@@ -294,7 +294,8 @@ is not a label id. The full contract, the per-provider matrix and the
 examples are in [§3b Folders and labels](#3b-folders-and-labels). In short:
 
 - `Message.folder_id` is the message's location: one stable MailMoose folder
-  id (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null`.
+  id (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null` (see
+  [§3b](#two-things-never-mixed) for what "stable" covers).
 - `Message.label_ids` holds additive labels only (`tag:Name`), always present
   and empty for an IMAP inbox.
 - A folder carries a `role` (`folder`, `inbox`, `sent`, `drafts`, `trash`,
@@ -383,7 +384,10 @@ the earlier unified-label projection, where a folder was also a label and
 
 - `folder_id` is **always present** and nullable: `null` means the message has
   no canonical folder. The ids are the ones `GET /v1/inboxes/{id}/folders`
-  returns, and they are stable.
+  returns, and they are stable: a folder keeps its id when it is renamed, and
+  when a folder above it is renamed (its `path` changes, its id does not). A
+  folder that is deleted and later recreated is a new folder with a new id, and
+  a message that moves to another folder reports that folder's id.
 - `label_ids` is **always present** and holds **additive labels only**. There
   is no system classification in it any more, and no `folder:<id>` identity:
   a folder id is never a label id, and `label_id` filters match labels only.
@@ -503,6 +507,14 @@ and **Sent, Drafts and Outbox are never move destinations** — a sent copy is
 produced by sending, a draft by the drafts API. A move into them is refused.
 A domain or Gmail inbox files only into its canonical system destinations; a
 move into any other folder is refused.
+
+A **rename** (`PATCH /v1/inboxes/{id}/folders/{folderId}`) keeps every folder id
+in the subtree: the renamed folder and each of its descendants keep the id a
+client may already hold, so no held id starts answering `404`. Their `path` and
+`parent_path` do change. The response carries only the renamed folder, so a
+client that displays child paths should re-read
+`GET /v1/inboxes/{id}/folders` after a rename rather than assume its cached
+paths are still current.
 
 `{"folder_id": null}` means **archive**, not "no folder": a domain inbox files
 the message in its archive (an internal destination, so the message then

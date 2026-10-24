@@ -147,6 +147,53 @@ type RemoteFolderSync struct {
 	SpecialUse   []string
 	IndexedAt    time.Time
 	RemoteStatus string
+	// StableID is the provider's own identity for the folder, which survives a
+	// rename (a Gmail label id, a Graph folder id). It is stored as the row's
+	// path, so it lets a renamed folder keep its MailMoose id instead of being
+	// re-minted under the new path. Empty for a provider with no entity id
+	// (IMAP), whose renames are carried by RenameRemoteFolderPaths instead.
+	StableID string
+}
+
+// RenameRemoteFolderPaths moves one remote-owned folder and its whole subtree
+// from oldPath to newPath in the cached index, keeping every row's id. It is the
+// rename hint for a provider with no stable folder identity (IMAP): without it
+// the following reconcile only sees unfamiliar paths and mints fresh ids for
+// the renamed folder and all of its children. A missing old path is not an
+// error — the discovery that follows reconciles whatever is really there.
+func (s *Store) RenameRemoteFolderPaths(ctx context.Context, accountID, inboxID, oldPath, newPath string) (int64, error) {
+	oldPath, newPath = strings.TrimSpace(oldPath), strings.TrimSpace(newPath)
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		return 0, nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,updated_at=? WHERE inbox_id=? AND origin='remote' AND path=?`,
+		newPath, now, inboxID, oldPath); err != nil {
+		return 0, err
+	}
+	suffixFrom := len(oldPath) + 1 // 1-based substr offset just past oldPath + '/'
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_folders SET
+			path=?||substr(path,?),
+			parent_path=CASE WHEN parent_path=? THEN ? ELSE ?||substr(parent_path,?) END,
+			updated_at=?
+		WHERE inbox_id=? AND origin='remote' AND path LIKE ? ESCAPE '\'`,
+		newPath, suffixFrom, oldPath, newPath, newPath, suffixFrom, now, inboxID, escapeLike(oldPath)+"/%")
+	if err != nil {
+		return 0, err
+	}
+	moved, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return moved, nil
 }
 
 // ReconcileRemoteFolders replaces the remote-owned folder subset of an inbox from
@@ -190,6 +237,19 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 		}
 		var existingID string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND path=?`, inboxID, path).Scan(&existingID)
+		renamed := false
+		if err == sql.ErrNoRows && f.StableID != "" && f.StableID != path {
+			// The provider renamed the folder: its stable identity is unchanged but
+			// it now sits at a new path. Reuse the row and move it, so the folder and
+			// every client holding its id keep the same MailMoose id.
+			err = tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND origin='remote' AND path=?`, inboxID, f.StableID).Scan(&existingID)
+			renamed = err == nil
+			// The old path and the new one are both claimed once the row moves, so a
+			// prune pass of this same discovery must not treat the old path as gone.
+			if renamed {
+				keep[f.StableID] = true
+			}
+		}
 		switch {
 		case err == sql.ErrNoRows:
 			id := idgen.New("fld")
@@ -205,6 +265,13 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 			// operator locked explicitly (role_locked=1) is never overwritten by a
 			// name-inferred role, so an arbitrary remote folder stays mapped to
 			// its chosen role across reconciles.
+			if renamed {
+				if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,name=?,parent_path=?,role=CASE WHEN role_locked=1 THEN role ELSE ? END,selectable=?,origin='remote',remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE id=? AND origin='remote'`,
+					path, name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), f.UIDValidity, indexed, now, existingID); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET name=?,parent_path=?,role=CASE WHEN role_locked=1 THEN role ELSE ? END,selectable=?,origin='remote',remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE id=? AND origin='remote'`,
 				name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), f.UIDValidity, indexed, now, existingID); err != nil {
 				return nil, err

@@ -456,8 +456,24 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 // syncFolderTree re-reads the inbox's folder tree from the live server and
 // reconciles it into the cached index. It is the post-mutation mirror: a folder
 // create or rename changes the tree, and a partial reconcile would prune the
-// siblings the mutation did not mention.
+// siblings the mutation did not mention. For a provider whose folder path is the
+// provider's own stable identity (Gmail label id, Graph folder id) the path is
+// also handed over as StableID, so a renamed folder keeps its MailMoose id.
 func (m *RemoteMailboxService) syncFolderTree(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID string) error {
+	return m.syncFolderTreeRenamed(ctx, sess, inbox, accountID, inboxID, "", "")
+}
+
+// syncFolderTreeRenamed is syncFolderTree with a rename hint: when a provider has
+// no stable folder identity (IMAP), the subtree under oldPath is moved to newPath
+// in the cached index before the reconcile, so the renamed folder and every child
+// keep their ids. The reconcile would otherwise mint a fresh id for each path it
+// has not seen.
+func (m *RemoteMailboxService) syncFolderTreeRenamed(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID, oldPath, newPath string) error {
+	if oldPath != "" && newPath != "" {
+		if _, err := m.Service.Store.RenameRemoteFolderPaths(ctx, accountID, inboxID, oldPath, newPath); err != nil {
+			return mapStoreError(err)
+		}
+	}
 	folders, scope, err := sess.DiscoverFolders(ctx, inbox.Namespace)
 	if err != nil {
 		return normalizeRemoteError(err)
@@ -474,12 +490,25 @@ func (m *RemoteMailboxService) syncFolderTree(ctx context.Context, sess RemoteSe
 			HasChildren: f.HasChildren,
 			SpecialUse:  f.SpecialUse,
 			IndexedAt:   now,
+			StableID:    m.providerFolderIdentity(ctx, f.Path, inbox),
 		})
 	}
 	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, accountID, inboxID, sync); err != nil {
 		return mapStoreError(err)
 	}
 	return nil
+}
+
+// providerFolderIdentity reports whether a remote folder's path is the
+// provider's own rename-stable identity. A Graph folder path is its entry id and
+// a Gmail label path is its label id, so both survive a rename; an IMAP path is
+// the mailbox name and does not. Every other inbox (a domain inbox has no remote
+// tree) has no stable identity either.
+func (m *RemoteMailboxService) providerFolderIdentity(ctx context.Context, path string, inbox model.Inbox) string {
+	if path == "" || m.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) || m.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		return path
+	}
+	return ""
 }
 
 // RenameRemoteFolder renames a remote folder on the live server and re-mirrors the
@@ -547,8 +576,9 @@ func (m *RemoteMailboxService) RenameRemoteFolder(ctx context.Context, p model.P
 	}
 	// Re-mirror the whole tree: the rename changes the path of the folder and of
 	// every child the server moves with it, so a one-item reconcile would prune
-	// the rest of the set.
-	if err := m.syncFolderTree(ctx, sess, inbox, p.AccountID, inboxID); err != nil {
+	// the rest of the set. IMAP has no stable folder identity, so the moved
+	// subtree is handed over explicitly to keep every id.
+	if err := m.syncFolderTreeRenamed(ctx, sess, inbox, p.AccountID, inboxID, oldPath, newPath); err != nil {
 		return model.Folder{}, err
 	}
 	got, err := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, newPath)
