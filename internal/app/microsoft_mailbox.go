@@ -752,11 +752,21 @@ func (m *RemoteMailboxService) microsoftFolderMutation(ctx context.Context, p mo
 			path = ""
 		}
 		if path != "" {
-			parent, e := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, path)
-			if e != nil {
-				return model.Folder{}, e
+			// path is a folder id (the UI sends an empty path, or a name with no
+			// name field). Resolve it so an unknown id fails here as "not found"
+			// rather than as a provider rejection of a bogus childFolders route.
+			parent, pe := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, path)
+			if pe != nil {
+				return model.Folder{}, mapStoreError(pe)
 			}
+			// The row's path is the Graph folder id; a name is all Graph would see
+			// as an id otherwise.
 			path = parent.Path
+			if path == "" || path == parent.Name {
+				// A row with no provider id (local-only) has no folder to nest
+				// under, so root is the only meaningful target.
+				path = ""
+			}
 		}
 		f, e = m.Microsoft.CreateFolder(ctx, t, c.Mailbox, path, name)
 	} else {
