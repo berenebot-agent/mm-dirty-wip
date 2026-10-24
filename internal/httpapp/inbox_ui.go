@@ -715,19 +715,20 @@ func (s *Server) mailboxFolders(ctx context.Context, p model.Principal, box mode
 		if !f.Selectable {
 			continue
 		}
+		name := folderDisplayName(f)
 		switch f.Role {
 		case model.FolderRoleFolder:
-			custom = append(custom, folderSidebarItem{ID: f.ID, Path: f.Path, Name: f.Name, Role: f.Role, Count: f.MessageCount})
-			customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: f.Name})
+			custom = append(custom, folderSidebarItem{ID: f.ID, Path: f.Path, Name: name, Role: f.Role, Count: f.MessageCount})
+			customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: name})
 		case model.FolderRoleInbox, model.FolderRoleSpam, model.FolderRoleTrash:
 			// The system views a message may be filed into. Sent, Drafts and
 			// Outbox are provider-managed, so they are never destinations.
-			system[f.Role] = folderSidebarItem{ID: f.ID, Name: f.Name}
+			system[f.Role] = folderSidebarItem{ID: f.ID, Name: name}
 		case model.FolderRoleArchive:
 			// A provider's own archive folder is a physical destination. A
 			// domain or Gmail mailbox archives with a null destination instead.
 			if box.Kind == model.InboxKindStandalone {
-				customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: f.Name})
+				customMoves = append(customMoves, folderSidebarItem{ID: f.ID, Name: name})
 			}
 		}
 	}
@@ -743,7 +744,50 @@ func (s *Server) mailboxFolders(ctx context.Context, p model.Principal, box mode
 	return custom, moves
 }
 
-// sidebarLabelsFor returns the additive labels the sidebar lists. A label is a
+// systemFolderLabels is the reader-facing name of each system role.
+var systemFolderLabels = map[string]string{
+	model.FolderRoleInbox:   "Inbox",
+	model.FolderRoleSent:    "Sent",
+	model.FolderRoleDrafts:  "Drafts",
+	model.FolderRoleArchive: "Archive",
+	model.FolderRoleOutbox:  "Outbox",
+	model.FolderRoleSpam:    "Spam",
+	model.FolderRoleTrash:   "Trash",
+}
+
+// folderProviderNames are the stock names a provider gives each system role.
+// A system folder carrying another name was renamed by the account, so the
+// reader keeps that name.
+var folderProviderNames = map[string][]string{
+	model.FolderRoleInbox:   {"Inbox", "INBOX"},
+	model.FolderRoleSent:    {"Sent", "Sent Items", "Sent Messages", "Sent Mail", "SENT"},
+	model.FolderRoleDrafts:  {"Drafts", "DRAFT"},
+	model.FolderRoleArchive: {"Archive", "All Mail", "All"},
+	model.FolderRoleOutbox:  {"Outbox"},
+	model.FolderRoleSpam:    {"Spam", "Junk", "Junk Email", "Junk E-Mail", "Bulk Mail", "SPAM"},
+	model.FolderRoleTrash:   {"Trash", "Bin", "Deleted", "Deleted Items", "Deleted Messages", "TRASH"},
+}
+
+// folderDisplayName is the name the reader shows for a folder. A system-role
+// folder reads in sentence case in our own wording, so IMAP's "INBOX" or
+// Outlook's "Deleted Items" is not shouted at the reader. A folder the account
+// renamed keeps its name, as does every custom folder, which is the user's own
+// text.
+func folderDisplayName(f model.Folder) string {
+	label, system := systemFolderLabels[f.Role]
+	if !system {
+		return f.Name
+	}
+	stock := f.Name == label
+	for _, name := range folderProviderNames[f.Role] {
+		stock = stock || strings.EqualFold(f.Name, name)
+	}
+	if !stock {
+		return f.Name
+	}
+	return label
+}
+
 // classification, never a location, so it never appears in the folder section.
 func (s *Server) sidebarLabelsFor(ctx context.Context, p model.Principal, box model.Inbox) []mailLabel {
 	labels, _ := s.mailboxLabels(ctx, p, box)
@@ -1075,7 +1119,7 @@ func (s *Server) bulkMoveDestName(r *http.Request, p model.Principal, box model.
 		return ""
 	}
 	if folder, err := s.Service.Store.GetFolderDestination(r.Context(), p.AccountID, box.ID, dest); err == nil {
-		if name := strings.TrimSpace(folder.Name); name != "" {
+		if name := strings.TrimSpace(folderDisplayName(folder)); name != "" {
 			return name
 		}
 	}
@@ -1560,7 +1604,7 @@ func (s *Server) uiMessageMove(w http.ResponseWriter, r *http.Request) {
 	if folderID != nil {
 		dest = ""
 		if f, ferr := s.Service.Store.GetFolderByID(r.Context(), p.AccountID, box.ID, *folderID); ferr == nil {
-			dest = f.Name
+			dest = folderDisplayName(f)
 		}
 	}
 	notice := queuedNotice(actionLabel(action), 1, dest)

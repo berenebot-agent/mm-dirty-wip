@@ -8,6 +8,13 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **The reader names system folders in sentence case.** The move chooser, the
+  sidebar and the "Moved to …" notice show Inbox, Sent, Spam, Trash and the
+  other system folders in our own wording, so an IMAP `INBOX` or an Outlook
+  `Deleted Items` is no longer shown as the provider wrote it. A folder the
+  account renamed, and every custom folder, keeps its own name. A Microsoft
+  mailbox no longer lists an invented Archive destination: Graph answers the
+  well-known name `archive` with an unrelated folder.
 - **A message mutation answers with its result when it settles quickly.** A move,
   delete, label change, read/spam change, restore, purge or seen call now waits
   up to five seconds for its own action and returns the settled body (the

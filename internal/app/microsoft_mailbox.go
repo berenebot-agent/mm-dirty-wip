@@ -132,7 +132,10 @@ func (m *RemoteMailboxService) cacheMicrosoft(ctx context.Context, account, inbo
 }
 func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, inbox, t, mailbox string) ([]model.Folder, error) {
 	roles := map[string]string{}
-	for well, role := range map[string]string{"inbox": model.FolderRoleInbox, "sentitems": model.FolderRoleSent, "drafts": model.FolderRoleDrafts, "deleteditems": model.FolderRoleTrash, "junkemail": model.FolderRoleSpam, "archive": model.FolderRoleArchive, "outbox": model.FolderRoleOutbox} {
+	// Only the folders Graph defines as well known. It answers "archive" with
+	// whatever folder fits, which invented an Archive that Outlook has no
+	// equivalent of; a real Outlook archive folder arrives as a custom folder.
+	for well, role := range map[string]string{"inbox": model.FolderRoleInbox, "sentitems": model.FolderRoleSent, "drafts": model.FolderRoleDrafts, "deleteditems": model.FolderRoleTrash, "junkemail": model.FolderRoleSpam, "outbox": model.FolderRoleOutbox} {
 		f, e := m.Microsoft.Folder(ctx, t, mailbox, well)
 		if e != nil {
 			var mb *model.MailboxError
