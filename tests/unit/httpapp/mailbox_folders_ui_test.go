@@ -120,3 +120,37 @@ func TestIMAPReaderHasNoLabelControl(t *testing.T) {
 		t.Fatal("an IMAP mailbox must offer its folders as move destinations")
 	}
 }
+
+// TestMoveChooserReadsSystemFoldersInSentenceCase proves the reader shows a
+// system folder in our own sentence-case wording whatever the provider calls
+// it, while a custom folder keeps the user's own text exactly.
+func TestMoveChooserReadsSystemFoldersInSentenceCase(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	fake.folders["INBOX"] = 100
+	fake.folders["Trash"] = 100
+	fake.folders["Junk"] = 100
+	fake.folders["My Projects"] = 100
+	fake.add("INBOX", "From: a@b.test\r\nSubject: Shout\r\nMessage-ID: <shout@remote>\r\n\r\nbody", "<shout@remote>", "Shout")
+	refreshRemote(t, h, standalone.ID, adminKey(t, svc, u))
+
+	cookie, _ := uiSession(t, svc, u.ID)
+	rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages", adminKey(t, svc, u))
+	var env struct {
+		Items []struct{ ID string } `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || len(env.Items) != 1 {
+		t.Fatalf("list remote: %d %s", rr.Code, rr.Body.String())
+	}
+	page := uiGet(t, h, cookie, "/ui/messages/"+env.Items[0].ID).Body.String()
+	for _, want := range []string{">Inbox<", ">Trash<", ">Spam<", ">My Projects<"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the move chooser is missing %q: %s", want, page)
+		}
+	}
+	for _, unwanted := range []string{">INBOX<", ">Junk<"} {
+		if strings.Contains(page, unwanted) {
+			t.Fatalf("the move chooser shows the provider name %q", unwanted)
+		}
+	}
+}
