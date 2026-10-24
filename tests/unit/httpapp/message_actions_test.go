@@ -6,14 +6,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-func TestMessageActionsAsyncDefaultAndPolling(t *testing.T) {
+// A message mutation answers synchronously when it settles within the grace, and
+// the answer is the settled message. The same submission still leaves a durable
+// action that can be polled for its state.
+func TestMessageMutationSettlesWithinGrace(t *testing.T) {
 	t.Parallel()
 	svc, _, u, _, box := httpFixture(t)
 	h := httpapp.New(svc, nil).Handler()
@@ -27,25 +29,31 @@ func TestMessageActionsAsyncDefaultAndPolling(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 202 {
-		t.Fatalf("async submission: %d %s", rr.Code, rr.Body.String())
+	if rr.Code != 200 {
+		t.Fatalf("settled submission: %d %s", rr.Code, rr.Body.String())
 	}
 	var result struct {
-		Action store.MessageAction `json:"action"`
+		Read *bool `json:"read"`
 	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil || result.Read == nil || !*result.Read {
+		t.Fatalf("settled answer = %s, want the message reporting read", rr.Body.String())
 	}
-	a, err := svc.WaitForInboxAction(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, result.Action.ID, 3*time.Second)
-	if err != nil || a.State != "done" {
-		t.Fatalf("execution: %+v %v", a, err)
+	queue := httptest.NewRequest("GET", "/v1/actions", nil)
+	queue.Header.Set("Authorization", "Bearer "+key)
+	qr := httptest.NewRecorder()
+	h.ServeHTTP(qr, queue)
+	var payload struct {
+		Items []store.MessageAction `json:"items"`
 	}
-	req = httptest.NewRequest("GET", rr.Header().Get("Location"), nil)
-	req.Header.Set("Authorization", "Bearer "+key)
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"state":"done"`) {
-		t.Fatalf("poll: %d %s", rr.Code, rr.Body.String())
+	if err := json.Unmarshal(qr.Body.Bytes(), &payload); err != nil || len(payload.Items) != 1 {
+		t.Fatalf("queue = %s, want the one settled action", qr.Body.String())
+	}
+	poll := httptest.NewRequest("GET", "/v1/messages/"+m.ID+"?action="+payload.Items[0].ID, nil)
+	poll.Header.Set("Authorization", "Bearer "+key)
+	pr := httptest.NewRecorder()
+	h.ServeHTTP(pr, poll)
+	if pr.Code != 200 || !strings.Contains(pr.Body.String(), `"state":"done"`) {
+		t.Fatalf("poll: %d %s", pr.Code, pr.Body.String())
 	}
 	updated, err := svc.Store.GetMessage(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, m.ID)
 	if err != nil || !updated.Read {
@@ -69,8 +77,8 @@ func TestActionQueueNamesEachActionInbox(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 202 {
-		t.Fatalf("async submission: %d %s", rr.Code, rr.Body.String())
+	if rr.Code != 200 {
+		t.Fatalf("submission: %d %s", rr.Code, rr.Body.String())
 	}
 	req = httptest.NewRequest("GET", "/v1/actions", nil)
 	req.Header.Set("Authorization", "Bearer "+key)

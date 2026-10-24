@@ -2,6 +2,12 @@
 
 FROM golang:1.27-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+# MAILMOOSE_BUILD stamps the running binary's identity, reported by /healthz and
+# the discovery document. Pass the commit being deployed:
+#   MAILMOOSE_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+# When it is empty the image records its build timestamp instead, so a deployed
+# container is still identifiable.
+ARG MAILMOOSE_BUILD=""
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=$GOPROXY
 WORKDIR /src
@@ -10,7 +16,9 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose ./cmd/server
+    CGO_ENABLED=1 go build -trimpath -buildvcs=false \
+    -ldflags="-s -w -X main.buildVersion=${MAILMOOSE_BUILD:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+    -o /out/mailmoose ./cmd/server
 # The optional included MX edge is managed through persisted receiver settings.
 # Remote receivers use the separate, minimal image in dialmx/Dockerfile.
 RUN --mount=type=cache,target=/go/pkg/mod \

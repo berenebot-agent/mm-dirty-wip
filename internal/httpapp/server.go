@@ -1333,8 +1333,10 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 }
 
 // health is the liveness response shared by /healthz, /health and /v1/health.
+// The build identity travels with it so a deployed container can be identified
+// without shell access.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"status": "ok"})
+	writeJSON(w, 200, map[string]any{"status": "ok", "build": s.Service.Config.Build})
 }
 
 // docsRedirect points the conventional /docs path at the served agent guide.

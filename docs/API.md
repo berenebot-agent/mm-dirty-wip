@@ -78,13 +78,16 @@ Example authorization result:
 
 ### `GET /.well-known/mailmoose`
 
-Returns a compact discovery document:
+Returns a compact discovery document. `build` identifies the running binary (the
+commit stamped at build time, otherwise the build timestamp); `/healthz` reports
+the same value, so a deployed instance can be identified without shell access.
 
 ```json
 {
   "name": "MailMoose",
   "api_version": "v1",
   "api_base": "/v1",
+  "build": "9d7d1ce",
   "auth": {"scheme": "bearer", "header": "Authorization", "key_prefix": "mmm_"},
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
@@ -814,12 +817,20 @@ not a percentage. Sync rows have no action ID and cannot be retried/dismissed vi
 action endpoints. Metadata sync progress is safe state only; status reads do not
 fetch provider mail or expose credentials.
 
-Add `?wait=true` to wait up to 30 seconds. Successful PATCH/restore returns the
-updated message; delete/purge returns `204`; seen returns `{id,seen}`.
-A wait timeout returns `504` with the action handle; it does not cancel the job.
-Failed or uncertain actions return `409` with their action record. Submission
-checks mailbox scope and roles before enqueueing; purge still requires Trash.
-Clients that previously depended on immediate mutation must add `?wait=true`.
+A mutation answers synchronously when its action settles quickly: the request
+waits up to about five seconds and returns the settled body — the updated message
+for PATCH/move/restore, `204` for delete/purge, `{id,seen}` for seen. A provider
+call slower than that answers `202` with the durable action and its `Location`,
+so a slow IMAP move never holds the request open for the provider's own latency.
+Re-issuing the same move while it is still in flight returns that action instead
+of queueing a second one.
+
+Add `?wait=true` to wait up to 30 seconds instead. A wait timeout returns `504`
+with the action handle; it does not cancel the job. Failed or uncertain actions
+return `409` with their action record. Submission checks mailbox scope and roles
+before enqueueing; purge still requires Trash. The web UI always submits
+asynchronously and follows the queue.
+
 Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) starts a durable parent action
 that discovers Trash targets and purges them in background batches without a
 total batch cap. IMAP/Outlook enumerate provider-side Trash, not only the cache;
@@ -2044,9 +2055,9 @@ Generated from `internal/apispec`; do not edit by hand.
 | POST | /v1/actions/{id} | Retry or dismiss a mailbox action | assistant |
 | GET | /v1/messages/{id} | Get a message | read |
 | PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
-| DELETE | /v1/messages/{id} | Queue a move to Trash (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id} | Move a message to Trash (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
-| DELETE | /v1/messages/{id}/purge | Queue permanent deletion of a trashed message (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
 
 ### Attachments

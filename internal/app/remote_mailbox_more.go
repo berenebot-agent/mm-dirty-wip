@@ -625,14 +625,43 @@ func (m *RemoteMailboxService) DeleteRemoteFolder(ctx context.Context, p model.P
 		if errors.Is(err, imap.ErrFolderNotEmpty) {
 			return model.NewMailboxError(model.ErrKindConflict, "folder is not empty", false, store.ErrFolderNotEmpty)
 		}
-		return normalizeRemoteError(err)
+		failed := normalizeRemoteError(err)
+		var mb *model.MailboxError
+		if errors.As(failed, &mb) && mb.Kind == model.ErrKindNotFound {
+			// The provider no longer has the folder: the delete already landed, so
+			// the cached row is what is stale. Finish the delete locally.
+			m.forgetRemoteFolder(p.AccountID, inboxID, target.Path)
+			return nil
+		}
+		return m.folderWriteFailed(p.AccountID, inboxID, failed)
 	}
-	// Drop the deleted folder's cached rows so a stale folder does not linger
-	// until the next reconcile prunes it.
-	if perr := m.Service.Store.DeleteRemoteFolderRow(ctx, p.AccountID, inboxID, target.Path); perr != nil {
-		m.Service.Log.Warn("prune deleted remote folder", "inbox_id", inboxID, "error", perr)
-	}
+	m.forgetRemoteFolder(p.AccountID, inboxID, target.Path)
 	return nil
+}
+
+// forgetRemoteFolder drops a provider-confirmed folder from the cached index. It
+// is detached from the request, so a client that gave up on a slow delete (or a
+// gateway timeout) cannot leave the row behind as a phantom child of its parent.
+// A local failure schedules a reconcile instead of surfacing: the provider
+// delete already happened.
+func (m *RemoteMailboxService) forgetRemoteFolder(accountID, inboxID, path string) {
+	ctx, cancel := outcomeContext(context.Background())
+	defer cancel()
+	if err := m.Service.Store.DeleteRemoteFolderRow(ctx, accountID, inboxID, path); err != nil {
+		m.Service.Log.Warn("prune deleted remote folder", "inbox_id", inboxID, "error", err)
+		m.ScheduleRefresh(accountID, inboxID)
+	}
+}
+
+// folderWriteFailed queues a reconcile for a folder mutation whose provider
+// outcome is neither a definitive refusal nor a confirmed write, so a partially
+// applied tree converges without an operator refresh.
+func (m *RemoteMailboxService) folderWriteFailed(accountID, inboxID string, err error) error {
+	var mb *model.MailboxError
+	if errors.As(err, &mb) && (mb.Retryable || mb.Kind == model.ErrKindUnavailable) {
+		m.ScheduleRefresh(accountID, inboxID)
+	}
+	return err
 }
 
 // SetRemoteFolderRole explicitly maps an existing folder of a standalone inbox to

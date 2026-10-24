@@ -102,6 +102,11 @@ func (s *Server) enqueueBulkAction(r *http.Request, p model.Principal, box model
 	return err == nil
 }
 
+// actionGrace bounds how long a submission waits for its own action before
+// answering 202 with the durable handle. It is shorter than the ?wait=true
+// bound so a slow provider never holds an ordinary request open.
+const actionGrace = 5 * time.Second
+
 func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id string, in store.MessageActionInput, ui bool) {
 	p := principal(r)
 	m, mb, err := s.resolveActionMessage(r, p, id)
@@ -135,29 +140,37 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 		http.Redirect(w, r, target+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
 		return
 	}
-	if r.URL.Query().Get("wait") == "true" {
-		a, err = s.Service.WaitForInboxAction(r.Context(), p, a.ID, 30*time.Second)
-		if err != nil {
+	// A message mutation is answered synchronously when it settles quickly, so a
+	// client that reads straight back sees the result instead of the old state.
+	// A provider call slower than this grace returns the durable action (202)
+	// rather than holding the request open. The UI always submits asynchronously.
+	strictWait := r.URL.Query().Get("wait") == "true"
+	wait := actionGrace
+	if strictWait {
+		wait = 30 * time.Second
+	}
+	if a, err = s.Service.WaitForInboxAction(r.Context(), p, a.ID, wait); err != nil {
+		if strictWait {
 			writeJSON(w, 504, map[string]any{"error": "action wait timed out; action remains queued", "code": "timeout", "action": a})
 			return
 		}
-		if a.State == "done" {
-			if strings.HasSuffix(r.URL.Path, "/seen") {
-				writeJSON(w, 200, map[string]any{"id": id, "seen": *in.Read})
-				return
-			}
-			if in.Kind == "delete" || in.Kind == "purge" {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			updated, _, _, e := s.resolveMessageAny(r.Context(), p, id)
-			if e != nil {
-				mapStoreError(w, e)
-				return
-			}
-			writeJSON(w, 200, s.messageResponse(r, updated))
+	}
+	if a.State == "done" {
+		if strings.HasSuffix(r.URL.Path, "/seen") {
+			writeJSON(w, 200, map[string]any{"id": id, "seen": *in.Read})
 			return
 		}
+		if in.Kind == "delete" || in.Kind == "purge" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		updated, _, _, e := s.resolveMessageAny(r.Context(), p, id)
+		if e != nil {
+			mapStoreError(w, e)
+			return
+		}
+		writeJSON(w, 200, s.messageResponse(r, updated))
+		return
 	}
 	status := http.StatusAccepted
 	if a.State == "done" {

@@ -248,6 +248,9 @@ type fakeRemoteServer struct {
 	// fetchFail, keyed by UID, makes FetchRawMIME fail for that message so a test
 	// can exercise the fail-closed classification path.
 	fetchFail map[uint32]error
+	// beforeDelete runs inside a folder delete, after the provider applied it, so
+	// a test can simulate a request that died while the write landed.
+	beforeDelete func()
 }
 
 func newFakeRemoteServer() *fakeRemoteServer {
@@ -597,16 +600,29 @@ func (f *fakeRemoteServer) RenameFolder(_ context.Context, oldPath, newPath stri
 
 func (f *fakeRemoteServer) DeleteFolder(_ context.Context, path string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	// A real server refuses to delete a folder that still has children; the fake
 	// mirrors that so the app's server-side error mapping is exercised.
 	for child := range f.folders {
 		if strings.HasPrefix(child, path+"/") {
+			f.mu.Unlock()
 			return model.NewMailboxError(model.ErrKindConflict, "folder has children", false, imap.ErrFolderNotEmpty)
 		}
 	}
 	delete(f.folders, path)
+	hook := f.beforeDelete
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
+}
+
+// deleteFolder removes a folder from the provider without going through the app,
+// so a test can present a folder that is gone remotely but still cached.
+func (f *fakeRemoteServer) deleteFolder(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.folders, path)
 }
 
 func (f *fakeRemoteServer) FindByMessageID(_ context.Context, folder, messageID string) (imap.Locator, error) {

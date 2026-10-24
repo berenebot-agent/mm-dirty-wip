@@ -40,12 +40,12 @@ const FolderLabelMapping = `CREATE TABLE inbox_folder_labels (
 const FolderLabelMappingHash = "b78427c46676da829537b76c9a54845b2deaf8882b822603a98535728c4dfbc5"
 
 // SentPlacementBackfill files completed outbound mail that predates explicit
-// Sent filing in its domain inbox's Sent folder, the placement every new send
-// records (see MarkSent's filing clause, which picks the same folder). It
-// changes data only, so the schema lineage — and its hash — are unchanged from
-// the FolderLabelMapping migration. Only mail in an inbox that already holds a
-// Sent folder is touched; an inbox whose folder tree was never listed keeps
-// its NULL placements, which the Sent-folder reads still widen to the role.
+// Sent filing in its inbox's Sent folder, the placement every new send records
+// (see MarkSent's filing clause, which picks the same folder of either inbox
+// kind). Only mail in an inbox that already holds a Sent folder is touched; an
+// inbox whose folder tree was never listed keeps its NULL placements, which the
+// Sent-folder reads still widen to the role. Re-applying it is safe: it changes
+// data only, so the pinned schema hash never moves.
 const SentPlacementBackfill = `UPDATE messages
 SET mailbox_id = (SELECT f.id FROM inbox_folders f
                   WHERE f.inbox_id = messages.inbox_id
@@ -54,10 +54,9 @@ SET mailbox_id = (SELECT f.id FROM inbox_folders f
 WHERE direction = 'outbound'
   AND status = 'sent'
   AND mailbox_id IS NULL
-  AND EXISTS (SELECT 1 FROM inbox_folders f JOIN inboxes i ON i.id = f.inbox_id
+  AND EXISTS (SELECT 1 FROM inbox_folders f
               WHERE f.inbox_id = messages.inbox_id
-                AND f.role = 'sent'
-                AND i.kind = 'domain');`
+                AND f.role = 'sent');`
 
 // SentPlacementBackfillHash pins the schema after the Sent placement backfill.
 // The backfill is data-only, so the pinned schema stays the previous lineage's.
