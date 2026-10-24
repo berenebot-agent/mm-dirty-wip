@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 )
@@ -262,5 +264,30 @@ func TestMessageByInternetIDRequiresOneMatch(t *testing.T) {
 		if _, e := c.MessageByInternetID(ctx, "token", "selected", rfc); e == nil {
 			t.Fatalf("%q was accepted as one message", rfc)
 		}
+	}
+}
+
+// TestCreateFolderRejectionCarriesGraphCode proves a Graph refusal surfaces the
+// status and error code instead of one opaque message, so an operator can tell a
+// bad parent id from missing consent or throttling. The raw body is not echoed.
+func TestCreateFolderRejectionCarriesGraphCode(t *testing.T) {
+	t.Parallel()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/users/box@example.net/mailFolders/Projects/childFolders" {
+			t.Errorf("create route %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(403)
+		w.Write([]byte(`{"error":{"code":"ErrorAccessDenied","message":"Access is denied. secret-token"}}`))
+	}))
+	defer s.Close()
+	c := microsoft.NewClient(s.Client())
+	c.BaseURL = s.URL
+	_, e := c.CreateFolder(context.Background(), "secret-token", "box@example.net", "Projects", "Child")
+	if e == nil || !strings.Contains(e.Error(), "403 ErrorAccessDenied") || !strings.Contains(e.Error(), "Access is denied") {
+		t.Fatalf("rejection detail missing: %v", e)
+	}
+	var mb *model.MailboxError
+	if !errors.As(e, &mb) || mb.Kind != model.ErrKindForbidden {
+		t.Fatalf("kind lost: %v", e)
 	}
 }
