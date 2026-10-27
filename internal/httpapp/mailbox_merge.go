@@ -68,6 +68,19 @@ func decodeCommonCursor(raw string) (commonCursor, bool) {
 	return c, c.Min != "" || len(c.From) > 0 || len(c.Scan) > 0
 }
 
+// clampMergeLimit bounds a caller-supplied page size before it sizes any
+// allocation. limitQuery only enforces a floor, so without this a request such
+// as limit=100000000 would reserve gigabytes up front.
+func clampMergeLimit(limit int) int {
+	if limit <= 0 {
+		return 1
+	}
+	if limit > limits.PageSizeMaxList {
+		return limits.PageSizeMaxList
+	}
+	return limit
+}
+
 // pageLookahead avoids the store resetting an over-ceiling limit to its default.
 func pageLookahead(limit int) int {
 	if limit >= limits.PageSizeMaxList {
@@ -155,9 +168,7 @@ type mergedItem struct {
 // A remote source failure is recorded as a per-inbox failure and never fails the
 // whole page; that source's cursor is left unadvanced so a retry re-reads it.
 func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.MessageFilter, folder string, cur commonCursor, limit int) ([]model.Message, string, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	entries := make([]mergedItem, 0, limit+1)
 	var failures []model.InboxFailure
 
@@ -419,9 +430,7 @@ func (s *Server) labelFilteredRemoteThreads(ctx context.Context, p model.Princip
 // (last_message_at, id) ordering), so a merged page never loses a thread that
 // sorts below the global key, and the per-source progress travels in the cursor.
 func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder string, labels labelFilter, cur commonCursor, limit int) ([]model.Thread, string, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	type tentry struct {
 		th  model.Thread
 		key string
@@ -540,9 +549,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 // later page resumes the server search instead of re-reading the newest window.
 // Completeness describes source coverage, independently of pagination.
 func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q string, folder, from, to, subject string, labels labelFilter, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	localFilter := store.MessageFilter{
 		InboxID:       inboxID,
 		From:          from,

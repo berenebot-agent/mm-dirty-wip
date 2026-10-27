@@ -830,6 +830,7 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			// last raw item) until limit+1 matches are collected or the source is
 			// exhausted — never stop at the first short filtered page, which would
 			// silently hide matching mail that simply followed non-matching rows.
+			limit = clampMergeLimit(limit)
 			out := make([]model.Message, 0, limit+1)
 			scanBefore := before
 			more := false
