@@ -102,13 +102,8 @@ Set your administrator credentials and change `BASE_URL` to the address you'll u
 **2. Start Mammoth Mail:**
 
 ```bash
-MAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+ docker compose up -d
 ```
-
-`MAIL_BUILD` stamps the deployed commit into the binary; `GET /healthz` and
-`/.well-known/mail-api` report it as `build`. When it is omitted the image
-records its build time instead.
-
 Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
 
 For external access, place Mammoth Mail behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup in UI. See the [self-hosting guide](docs/SELFHOSTING.md).
