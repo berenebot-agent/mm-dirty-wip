@@ -42,7 +42,7 @@ jobs:
         run: go test -mod=readonly -race -count=1 -timeout=60s ./...
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
       - name: OpenClaw build and tests
