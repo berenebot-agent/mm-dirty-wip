@@ -170,10 +170,10 @@ All notable changes to Mammoth Mail are documented here. This project follows
   everywhere it is shown: the receiving provider selector, the Dial MX setup
   wizard and status view, the dashboard and domain log labels
   (`Tusk: <host>`), and the docs. The new mail-flow diagram replaces the old
-  one. This is a display-name change only: the `dialmx` provider, its
-  `"service": "antler"` value, the manifest URL and the receiver hostnames are
-  unchanged, so saved setups, DNS records and live sessions do not move. See
-  **D082**.
+  one. The `dialmx` provider, its `"service": "antler"` value and the legacy
+  manifest URL remain unchanged. Saved setups keep their receiver snapshots,
+  DNS records and live sessions; new enrolments use the renamed receivers as
+  described below. See **D082**.
 - **The docs call the product Mammoth Mail throughout.** Every reference in
   `README.md` and `docs/` now uses the current name. Protocol and storage
   identifiers keep their old spelling, because they are what the running code
