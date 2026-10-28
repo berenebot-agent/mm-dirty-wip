@@ -10,11 +10,15 @@ import (
 
 const (
 	Provider = "dialmx"
-	// ServiceAntler and ServiceCustom select between the Tusk MX hosted relay
+	// ServiceHosted and ServiceCustom select between the Tusk MX hosted relay
 	// (endpoints resolved from the live manifest and snapshotted at save) and
 	// operator-supplied receiver URLs.
-	ServiceAntler = "antler"
+	ServiceHosted = "hosted"
 	ServiceCustom = "custom"
+	// ServiceAntler remains as an internal Go alias while callers are migrated.
+	ServiceAntler = ServiceHosted
+	// LegacyServiceAntler identifies encrypted configurations written before the rename.
+	LegacyServiceAntler = "antler"
 	// EnforcementModerate and EnforcementHard are the inbound authentication
 	// enforcement policies. Moderate marks mail as spam when DMARC fails, or both
 	// SPF and DKIM fail; hard marks it when any of SPF, DKIM or DMARC fails.
@@ -49,8 +53,8 @@ func (Transport) SelectLabel() string {
 }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
-		{Name: "service", Label: "Service", Type: "select", Default: ServiceAntler, Options: []transport.ConfigOption{
-			{Value: ServiceAntler, Label: "Tusk MX (Free SMTP Relay - no port forwards required)"},
+		{Name: "service", Label: "Service", Type: "select", Default: ServiceHosted, Options: []transport.ConfigOption{
+			{Value: ServiceHosted, Label: "Tusk MX (Free SMTP Relay - no port forwards required)"},
 			{Value: ServiceCustom, Label: "Custom receiver URLs"},
 		}},
 		{Name: "contact_email", Label: "Contact email — used for important service messages only, no marketing", Type: "text", Placeholder: "you@example.com"},

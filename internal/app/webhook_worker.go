@@ -287,13 +287,9 @@ func webhookBackoff(previous int, clientID string, eventID int64) time.Duration 
 	return jittered
 }
 
-// legacyWebhookPrefix is the pre-rename header prefix. Every webhook header is
-// sent under both names so consumers that predate the rename keep working.
-const legacyWebhookPrefix = "X-MailMoose-"
-
+// setWebhookHeader emits only the stable brand-neutral contract.
 func setWebhookHeader(h http.Header, name, value string) {
 	h.Set(name, value)
-	h.Set(legacyWebhookPrefix+strings.TrimPrefix(name, "X-Mail-"), value)
 }
 
 // HeaderEnvelopeFrom and HeaderEnvelopeTo are the exact shared outbound forward

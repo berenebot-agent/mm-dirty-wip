@@ -377,7 +377,6 @@ func (s *Server) Handler() http.Handler {
 
 	// Discovery.
 	m.HandleFunc("GET /.well-known/mail-api", s.discovery)
-	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
 	m.HandleFunc("GET /robots.txt", s.robotstxt)

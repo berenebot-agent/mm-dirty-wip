@@ -6767,7 +6767,7 @@ function generateBearerSecret() {
       countdown = null;
       // The poll carries the record on every read; the seeded copy covers a
       // payload that predates it (or no save yet), so the line never flashes off.
-      renderManifest(data.antler_manifest || initialManifest);
+      renderManifest(data.receiver_manifest || initialManifest);
       var instructions = data.instructions || {};
       ready = (data.status || []).some(isReady);
       var records = wizard.querySelector('.antler-records');
@@ -7083,11 +7083,11 @@ function generateBearerSecret() {
       }) : api('GET').then(function (data) {
         // Reopening an existing setup must retain its enforcement until the
         // final step, and must not unnecessarily resolve a new receiver set.
-        if (data.provider === 'dialmx' && data.config.service === (custom ? 'custom' : 'antler')) { state = data; }
+        if (data.provider === 'dialmx' && data.config.service === (custom ? 'custom' : 'hosted')) { state = data; }
       });
       beforeSave.then(function () {
         if (!finishing && !custom && state && state.config.contact_email === email.value) { return state; }
-        var config = { service: custom ? 'custom' : 'antler', enforcement: finishing ? enforcement.value : (state && state.config.enforcement || 'moderate') };
+        var config = { service: custom ? 'custom' : 'hosted', enforcement: finishing ? enforcement.value : (state && state.config.enforcement || 'moderate') };
         if (custom) { config.receiver_urls = urls.value; } else { config.contact_email = email.value; }
         return api('PUT', config);
       }).then(function (data) {
