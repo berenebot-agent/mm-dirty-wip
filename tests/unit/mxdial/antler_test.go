@@ -26,8 +26,22 @@ func TestEmbeddedAntlerManifestIsValid(t *testing.T) {
 	if len(receivers) != 2 {
 		t.Fatalf("embedded manifest receivers = %d, want 2", len(receivers))
 	}
-	if receivers[0].SessionURL != "https://antler1.hgolabs.com" || receivers[0].MXPriority != 10 {
+	if receivers[0].SessionURL != "https://tusk1.hgolabs.com" || receivers[0].MXPriority != 10 {
 		t.Fatalf("unexpected first receiver: %+v", receivers[0])
+	}
+	// The pre-rename antler-endpoints.json is still fetched by older cores, so
+	// it must carry the same receiver set as the copy of record.
+	legacy, err := mxdial.ParseAntlerManifest([]byte(mxdial.LegacyEmbeddedManifest()))
+	if err != nil {
+		t.Fatalf("legacy manifest: %v", err)
+	}
+	if len(legacy) != len(receivers) {
+		t.Fatalf("legacy receivers = %d, want %d", len(legacy), len(receivers))
+	}
+	for i := range receivers {
+		if legacy[i] != receivers[i] {
+			t.Fatalf("legacy receiver %d = %+v, want %+v", i, legacy[i], receivers[i])
+		}
 	}
 }
 
@@ -115,7 +129,7 @@ func TestAntlerResolverUsesEmbeddedWhenNeverFetched(t *testing.T) {
 	if got.Source != mxdial.AntlerSourceEmbedded || got.Err == nil || !got.FetchedAt.IsZero() {
 		t.Fatalf("embedded fallback source = %q (err %v, fetched %v), want embedded with the fetch error and no time", got.Source, got.Err, got.FetchedAt)
 	}
-	if len(got.Receivers) != 2 || got.Receivers[0].SessionURL != "https://antler1.hgolabs.com" {
+	if len(got.Receivers) != 2 || got.Receivers[0].SessionURL != "https://tusk1.hgolabs.com" {
 		t.Fatalf("embedded manifest not used: %+v", got.Receivers)
 	}
 }

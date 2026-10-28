@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy of record for the MailMoose/Tusk MX receiver set. Fetched live from this path in the project repository and compiled into the core.",
+  "schema_version": 1,
+  "receivers": [
+    {
+      "id": "tusk-1",
+      "session_url": "https://tusk1.hgolabs.com",
+      "smtp_hostname": "tusk1.hgolabs.com",
+      "mx_priority": 10
+    },
+    {
+      "id": "tusk-2",
+      "session_url": "https://tusk2.hgolabs.com",
+      "smtp_hostname": "tusk2.hgolabs.com",
+      "mx_priority": 10
+    }
+  ]
+}
