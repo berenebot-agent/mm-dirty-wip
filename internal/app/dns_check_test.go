@@ -52,7 +52,7 @@ func (r recordingResolver) LookupTXT(_ context.Context, name string) ([]string, 
 }
 
 func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
-	expected := []string{"antler1.example.test", "antler2.example.test"}
+	expected := []string{"antler1.example.test", "tusk2.example.test"}
 	for _, tc := range []struct {
 		name      string
 		published []*net.MX
@@ -62,9 +62,9 @@ func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 	}{
 		{
 			name:      "only our receivers",
-			published: []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "antler2.example.test.", Pref: 20}},
+			published: []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "tusk2.example.test.", Pref: 20}},
 			wantState: "ok",
-			wantMatch: []string{"antler1.example.test", "antler2.example.test"},
+			wantMatch: []string{"antler1.example.test", "tusk2.example.test"},
 		},
 		{
 			name:      "one receiver plus a rogue",

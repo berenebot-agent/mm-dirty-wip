@@ -7,9 +7,9 @@ Mammoth Mail is a self-hosted Go application with a web interface, REST API, SQL
 ```text
 Incoming mail                         Existing mailboxes
 ├── Direct MX (SMTP)                  ├── Gmail / Google
-├── Antler MX (hosted receiver)       ├── Microsoft / Outlook
+├── Tusk MX (hosted receiver)         ├── Microsoft / Outlook
 ├── Mailgun / Resend / Postmark       ├── One / Gmail
-└── Cloudflare Email Routing         └── IMAP + SMTP
+└── Cloudflare Email Routing          └── IMAP + SMTP
              │                                   │
              ▼                                   ▼
       ┌─────────────────────────────────────────────┐
@@ -25,7 +25,7 @@ Incoming mail                         Existing mailboxes
                (Hermes, OpenClaw, REST)
 ```
 
-Direct MX can use the SMTP receiver included with Mammoth Mail. Antler MX receives SMTP on a hosted receiver while Mammoth Mail connects outbound to it over encrypted HTTP/2. Other providers deliver through authenticated webhooks. Connected mailboxes remain hosted by their original providers: Mammoth Mail indexes metadata and retrieves bodies when required.
+Direct MX can use the SMTP receiver included with Mammoth Mail. Tusk MX receives SMTP on a hosted receiver while Mammoth Mail connects outbound to it over encrypted HTTP/2. Other providers deliver through authenticated webhooks. Connected mailboxes remain hosted by their original providers: Mammoth Mail indexes metadata and retrieves bodies when required.
 
 The standard deployment uses one application container. A separate SMTP receiver is optional for more advanced deployments. The optional dedicated receiver HTTP listener runs in the same application process. See [Self-hosting](SELFHOSTING.md) and [Email providers](EMAIL_PROVIDERS.md).
 

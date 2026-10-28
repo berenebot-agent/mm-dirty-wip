@@ -239,7 +239,7 @@ func TestDNSWatcherPublishesDNSChanges(t *testing.T) {
 	}
 }
 
-// fixedAntlerReceivers is a deterministic Antler endpoint resolver for the watcher.
+// fixedAntlerReceivers is a deterministic Tusk endpoint resolver for the watcher.
 type fixedAntlerReceivers []mxdial.AntlerReceiver
 
 func (f fixedAntlerReceivers) Receivers(context.Context) (mxdial.AntlerEndpointSet, error) {

@@ -384,7 +384,7 @@ func (st *ipState) clearCooldown(domain string) {
 
 // binding is one connection's authority over a domain. registry membership is
 // not implied: only the active binding is in Receiver.domains. ContactEmail and
-// SetupID are the optional Antler MX registration metadata supplied on
+// SetupID are the optional Tusk MX registration metadata supplied on
 // DomainAuth; they are logged for usage accounting and are never credentials.
 type binding struct {
 	c             *connection

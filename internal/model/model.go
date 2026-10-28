@@ -405,7 +405,7 @@ type Message struct {
 	// the denormalized snapshot of the API key / Hermes credential that sent it,
 	// empty for sends with no credential (for example an email-approved send).
 	// For inbound mail it is the receiving source, for example
-	// "Antler: antler1.hgolabs.com" or the webhook provider's name.
+	// "Tusk: tusk1.hgolabs.com" or the webhook provider's name.
 	Source   string `json:"source,omitempty"`
 	ClientID string `json:"-"`
 	// Internal marks workflow mail (an approval-request email carrying a

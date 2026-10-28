@@ -124,7 +124,7 @@ func adminDo(h http.Handler, method, path, body, key string) *httptest.ResponseR
 
 // TestDomainConfigCrossAccountIsolation proves another account can neither read
 // nor mutate a domain's sending, receiving or delivery config, and cannot
-// rotate its Antler (Dial MX) signing key.
+// rotate its Tusk (Dial MX) signing key.
 func TestDomainConfigCrossAccountIsolation(t *testing.T) {
 	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)

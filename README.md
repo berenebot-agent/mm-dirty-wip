@@ -47,7 +47,7 @@ Choose how you review and send agent-generated emails:
 
 ### 4. Receive email on your own domain, without opening ports
 
-**Antler MX** receives email for your domain and forwards it to Mammoth Mail without opening inbound SMTP ports.
+**Tusk MX** receives email for your domain and forwards it to Mammoth Mail without opening inbound SMTP ports.
 
 Simply configure your DNS records and start receiving. Or use your own MX receiver or third-party provider.
 
@@ -57,7 +57,7 @@ Mammoth Mail supports multiple receiving methods, giving you the flexibility to 
 
 | Receiving option | Best for |
 | --- | --- |
-| **Antler MX** | Receive email for your own domain without opening inbound SMTP ports |
+| **Tusk MX** | Receive email for your own domain without opening inbound SMTP ports |
 | **Mailgun, Cloudflare Email Routing, Resend, Postmark** | Connect existing inbound email providers |
 | **Direct MX** | Receive email directly into Mammoth Mail over SMTP |
 | **Remote MX / Dial MX** | Run your own separate or shared receiving server |
@@ -150,7 +150,7 @@ for deliberate provider limits, including remote body availability and deletion.
 | [Email providers](docs/EMAIL_PROVIDERS.md) | Inbound, outbound and standalone mailbox configuration |
 | [Agent connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
 | [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
-| [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
+| [Remote MX](docs/REMOTE_MX.md) | Tusk MX, Dial MX and separate receivers |
 | [API](docs/API.md) | Endpoints, permissions, drafts and events |
 | [Decisions](docs/DECISIONS.md) | Architecture decisions and their rationale (maintainers) |
 

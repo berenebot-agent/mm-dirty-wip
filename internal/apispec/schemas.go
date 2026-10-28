@@ -905,7 +905,7 @@ var schemas = map[string]any{
 		"from_address":        str("Envelope From."),
 		"to":                  stringList("Envelope recipients."),
 		"subject":             str("Subject line."),
-		"source":              str("Where the row came from: the sending credential for outbound mail, or the receiving source (for example an Antler receiver) for inbound mail."),
+		"source":              str("Where the row came from: the sending credential for outbound mail, or the receiving source (for example a Tusk receiver) for inbound mail."),
 		"size_bytes":          integer("Message size."),
 		"provider_message_id": str("Provider-assigned message id."),
 		"attempt":             integer("Attempt number."),

@@ -90,7 +90,7 @@ func TestRemoteMXSingleSaveAndRemove(t *testing.T) {
 		t.Fatalf("receiver not saved: %+v %v", receiver, err)
 	}
 	// A refusal already returned by the account receiver API must also be visible
-	// in the domain Receiving dialog, not only in the Antler status list.
+	// in the domain Receiving dialog, not only in the Tusk status list.
 	svc.RemoteMXRuntime = uatRemoteMXStatus{}
 	panel := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=remotemx").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	if !strings.Contains(panel, `data-remote-mx-status`) || !strings.Contains(panel, "receiver refused the session (HTTP 405)") {

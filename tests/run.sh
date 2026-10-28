@@ -21,7 +21,7 @@
 #   vet      Go static analysis (vet ./...)
 #   fmt      gofmt gate (gofmt -l cmd internal tests dialmx, fail on output)
 #   lint     dead-code gate (staticcheck -checks U1000 ./...)
-#   js       Antler dialog interaction checks (node tests/antler-wizard-check.cjs)
+#   js       Tusk dialog interaction checks (node tests/antler-wizard-check.cjs)
 #   smoke    slow gated tests (MAIL_SMOKE=1): the process-level receiver
 #            binary smoke. Deliberately NOT part of the default preset.
 #

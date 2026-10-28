@@ -42,7 +42,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `vet` | `go vet ./...` |
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
-| `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash, passkey and release-config checks |
+| `js` | Tusk dialog, DKIM toggle, copy-controls, empty-trash, passkey and release-config checks |
 | `smoke` | slow gated tests with `MAIL_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
@@ -194,7 +194,7 @@ These are manual and end-to-end checks to run before a release. Automated unit, 
 
 ### Receiving and connected mailboxes
 
-- Receive test mail through Direct MX and Antler MX. Confirm DNS setup, status, inbox routing and unknown-recipient handling.
+- Receive test mail through Direct MX and Tusk MX. Confirm DNS setup, status, inbox routing and unknown-recipient handling.
 - Exercise at least one authenticated webhook receiving provider (Mailgun, Cloudflare, Resend or Postmark), including a duplicate delivery.
 - Connect Gmail, Microsoft and a generic IMAP mailbox. Check initial sync, later arrivals, folders, labels, attachments and disconnect/reconnect behavior. Test One/Gmail if available.
 

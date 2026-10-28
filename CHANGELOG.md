@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to MailMoose are documented here. This project follows
+All notable changes to Mammoth Mail are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -166,7 +166,21 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
-- **New Antler MX setups enrol with the renamed Tusk receivers.** The receiver
+- **The hosted relay is named Tusk MX.** Antler MX is renamed to **Tusk MX**
+  everywhere it is shown: the receiving provider selector, the Dial MX setup
+  wizard and status view, the dashboard and domain log labels
+  (`Tusk: <host>`), and the docs. The new mail-flow diagram replaces the old
+  one. This is a display-name change only: the `dialmx` provider, its
+  `"service": "antler"` value, the manifest URL and the receiver hostnames are
+  unchanged, so saved setups, DNS records and live sessions do not move. See
+  **D082**.
+- **The docs call the product Mammoth Mail throughout.** Every reference in
+  `README.md` and `docs/` now uses the current name. Protocol and storage
+  identifiers keep their old spelling, because they are what the running code
+  actually emits and accepts: `X-MailMoose-*`, `/.well-known/mailmoose`,
+  `MAILMOOSE_BUILD`, `_mailmoose-mx` and the `github.com/dellarb/mailmoose`
+  module path.
+- **New Tusk MX setups enrol with the renamed Tusk receivers.** The receiver
   set now points at `tusk1.hgolabs.com` and `tusk2.hgolabs.com` (receiver ids
   `tusk-1`/`tusk-2`), so a setup saved from here publishes the new MX and TXT
   records and mail flows through the renamed service. The manifest is the copy of
@@ -195,7 +209,7 @@ All notable changes to MailMoose are documented here. This project follows
   moves from `_mailmoose-mx.<domain>` to **`_mail-proof.<domain>`** (D161):
   every domain must republish it. The display name, environment variables,
   client configuration path and script names change to Mammoth Mail /
-  `mammothmail`. See **D160**.
+  `mammothmail`. See **D161**.
 
 - **Unsupported-operation error code (API change explicitly approved).**
   Unsupported mailbox operations keep HTTP **409**, but return
@@ -205,7 +219,7 @@ All notable changes to MailMoose are documented here. This project follows
 - Inbox capabilities add `archive` (null-destination move) and `purge`
   (permanent deletion after Trash), independently of caller permissions and
   provider availability. `realtime` means provider push detection, not whether
-  the MailMoose event/SSE API is available. The Beta 3 onward v1 compatibility
+  the Mammoth Mail event/SSE API is available. The Beta 3 onward v1 compatibility
   policy is documented in `docs/API.md`.
 
 - **Outbound idempotency rejects mismatched reuse (API change explicitly
@@ -234,7 +248,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 - **API Beta 3 — folders and labels are now two separate things (API change
   explicitly approved).** A message's location is its `folder_id`: one stable
-  MailMoose folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its
+  Mammoth Mail folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its
   labels are the additive `label_ids` (`tag:Name` only). A folder id is no
   longer a label id: the `folder:<id>` catalogue identity is removed, the
   exclusive/system label classification is gone, and `label_ids` no longer
@@ -381,7 +395,7 @@ All notable changes to MailMoose are documented here. This project follows
   `message_count`, and all-read threads explicitly return `unread_count: 0`.
 
 - Direct MX's DNS instruction now points the client domain at the hostname in
-  MailMoose's configured receiving URL (or public URL), not the separately
+  Mammoth Mail's configured receiving URL (or public URL), not the separately
   configurable SMTP greeting hostname.
 - Remote MX setup now saves the account connection, domain selection and spam
   policy in one submission. Validation errors reopen Receiving with non-secret
@@ -506,7 +520,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [0.1.0-beta.1] - 2026-10-20
 
-Initial release of MailMoose: self-hosted email infrastructure for people and
+Initial release of Mammoth Mail: self-hosted email infrastructure for people and
 AI agents. Run it as one container, manage inboxes on your domains or connect
 existing mailboxes, and give agents scoped access to read and send mail—with
 approval controls when you need them.

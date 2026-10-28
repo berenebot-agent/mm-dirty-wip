@@ -1710,9 +1710,9 @@ accepts `"regenerate_secret": true`. Provider schemas:
   account-scoped and set through the account's Remote MX settings, not per
   domain);
   `dialmx: {"service?","contact_email?","receiver_urls?","enforcement?"}` —
-  `service` is `antler` (the zero-config Antler MX shared relay, the default) or
-  `custom`. Antler requires a valid `contact_email` and resolves the hosted
-  receiver set; supplying `receiver_urls` for Antler is a `400`, because the
+  `service` is `antler` (the zero-config Tusk MX shared relay, the default) or
+  `custom`. Tusk requires a valid `contact_email` and resolves the hosted
+  receiver set; supplying `receiver_urls` for Tusk is a `400`, because the
   receiver set is never caller-controlled. Custom requires one or more HTTPS
   `receiver_urls` and ignores `contact_email`. `receiver_urls` is a **string**,
   not an array: a comma-separated list of up to eight HTTPS base URLs, with no
@@ -1727,7 +1727,7 @@ interface shows:
 
 | `provider` value | Interface label | Direction |
 | --- | --- | --- |
-| `dialmx` | Antler MX (Dial MX for a custom receiver) | receiving |
+| `dialmx` | Tusk MX (Dial MX for a custom receiver) | receiving |
 | `mx` | Direct MX | receiving and sending |
 | `remotemx` | Remote Mammoth Mail MX | receiving |
 | `cloudflare` | Cloudflare | receiving |
@@ -1738,11 +1738,11 @@ interface shows:
 | `brevo` | Brevo API | sending |
 | `smtp` | SMTP | sending |
 
-`dialmx` carries two services: `"service": "antler"` (the hosted Antler MX
+`dialmx` carries two services: `"service": "antler"` (the hosted Tusk MX
 relay, the default) and `"service": "custom"` (a receiver you run yourself,
 shared by many domains — the Dial MX option in
 [Remote SMTP receiving](REMOTE_MX.md)). The picker shows a longer description
-for Antler MX and Remote MX, and Direct MX's own description already names the
+for Tusk MX and Remote MX, and Direct MX's own description already names the
 bundled receiver; the name is the same in every case.
 
 A name is accepted only in its own direction — `remotemx` is a receiving
@@ -1752,7 +1752,7 @@ direction being saved is refused with a `400`.
 A blank secret on a same-provider save keeps the stored value; changing provider
 never reuses old fields or secrets. Non-secret fields are whole-config values:
 an omitted field takes the provider default or is a required-field error, never a
-merge. Saving performs no network or DNS validation, except that an Antler MX
+merge. Saving performs no network or DNS validation, except that a Tusk MX
 save resolves the endpoint manifest (with cached and embedded fallbacks).
 
 `GET` on an unconfigured slot returns
@@ -1767,7 +1767,7 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   `ready` only once it has proved both domain authority (its `_mail-proof` TXT
   key) and routing (its own SMTP hostname is published in the domain's MX
   records). A receiver that is authorized but not routed reports
-  `rejected`/`not_mx`. For an Antler MX setup an unreachable receiver reports no
+  `rejected`/`not_mx`. For a Tusk MX setup an unreachable receiver reports no
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
   connector. `http_code` is the HTTP status the receiver URL answered the
@@ -1777,7 +1777,7 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   absent when the attempt was never answered.
 - `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
   `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
-  (published MX hostnames that are not Antler receivers), `state` (`ok`,
+  (published MX hostnames that are not Tusk receivers), `state` (`ok`,
   `not_found`, `mismatch`, `dns_error`) and a short `reason`. The checks are
   computed by a background watcher
   (bounded by a four-second timeout per lookup), so every read is an in-memory
@@ -1801,13 +1801,13 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   record table and the status view's fix prompts; the extra-MX verdict itself is
   surfaced separately as the top-level `unexpected_mx[]` (see below), and routing is
   the receiver's `status[]` verdict, not a second core-side decision.
-- `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
+- `instructions` — for Tusk MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email, the
   current `enforcement` policy and, for a domain that inherits its setup,
   `inherited_from`. It is omitted entirely for a domain with
   no copy-ready records.
 - `unexpected_mx[]` — published MX hostnames that are not one of the domain's
-  configured Antler receivers. It is a **top-level** field, independent of
+  configured Tusk receivers. It is a **top-level** field, independent of
   `instructions`, and is the shared verdict behind both the dashboard's amber light
   and the status dialog's "additional MX servers" warning, so the two surfaces
   cannot disagree. It is the `unexpected` list of the `mx` check in `dns[]`, owned

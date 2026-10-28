@@ -4,12 +4,12 @@ Mammoth Mail supports a wide range of options for receiving and sending email, o
 
 | | Providers |
 | --- | --- |
-| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Remote MX](#inbound-remote-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) · [SendGrid](#inbound-sendgrid) |
+| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Tusk MX](#inbound-tusk-mx) · [Remote MX](#inbound-remote-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) · [SendGrid](#inbound-sendgrid) |
 | **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
 | **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
 
 The API names for these providers — the value that goes in `"provider"` when you
-configure a domain over the API — are `mx` (Direct MX), `dialmx` (Antler MX),
+configure a domain over the API — are `mx` (Direct MX), `dialmx` (Tusk MX),
 `remotemx` (Remote MX), `mailgun`, `cloudflare`, `resend`, `postmark`,
 `sendgrid`, `brevo` and `smtp`. Each provider's section below names its own.
 The label the interface shows and the API name are different strings — the
@@ -40,7 +40,7 @@ In Mammoth Mail, open **Domains → Receiving**, select **Direct MX**, and save 
 
 The provider list offers Direct MX before the receiver exists, and saving a domain does not configure the receiver. **A Direct MX domain receives no mail at all until the installation's receiver is configured**, which a system administrator does in that same Direct MX panel. A domain that reads as set up for Direct MX is therefore not necessarily receiving yet.
 
-Direct MX is not needed for Antler MX or provider-webhook receiving. For a separately operated receiver, configure [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account) instead.
+Direct MX is not needed for Tusk MX or provider-webhook receiving. For a separately operated receiver, configure [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account) instead.
 
 ## Inbound: Remote MX
 
@@ -57,31 +57,31 @@ non-buffering reverse proxy in front of it. Both requirements, the failure
 signatures and the `curl --http2` check are in the
 [Remote SMTP receiving guide](REMOTE_MX.md#reverse-proxies-in-front-of-the-receiver).
 
-## Inbound: Antler MX
+## Inbound: Tusk MX
 
 **API provider name:** `dialmx`
 
-**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in Mammoth Mail. You do not need to run another container, open inbound SMTP ports, or expose Mammoth Mail's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
+**Tusk MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in Mammoth Mail. You do not need to run another container, open inbound SMTP ports, or expose Mammoth Mail's web interface to the internet. Tusk MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
 
 ### How it works
 
-![Antler MX mail flow: public senders deliver through the hosted relay over an outbound connection initiated by your self-hosted Mammoth Mail instance. No inbound port forwarding is needed.](../assets/antler-mx-diagram.svg)
+![Tusk MX mail flow: public senders deliver through the hosted relay over an outbound connection initiated by your self-hosted Mammoth Mail instance. No inbound port forwarding is needed.](../assets/tusk-mx-diagram.svg)
 
-Mammoth Mail makes an **outbound connection** to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to Mammoth Mail over that connection. Mammoth Mail handles the inbox and stores the messages locally. Antler is a receiving relay, not a hosted mailbox or an outbound sending service.
+Mammoth Mail makes an **outbound connection** to the hosted Tusk receivers. Tusk accepts incoming SMTP and passes messages to Mammoth Mail over that connection. Mammoth Mail handles the inbox and stores the messages locally. Tusk is a receiving relay, not a hosted mailbox or an outbound sending service.
 
 ### Set it up
 
 1. Add your domain in Mammoth Mail and create an inbox.
-2. Open the domain's **Receiving** settings and select **Antler MX**.
+2. Open the domain's **Receiving** settings and select **Tusk MX**.
 3. Enter a contact email and save. This is for service updates only, not a mailbox login.
 4. Copy the **MX** and `_mail-proof.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by Mammoth Mail.
 5. Continue to **Receivers** and wait for at least one receiver to show **Ready to receive**. Each receiver checks the TXT key and its own MX routing; DNS-step record indicators follow those proofs, not a separate local DNS cache.
 6. Continue to the spam/authentication policy, choose the enforcement level, and select **Finish** to save and close. Reopen **Receiving** any time to view status or edit settings.
 7. Send a test email to an address on your domain.
 
-The TXT record proves that you authorized this Mammoth Mail installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel shows repair instructions when a receiver reports a key or routing problem. A local cached negative DNS answer does not override a ready receiver; additional MX servers still produce a separate routing warning.
+The TXT record proves that you authorized this Mammoth Mail installation to receive mail for the domain. Tusk also checks that your domain's MX records point to its receiver. The setup panel shows repair instructions when a receiver reports a key or routing problem. A local cached negative DNS answer does not override a ready receiver; additional MX servers still produce a separate routing warning.
 
-**No inbound ports are needed on your Mammoth Mail host for Antler MX.** The host does need outbound HTTPS access to Antler. If your instance is offline, Antler cannot deliver into it and the sending mail server must retry; Antler is not a mailbox or a durable mail queue.
+**No inbound ports are needed on your Mammoth Mail host for Tusk MX.** The host does need outbound HTTPS access to Tusk. If your instance is offline, Tusk cannot deliver into it and the sending mail server must retry; Tusk is not a mailbox or a durable mail queue.
 
 To send outbound mail, configure a separate provider under the domain's **Sending** settings.
 

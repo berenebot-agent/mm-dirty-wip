@@ -18,7 +18,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
-// Antler MX endpoint discovery.
+// Tusk MX endpoint discovery.
 //
 // The build embeds one canonical manifest and also fetches it live from the
 // repository at setup-save time. A live fetch lets the service publish
@@ -54,7 +54,7 @@ var embeddedAntlerManifest []byte
 //go:embed antler-endpoints.json
 var embeddedLegacyAntlerManifest []byte
 
-// AntlerReceiver is one Antler MX receiver: the HTTPS session origin the core
+// AntlerReceiver is one Tusk MX receiver: the HTTPS session origin the core
 // dials and the SMTP hostname (with MX preference) a receiving domain publishes.
 type AntlerReceiver struct {
 	ID           string `json:"id"`
@@ -96,7 +96,7 @@ type antlerManifest struct {
 
 func init() {
 	if _, err := ParseAntlerManifest(embeddedAntlerManifest); err != nil {
-		panic("mxdial: embedded Antler manifest is invalid: " + err.Error())
+		panic("mxdial: embedded Tusk manifest is invalid: " + err.Error())
 	}
 }
 
@@ -106,14 +106,14 @@ func ParseAntlerManifest(data []byte) ([]AntlerReceiver, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	var m antlerManifest
 	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("mxdial: invalid Antler manifest: %w", err)
+		return nil, fmt.Errorf("mxdial: invalid Tusk manifest: %w", err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("mxdial: invalid Antler manifest: trailing data")
+		return nil, fmt.Errorf("mxdial: invalid Tusk manifest: trailing data")
 	}
 	if m.SchemaVersion != 1 {
-		return nil, fmt.Errorf("mxdial: unsupported Antler manifest schema %d", m.SchemaVersion)
+		return nil, fmt.Errorf("mxdial: unsupported Tusk manifest schema %d", m.SchemaVersion)
 	}
 	if err := ValidateAntlerReceivers(m.Receivers); err != nil {
 		return nil, err
@@ -130,30 +130,30 @@ func ParseAntlerManifest(data []byte) ([]AntlerReceiver, error) {
 // over TLS from the project repository); see D082.
 func ValidateAntlerReceivers(receivers []AntlerReceiver) error {
 	if len(receivers) == 0 || len(receivers) > antlerMaxReceivers {
-		return fmt.Errorf("mxdial: Antler manifest must list one to %d receivers", antlerMaxReceivers)
+		return fmt.Errorf("mxdial: Tusk manifest must list one to %d receivers", antlerMaxReceivers)
 	}
 	seen := map[string]bool{}
 	for _, r := range receivers {
 		if !validAntlerID(r.ID) {
-			return fmt.Errorf("mxdial: invalid Antler receiver id")
+			return fmt.Errorf("mxdial: invalid Tusk receiver id")
 		}
 		if seen[r.ID] {
-			return fmt.Errorf("mxdial: duplicate Antler receiver id")
+			return fmt.Errorf("mxdial: duplicate Tusk receiver id")
 		}
 		seen[r.ID] = true
 		canonical, err := mxwire.ReceiverURL(r.SessionURL)
 		if err != nil || canonical != r.SessionURL {
-			return fmt.Errorf("mxdial: Antler receiver %q session url must be a canonical HTTPS origin", r.ID)
+			return fmt.Errorf("mxdial: Tusk receiver %q session url must be a canonical HTTPS origin", r.ID)
 		}
 		if err := validateAntlerOrigin(canonical); err != nil {
-			return fmt.Errorf("mxdial: Antler receiver %q: %w", r.ID, err)
+			return fmt.Errorf("mxdial: Tusk receiver %q: %w", r.ID, err)
 		}
 		host, err := mxwire.CanonicalDomain(r.SMTPHostname)
 		if err != nil || host != r.SMTPHostname {
-			return fmt.Errorf("mxdial: Antler receiver %q smtp hostname is invalid", r.ID)
+			return fmt.Errorf("mxdial: Tusk receiver %q smtp hostname is invalid", r.ID)
 		}
 		if r.MXPriority < 0 || r.MXPriority > 65535 {
-			return fmt.Errorf("mxdial: Antler receiver %q mx priority is out of range", r.ID)
+			return fmt.Errorf("mxdial: Tusk receiver %q mx priority is out of range", r.ID)
 		}
 	}
 	return nil
@@ -281,7 +281,7 @@ func (r *AntlerResolver) Receivers(ctx context.Context) (AntlerEndpointSet, erro
 		r.mu.Unlock()
 		embedded := EmbeddedAntlerReceivers()
 		if len(embedded) == 0 {
-			return AntlerEndpointSet{}, fmt.Errorf("mxdial: no Antler endpoints available: %w", err)
+			return AntlerEndpointSet{}, fmt.Errorf("mxdial: no Tusk endpoints available: %w", err)
 		}
 		return AntlerEndpointSet{Receivers: embedded, Source: AntlerSourceEmbedded, Err: err}, nil
 	}
@@ -320,14 +320,14 @@ func (r *AntlerResolver) fetch(ctx context.Context) ([]AntlerReceiver, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mxdial: Antler manifest fetch status %d", resp.StatusCode)
+		return nil, fmt.Errorf("mxdial: Tusk manifest fetch status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, antlerManifestMaxBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(body) > antlerManifestMaxBytes {
-		return nil, fmt.Errorf("mxdial: Antler manifest too large")
+		return nil, fmt.Errorf("mxdial: Tusk manifest too large")
 	}
 	return ParseAntlerManifest(body)
 }

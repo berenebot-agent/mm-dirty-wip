@@ -29,7 +29,7 @@ import (
 // domain: the dialer signs a challenge with Domain.PrivateKey and the receiver
 // verifies it against the MM1 TXT record published for the core domain.
 //
-// ContactEmail and SetupID are optional Antler MX registration metadata. They
+// ContactEmail and SetupID are optional Tusk MX registration metadata. They
 // are operational metadata only, never a credential: domain authority remains
 // the DNS-anchored proof. Custom receivers leave both empty.
 type Domain struct {
