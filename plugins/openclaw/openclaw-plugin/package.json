@@ -24,7 +24,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
-    "openclaw": "2026.9.7",
+    "openclaw": "2026.10.8",
     "typescript": "^5.9.2"
   },
   "peerDependencies": {
