@@ -19,25 +19,25 @@
     "User-Agent": [
       "Go-http-client/1.1"
     ],
-    "X-Mailmoose-Cursor": [
+    "X-Mail-Cursor": [
       "evt_1"
     ],
-    "X-Mailmoose-Delivery": [
+    "X-Mail-Delivery": [
       "whk_06gf5wgmacg23mm691p9x9c7vm:evt_1"
     ],
-    "X-Mailmoose-Envelope-From": [
+    "X-Mail-Envelope-From": [
       "Invoice%20%2B%20Co%20%3Cbilling%2Bap%40outside.test%3E"
     ],
-    "X-Mailmoose-Envelope-To": [
+    "X-Mail-Envelope-To": [
       "hermes%40example.com"
     ],
-    "X-Mailmoose-Event": [
+    "X-Mail-Event": [
       "message.received"
     ],
-    "X-Mailmoose-Message-Id": [
+    "X-Mail-Message-Id": [
       "msg_06gf5wgmab1q22qapt12q1f054"
     ]
   },
   "method": "POST",
-  "note": "synthetic MailMoose forward webhook request; do not use as live data"
+  "note": "synthetic Mammoth Mail forward webhook request; do not use as live data"
 }

@@ -115,7 +115,7 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	}
 	defer tx.Rollback()
 	cache := &MicrosoftDeltaCache{ProviderID: provider, Thread: thread, FolderID: folder, Input: in}
-	id, e := microsoftResolveRowTx(ctx, tx, account, inbox, cache)
+	id, retargeted, e := microsoftResolveRowTx(ctx, tx, account, inbox, cache)
 	if e != nil {
 		return RemoteMessage{}, e
 	}
@@ -136,7 +136,7 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	if !exists && (accountLimited || inboxLimited) && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
 		return RemoteMessage{}, ErrRemoteMetadataQuota
 	}
-	if e = upsertMicrosoftMessageTx(ctx, tx, account, inbox, id, cache); e != nil {
+	if e = upsertMicrosoftMessageTx(ctx, tx, account, inbox, id, retargeted, cache); e != nil {
 		return RemoteMessage{}, e
 	}
 	newBytes, _, e := remoteMessageBytesTx(ctx, tx, account, inbox, id)

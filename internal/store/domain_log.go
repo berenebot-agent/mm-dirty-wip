@@ -27,7 +27,7 @@ type DomainLogEntry struct {
 	// Source names where the row came from. For outbound mail it is the sending
 	// credential label (or "Control" for a consumed approval control message);
 	// for received and blocked inbound mail it is the receiving source, for
-	// example "Antler: antler1.hgolabs.com" or the webhook provider's name.
+	// example "Tusk: tusk1.hgolabs.com" or the webhook provider's name.
 	Source            string `json:"source,omitempty"`
 	SizeBytes         int64  `json:"size_bytes,omitempty"`
 	ProviderMessageID string `json:"provider_message_id,omitempty"`

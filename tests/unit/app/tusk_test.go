@@ -46,11 +46,11 @@ func (s *stubAntler) Receivers(context.Context) (mxdial.AntlerEndpointSet, error
 func antlerReceivers() []mxdial.AntlerReceiver {
 	return []mxdial.AntlerReceiver{
 		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
-		{ID: "antler-2", SessionURL: "https://antler2.example.test", SMTPHostname: "antler2.example.test", MXPriority: 20},
+		{ID: "antler-2", SessionURL: "https://tusk2.example.test", SMTPHostname: "tusk2.example.test", MXPriority: 20},
 	}
 }
 
-// TestDialMXAntlerSetupSnapshotsEndpoints proves an Antler MX setup validates
+// TestDialMXAntlerSetupSnapshotsEndpoints proves a Tusk MX setup validates
 // the contact email, resolves the live manifest, snapshots both receiver URLs
 // and hostnames, and assigns a stable setup id that a resave retains.
 func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
@@ -73,7 +73,7 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values["receiver_urls"] != "https://antler1.example.test,https://antler2.example.test" {
+	if values["receiver_urls"] != "https://antler1.example.test,https://tusk2.example.test" {
 		t.Fatalf("receiver urls not snapshotted: %v", values["receiver_urls"])
 	}
 	if values["contact_email"] != "ops@example.test" {
@@ -136,7 +136,7 @@ func TestDialMXAntlerRecordsAndLogsTheManifestSource(t *testing.T) {
 		t.Fatalf("antler save: %v", err)
 	}
 	msgs := sink.messages()
-	if len(msgs) != 1 || msgs[0] != "Antler receivers updated from GitHub" {
+	if len(msgs) != 1 || msgs[0] != "Tusk receivers updated from GitHub" {
 		t.Fatalf("setup log messages = %q, want the live-fetch line", msgs)
 	}
 	if got := sink.values("url"); len(got) != 1 || got[0] != mxdial.AntlerManifestURL {
@@ -163,7 +163,7 @@ func TestDialMXAntlerRecordsAndLogsTheManifestSource(t *testing.T) {
 		t.Fatalf("fallback save: %v", err)
 	}
 	msgs = sink2.messages()
-	if len(msgs) != 1 || msgs[0] != "could not fetch Antler receivers from GitHub; using built-in defaults" {
+	if len(msgs) != 1 || msgs[0] != "could not fetch Tusk receivers from GitHub; using built-in defaults" {
 		t.Fatalf("fallback log messages = %q, want the built-in-defaults line", msgs)
 	}
 	if got := sink2.values("error"); len(got) != 1 || !strings.Contains(got[0], "network down") {
@@ -275,7 +275,7 @@ func TestUpdateAntlerSettingsEditsInPlace(t *testing.T) {
 	}
 }
 
-// TestDialMXAntlerRejectsSuppliedReceiverURLs proves the Antler MX receiver set
+// TestDialMXAntlerRejectsSuppliedReceiverURLs proves the Tusk MX receiver set
 // is never caller-controlled: an explicit receiver_urls is a validation error
 // rather than a silent discard, and no config is written.
 func TestDialMXAntlerRejectsSuppliedReceiverURLs(t *testing.T) {
@@ -293,10 +293,10 @@ func TestDialMXAntlerRejectsSuppliedReceiverURLs(t *testing.T) {
 		t.Fatalf("err=%v, want ErrInvalidConfig", err)
 	}
 	if stub.calls != 0 {
-		t.Fatalf("rejected save consulted the Antler manifest %d times", stub.calls)
+		t.Fatalf("rejected save consulted the Tusk manifest %d times", stub.calls)
 	}
 	if _, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID); err == nil {
-		t.Fatal("rejected Antler save persisted a config")
+		t.Fatal("rejected Tusk save persisted a config")
 	}
 }
 
@@ -328,7 +328,7 @@ func TestDialMXAntlerManifestFailureIsInvalidConfig(t *testing.T) {
 }
 
 // TestDialMXLegacyCustomSaveStaysCustom proves the service default never
-// silently migrates a legacy receiver_urls-only save to Antler MX.
+// silently migrates a legacy receiver_urls-only save to Tusk MX.
 func TestDialMXLegacyCustomSaveStaysCustom(t *testing.T) {
 	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
@@ -350,18 +350,18 @@ func TestDialMXLegacyCustomSaveStaysCustom(t *testing.T) {
 		t.Fatalf("legacy save service = %v, want custom", values["service"])
 	}
 	if stub.calls != 0 {
-		t.Fatalf("legacy save consulted the Antler manifest %d times", stub.calls)
+		t.Fatalf("legacy save consulted the Tusk manifest %d times", stub.calls)
 	}
 	if _, ok := values["contact_email"]; ok {
 		t.Fatalf("custom save stored a contact email: %v", values["contact_email"])
 	}
 	if app.AntlerReceiversFromConfig(values) != nil {
-		t.Fatal("custom save has an Antler snapshot")
+		t.Fatal("custom save has a Tusk snapshot")
 	}
 }
 
 // TestDialMXSwitchFromCustomToAntler proves an explicit service switch replaces
-// the custom URLs with the resolved Antler snapshot.
+// the custom URLs with the resolved Tusk snapshot.
 func TestDialMXSwitchFromCustomToAntler(t *testing.T) {
 	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
@@ -380,7 +380,7 @@ func TestDialMXSwitchFromCustomToAntler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values["service"] != mxdial.ServiceAntler || values["receiver_urls"] != "https://antler1.example.test,https://antler2.example.test" {
-		t.Fatalf("switch did not adopt Antler endpoints: %v", values["receiver_urls"])
+	if values["service"] != mxdial.ServiceAntler || values["receiver_urls"] != "https://antler1.example.test,https://tusk2.example.test" {
+		t.Fatalf("switch did not adopt Tusk endpoints: %v", values["receiver_urls"])
 	}
 }

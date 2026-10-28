@@ -1,5 +1,7 @@
 name: ci
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -34,26 +36,28 @@ jobs:
         run: go vet -mod=readonly ./... 2>&1 | tee ci-logs/vet.log
       # Dead-code gate: U1000 reports unused unexported functions, types, fields
       # and methods (test files included). Kept in step with tests/run.sh --lint.
+      # Runs via mammothmail-go.sh so it builds inside the cached image with libsqlite3-dev.
       - name: lint
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... 2>&1 | tee ci-logs/lint.log
+        run: ./mammothmail-go.sh run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... 2>&1 | tee ci-logs/lint.log
       # Advisory only, never a gate: deadcode exits 0 even with findings, and its
       # RTA call graph treats exported methods of reflectively-reachable types as
       # live (false negatives) while flagging test-only seams (false positives).
       # The log is uploaded as an artifact for reading, not for failing the build.
+      # Runs via mammothmail-go.sh so it builds inside the cached image with libsqlite3-dev.
       - name: deadcode (advisory)
-        run: go run golang.org/x/tools/cmd/deadcode@v0.51.0 ./... 2>&1 | tee ci-logs/deadcode.log
+        run: ./mammothmail-go.sh run golang.org/x/tools/cmd/deadcode@v0.51.0 ./... 2>&1 | tee ci-logs/deadcode.log
       - name: build
         run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/... 2>&1 | tee ci-logs/build.log
-      # The Antler dialog interaction checks drive the real app.js closure against
+      # The Tusk dialog interaction checks drive the real app.js closure against
       # a DOM stand-in: timers, SSE listener attachment and footer payloads are
       # invisible to the Go suite. ubuntu-latest ships Node.
       - name: generated API reference
         run: |
-          go run ./cmd/docsgen > /tmp/mailmoose-API.md
-          diff -u docs/API.md /tmp/mailmoose-API.md
+          go run ./cmd/docsgen > /tmp/mail-api.md
+          diff -u docs/API.md /tmp/mail-api.md
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
       - name: OpenClaw build and tests
@@ -81,7 +85,7 @@ jobs:
       - name: smoke
         run: |
           set -o pipefail
-          MAILMOOSE_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
+          MAIL_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@v4

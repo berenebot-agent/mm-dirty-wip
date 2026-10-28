@@ -147,6 +147,53 @@ type RemoteFolderSync struct {
 	SpecialUse   []string
 	IndexedAt    time.Time
 	RemoteStatus string
+	// StableID is the provider's own identity for the folder, which survives a
+	// rename (a Gmail label id, a Graph folder id). It is stored as the row's
+	// path, so it lets a renamed folder keep its Mammoth Mail id instead of being
+	// re-minted under the new path. Empty for a provider with no entity id
+	// (IMAP), whose renames are carried by RenameRemoteFolderPaths instead.
+	StableID string
+}
+
+// RenameRemoteFolderPaths moves one remote-owned folder and its whole subtree
+// from oldPath to newPath in the cached index, keeping every row's id. It is the
+// rename hint for a provider with no stable folder identity (IMAP): without it
+// the following reconcile only sees unfamiliar paths and mints fresh ids for
+// the renamed folder and all of its children. A missing old path is not an
+// error — the discovery that follows reconciles whatever is really there.
+func (s *Store) RenameRemoteFolderPaths(ctx context.Context, accountID, inboxID, oldPath, newPath string) (int64, error) {
+	oldPath, newPath = strings.TrimSpace(oldPath), strings.TrimSpace(newPath)
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		return 0, nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,updated_at=? WHERE inbox_id=? AND origin='remote' AND path=?`,
+		newPath, now, inboxID, oldPath); err != nil {
+		return 0, err
+	}
+	suffixFrom := len(oldPath) + 1 // 1-based substr offset just past oldPath + '/'
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_folders SET
+			path=?||substr(path,?),
+			parent_path=CASE WHEN parent_path=? THEN ? ELSE ?||substr(parent_path,?) END,
+			updated_at=?
+		WHERE inbox_id=? AND origin='remote' AND path LIKE ? ESCAPE '\'`,
+		newPath, suffixFrom, oldPath, newPath, newPath, suffixFrom, now, inboxID, escapeLike(oldPath)+"/%")
+	if err != nil {
+		return 0, err
+	}
+	moved, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return moved, nil
 }
 
 // ReconcileRemoteFolders replaces the remote-owned folder subset of an inbox from
@@ -190,6 +237,19 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 		}
 		var existingID string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND path=?`, inboxID, path).Scan(&existingID)
+		renamed := false
+		if err == sql.ErrNoRows && f.StableID != "" && f.StableID != path {
+			// The provider renamed the folder: its stable identity is unchanged but
+			// it now sits at a new path. Reuse the row and move it, so the folder and
+			// every client holding its id keep the same Mammoth Mail id.
+			err = tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND origin='remote' AND path=?`, inboxID, f.StableID).Scan(&existingID)
+			renamed = err == nil
+			// The old path and the new one are both claimed once the row moves, so a
+			// prune pass of this same discovery must not treat the old path as gone.
+			if renamed {
+				keep[f.StableID] = true
+			}
+		}
 		switch {
 		case err == sql.ErrNoRows:
 			id := idgen.New("fld")
@@ -205,6 +265,13 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 			// operator locked explicitly (role_locked=1) is never overwritten by a
 			// name-inferred role, so an arbitrary remote folder stays mapped to
 			// its chosen role across reconciles.
+			if renamed {
+				if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,name=?,parent_path=?,role=CASE WHEN role_locked=1 THEN role ELSE ? END,selectable=?,origin='remote',remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE id=? AND origin='remote'`,
+					path, name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), f.UIDValidity, indexed, now, existingID); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET name=?,parent_path=?,role=CASE WHEN role_locked=1 THEN role ELSE ? END,selectable=?,origin='remote',remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE id=? AND origin='remote'`,
 				name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), f.UIDValidity, indexed, now, existingID); err != nil {
 				return nil, err
@@ -860,9 +927,50 @@ func remoteLastSegment(path string) string {
 	return path
 }
 
+// remoteFoldersOfRole returns the provider folder identifiers mirrored with a
+// role. An empty result means the inbox has no such folder in scope, so a read
+// scoped to it matches nothing — never the whole mailbox.
+func (s *Store) remoteFoldersOfRole(ctx context.Context, accountID, inboxID, role string) ([]string, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT path FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote' AND role=? AND path<>''`, accountID, inboxID, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var path string
+		if err = rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
+	}
+	return out, rows.Err()
+}
+
+// remoteFolderPredicate returns the predicate and arguments that select the
+// cached messages of one folder, provider-appropriately. An empty path selects
+// every folder. A folder the provider has not mirrored selects nothing, so an
+// unknown folder is never widened into the whole mailbox.
+func (s *Store) remoteFolderPredicate(ctx context.Context, accountID, inboxID, folderPath string) (string, []any) {
+	folderPath = strings.TrimSpace(folderPath)
+	if folderPath == "" {
+		return "", nil
+	}
+	switch {
+	case s.IsGoogle(ctx, accountID, inboxID):
+		return googleFolderScopeSQL(inboxID, "id", folderPath)
+	case s.IsMicrosoft(ctx, accountID, inboxID):
+		return `id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`, []any{inboxID, folderPath}
+	default:
+		return `folder_path=?`, []any{folderPath}
+	}
+}
+
 // RemoteMessageFilter selects cached remote messages within one inbox. An empty
 // FolderPath matches every indexed folder. Label, when set, intersects the result
-// with rows carrying that local label.
+// with rows carrying that local label. ExcludeTrash and ExcludeSpam remove rows
+// filed in that role's mirrored folder (a role with no folder removes nothing,
+// so a mailbox without a Spam folder still lists everything else).
 //
 // Before is the opaque keyset cursor: a remote message's metadata id. The row's
 // (received_at, id) tuple is the total ordering key (see the ORDER BY), so the
@@ -876,11 +984,13 @@ type RemoteMessageFilter struct {
 	// Labels filters to messages carrying every listed additive label (AND).
 	// It is a slice so a repeatable label filter cannot silently mean "the
 	// first label only", which is the bug a single-value field allowed.
-	Labels     []string
-	UnreadOnly bool
-	Flagged    bool
-	Limit      int
-	Before     string
+	Labels       []string
+	UnreadOnly   bool
+	Flagged      bool
+	ExcludeTrash bool
+	ExcludeSpam  bool
+	Limit        int
+	Before       string
 }
 
 // ListRemoteMessagesFiltered lists cached remote message metadata for an inbox,
@@ -894,24 +1004,46 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 		q += ` AND thread_key=?`
 		args = append(args, f.ThreadKey)
 	}
-	if strings.TrimSpace(f.FolderPath) != "" {
-		if s.IsGoogle(ctx, accountID, inboxID) {
-			clause, cargs := googleFolderScopeSQL(inboxID, "id", f.FolderPath)
-			q += ` AND ` + clause
-			args = append(args, cargs...)
-		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
-			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
-			args = append(args, inboxID, f.FolderPath)
-		} else {
-			q += ` AND folder_path=?`
-			args = append(args, f.FolderPath)
-		}
+	if clause, cargs := s.remoteFolderPredicate(ctx, accountID, inboxID, f.FolderPath); clause != "" {
+		q += ` AND ` + clause
+		args = append(args, cargs...)
 	}
 	if f.UnreadOnly {
 		q += ` AND is_read=0`
 	}
 	if f.Flagged {
 		q += ` AND is_flagged=1`
+	}
+	for _, ex := range []struct {
+		on   bool
+		role string
+	}{{f.ExcludeTrash, model.FolderRoleTrash}, {f.ExcludeSpam, model.FolderRoleSpam}} {
+		if !ex.on {
+			continue
+		}
+		// Trash and Spam are excluded from ordinary reads, matching the local
+		// store. A role folder that is not mirrored excludes nothing.
+		paths, perr := s.remoteFoldersOfRole(ctx, accountID, inboxID, ex.role)
+		if perr != nil {
+			return nil, perr
+		}
+		if len(paths) == 0 {
+			continue
+		}
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(paths)), ",")
+		switch {
+		case s.IsMicrosoft(ctx, accountID, inboxID):
+			q += ` AND id NOT IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id IN (` + marks + `))`
+			args = append(args, inboxID)
+		case s.IsGoogle(ctx, accountID, inboxID):
+			q += ` AND NOT EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id=? AND g.message_id=id AND g.label_id IN (` + marks + `))`
+			args = append(args, inboxID)
+		default:
+			q += ` AND folder_path NOT IN (` + marks + `)`
+		}
+		for _, p := range paths {
+			args = append(args, p)
+		}
 	}
 	if f.Before != "" {
 		// Resolve the cursor to its ordering tuple. An unknown cursor is
@@ -1230,18 +1362,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 	q := `SELECT thread_key, inb_id, COALESCE(subject,''), count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END), max(COALESCE(received_at,'')) FROM (
 		SELECT thread_key, inbox_id AS inb_id, subject, is_read, received_at FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key<>''`
 	args := []any{accountID, inboxID}
-	if strings.TrimSpace(folderPath) != "" {
-		if s.IsGoogle(ctx, accountID, inboxID) {
-			clause, cargs := googleFolderScopeSQL(inboxID, "id", folderPath)
-			q += ` AND ` + clause
-			args = append(args, cargs...)
-		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
-			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
-			args = append(args, inboxID, folderPath)
-		} else {
-			q += ` AND folder_path=?`
-			args = append(args, folderPath)
-		}
+	if clause, cargs := s.remoteFolderPredicate(ctx, accountID, inboxID, folderPath); clause != "" {
+		q += ` AND ` + clause
+		args = append(args, cargs...)
 	}
 	q += `) GROUP BY thread_key, inb_id`
 	if strings.TrimSpace(beforeKey) != "" {

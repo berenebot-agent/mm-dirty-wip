@@ -233,6 +233,11 @@ type fakeRemoteServer struct {
 	moveCalled     int
 	deleteCalled   int
 	closeCalled    int
+	// ensureCalls and headerFetchCalls count the two extra round-trips a move
+	// must not pay when the cached tree already knows the destination: another
+	// destination SELECT, and the post-move live header refresh.
+	ensureCalls      int
+	headerFetchCalls int
 	// moveNoUID makes MoveMessage behave like a server without UIDPLUS: the move
 	// succeeds but reports no COPYUID (DestinationUID 0), forcing the caller to
 	// re-resolve by Message-ID.
@@ -243,6 +248,9 @@ type fakeRemoteServer struct {
 	// fetchFail, keyed by UID, makes FetchRawMIME fail for that message so a test
 	// can exercise the fail-closed classification path.
 	fetchFail map[uint32]error
+	// beforeDelete runs inside a folder delete, after the provider applied it, so
+	// a test can simulate a request that died while the write landed.
+	beforeDelete func()
 }
 
 func newFakeRemoteServer() *fakeRemoteServer {
@@ -293,6 +301,7 @@ func roleForTestFolder(path string) string {
 func (f *fakeRemoteServer) EnsureFolderExists(_ context.Context, path string) (uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ensureCalls++
 	v, ok := f.folders[path]
 	if !ok {
 		return 0, model.NewMailboxError(model.ErrKindNotFound, "no folder", false, imap.ErrNotFound)
@@ -366,6 +375,7 @@ func containsUID(uids []uint32, uid uint32) bool {
 func (f *fakeRemoteServer) FetchHeader(_ context.Context, loc imap.Locator) (imap.MessageHeader, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.headerFetchCalls++
 	m := f.find(loc)
 	if m == nil {
 		return imap.MessageHeader{}, model.NewMailboxError(model.ErrKindNotFound, "no message", false, imap.ErrNotFound)
@@ -569,9 +579,20 @@ func (f *fakeRemoteServer) RenameFolder(_ context.Context, oldPath, newPath stri
 	v := f.folders[oldPath]
 	delete(f.folders, oldPath)
 	f.folders[newPath] = v
+	// A real server moves the folder's children with it, so the fake must too:
+	// otherwise a rename test cannot see the tree the server actually reports.
+	for child, validity := range f.folders {
+		if strings.HasPrefix(child, oldPath+"/") {
+			moved := newPath + strings.TrimPrefix(child, oldPath)
+			delete(f.folders, child)
+			f.folders[moved] = validity
+		}
+	}
 	for _, m := range f.messages {
 		if m.folder == oldPath {
 			m.folder = newPath
+		} else if strings.HasPrefix(m.folder, oldPath+"/") {
+			m.folder = newPath + strings.TrimPrefix(m.folder, oldPath)
 		}
 	}
 	return nil
@@ -579,16 +600,29 @@ func (f *fakeRemoteServer) RenameFolder(_ context.Context, oldPath, newPath stri
 
 func (f *fakeRemoteServer) DeleteFolder(_ context.Context, path string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	// A real server refuses to delete a folder that still has children; the fake
 	// mirrors that so the app's server-side error mapping is exercised.
 	for child := range f.folders {
 		if strings.HasPrefix(child, path+"/") {
+			f.mu.Unlock()
 			return model.NewMailboxError(model.ErrKindConflict, "folder has children", false, imap.ErrFolderNotEmpty)
 		}
 	}
 	delete(f.folders, path)
+	hook := f.beforeDelete
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
+}
+
+// deleteFolder removes a folder from the provider without going through the app,
+// so a test can present a folder that is gone remotely but still cached.
+func (f *fakeRemoteServer) deleteFolder(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.folders, path)
 }
 
 func (f *fakeRemoteServer) FindByMessageID(_ context.Context, folder, messageID string) (imap.Locator, error) {
@@ -1947,5 +1981,118 @@ func TestResolveRemoteReplyFromArrivalID(t *testing.T) {
 	}
 	if msg.RFCMessageID != "<incoming@remote>" || msg.From.Address != "sender@elsewhere.test" {
 		t.Fatalf("resolved message = %+v", msg)
+	}
+}
+
+// TestRemoteFolderRenameAndParentSurvivesChildCreate covers two folder lifecycle
+// bugs on a live IMAP server: a rename proposes a name that exists nowhere yet,
+// so the scope check must admit it (it used to refuse every rename), and a
+// create must not prune the folders it did not mention (creating Parent/Child
+// used to make Parent disappear).
+func TestRemoteFolderRenameAndParentSurvivesChildCreate(t *testing.T) {
+	t.Parallel()
+	_, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	folderID := func(path string) string {
+		t.Helper()
+		folders, err := rm.Service.Store.ListFolders(ctx, u.AccountID, box.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range folders {
+			if f.Path == path {
+				return f.ID
+			}
+		}
+		t.Fatalf("folder %q is not in the tree", path)
+		return ""
+	}
+
+	// A fresh top-level name is admitted (and so is a fresh nested one).
+	created, err := rm.CreateRemoteFolder(ctx, p, box.ID, "Projects", "")
+	if err != nil {
+		t.Fatalf("create top-level: %v", err)
+	}
+	if _, err := rm.CreateRemoteFolder(ctx, p, box.ID, "Projects/Child", ""); err != nil {
+		t.Fatalf("create nested: %v", err)
+	}
+	// The parent survives its child's creation, and both are addressable.
+	parentID := folderID("Projects")
+	childID := folderID("Projects/Child")
+	renamed, err := rm.RenameRemoteFolder(ctx, p, box.ID, parentID, "Projects Renamed")
+	if err != nil {
+		t.Fatalf("rename top-level: %v", err)
+	}
+	if renamed.Path != "Projects Renamed" {
+		t.Fatalf("renamed path = %q want Projects Renamed", renamed.Path)
+	}
+	if renamed.ID != parentID {
+		t.Fatalf("rename re-minted the folder id: %q -> %q", parentID, renamed.ID)
+	}
+	// The server moved the child with its parent, and the mirror followed it —
+	// keeping the child's id, so a client holding it does not get a 404.
+	if moved := folderID("Projects Renamed/Child"); moved != childID {
+		t.Fatalf("the child's id changed across the parent rename: %q -> %q", childID, moved)
+	}
+	// A nested folder renames in place, keeping its parent.
+	nested := folderID("Projects Renamed/Child")
+	child, err := rm.RenameRemoteFolder(ctx, p, box.ID, nested, "Renamed Child")
+	if err != nil {
+		t.Fatalf("rename nested: %v", err)
+	}
+	if child.Path != "Projects Renamed/Renamed Child" {
+		t.Fatalf("nested renamed path = %q", child.Path)
+	}
+	if child.ID != childID {
+		t.Fatalf("nested rename re-minted the folder id: %q -> %q", childID, child.ID)
+	}
+	if created.ID != parentID {
+		t.Fatalf("create returned %q, tree holds %q", created.ID, parentID)
+	}
+}
+
+// TestRemoteMoveDoesNotRedialForDestination proves a move that the cached tree
+// already covers costs one round-trip: the destination UIDVALIDITY comes from the
+// last sync rather than another SELECT, and the moved message is reported from
+// the row the move itself wrote rather than a second connection's header fetch.
+func TestRemoteMoveDoesNotRedialForDestination(t *testing.T) {
+	t.Parallel()
+	_, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	fake.addFolder("Archive", 100)
+	fake.moveNoUID = true
+	installFake(t, rm, fake)
+	src := fake.addMessage("INBOX", "From: a@b.test\r\nSubject: S\r\nMessage-ID: <one@remote>\r\n\r\nx", "<one@remote>", "S")
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := remoteIDForUID(t, rm, u, box, src.uid)
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	fake.mu.Lock()
+	fake.ensureCalls, fake.headerFetchCalls = 0, 0
+	fake.mu.Unlock()
+	view, err := rm.MoveRemoteMessage(ctx, p, box.ID, id, "Archive")
+	if err != nil || view.FolderPath != "Archive" {
+		t.Fatalf("move = %#v, %v", view, err)
+	}
+	if view.UIDValidity != 100 || view.UID == 0 {
+		t.Fatalf("moved locator = uid %d validity %d, want the destination locator", view.UID, view.UIDValidity)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.ensureCalls != 0 {
+		t.Fatalf("destination SELECTs = %d want 0 (the cached tree already knows it)", fake.ensureCalls)
+	}
+	if fake.headerFetchCalls != 0 {
+		t.Fatalf("header fetches = %d want 0 (the move wrote the row)", fake.headerFetchCalls)
 	}
 }

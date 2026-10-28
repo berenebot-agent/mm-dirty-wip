@@ -34,9 +34,10 @@ import (
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"name":        "MailMoose",
+		"name":        "Mammoth Mail",
 		"api_version": "v1",
 		"api_base":    "/v1",
+		"build":       s.Service.Config.Build,
 		"auth": map[string]string{
 			"scheme":     "bearer",
 			"header":     "Authorization",
@@ -829,6 +830,7 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			// last raw item) until limit+1 matches are collected or the source is
 			// exhausted — never stop at the first short filtered page, which would
 			// silently hide matching mail that simply followed non-matching rows.
+			limit = clampMergeLimit(limit)
 			out := make([]model.Message, 0, limit+1)
 			scanBefore := before
 			more := false
@@ -3043,7 +3045,7 @@ func (s *Server) apiOpenClawSetupCode(w http.ResponseWriter, r *http.Request) {
 		"code":       code,
 		"expires_in": 900,
 		"setup_url":  base + "/#" + code,
-		"command":    "openclaw channels add --channel mailmoose --code " + base + "/#" + code,
+		"command":    "openclaw channels add --channel mammothmail --code " + base + "/#" + code,
 	})
 }
 

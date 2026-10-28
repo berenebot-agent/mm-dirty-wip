@@ -9,7 +9,7 @@
 # APP_ENCRYPTION_KEY: it stages messages in memory and hands them to the core.
 #
 # Build from the repository root so the whole module is in context:
-#   docker build -f dialmx/Dockerfile -t mailmoose-remote-mx .
+#   docker build -f dialmx/Dockerfile -t mammothmail-remote-mx .
 #
 # See docs/REMOTE_MX.md for operator setup.
 
@@ -22,23 +22,23 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-remote-mx ./dialmx/cmd/receiver
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mammothmail-remote-mx ./dialmx/cmd/receiver
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 
 # The receiver holds no /data, no app key and needs no privilege; it stages
 # messages in memory. Run it as the same non-root uid the other images use.
-ARG MAILMOOSE_UID=65532
-ARG MAILMOOSE_GID=65532
-RUN groupadd -g ${MAILMOOSE_GID} mailmoose 2>/dev/null || true \
- && useradd -u ${MAILMOOSE_UID} -g ${MAILMOOSE_GID} -M -s /usr/sbin/nologin mailmoose
+ARG MAIL_UID=65532
+ARG MAIL_GID=65532
+RUN groupadd -g ${MAIL_GID} mammothmail 2>/dev/null || true \
+ && useradd -u ${MAIL_UID} -g ${MAIL_GID} -M -s /usr/sbin/nologin mammothmail
 
-COPY --from=build /out/mailmoose-remote-mx /usr/local/bin/mailmoose-remote-mx
-COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
-USER ${MAILMOOSE_UID}:${MAILMOOSE_GID}
+COPY --from=build /out/mammothmail-remote-mx /usr/local/bin/mammothmail-remote-mx
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mammothmail/
+USER ${MAIL_UID}:${MAIL_GID}
 # Inside the container the SMTP edge listens on 2525 and the session listener on
 # 8443; map host 25 and 443 onto them. Both are unprivileged, so the process
 # needs no capabilities even when the host ports are privileged.
 EXPOSE 2525 8443
-ENTRYPOINT ["/usr/local/bin/mailmoose-remote-mx"]
+ENTRYPOINT ["/usr/local/bin/mammothmail-remote-mx"]

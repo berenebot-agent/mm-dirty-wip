@@ -66,7 +66,7 @@ const (
 )
 
 // DNSVerdict is the combined published-record picture for one domain. Either
-// receiving check is nil when it does not apply (no Antler receivers → no MX
+// receiving check is nil when it does not apply (no Tusk receivers → no MX
 // check); DKIM is nil when the domain does not sign outbound mail.
 type DNSVerdict struct {
 	TXT  *DNSRecordView `json:"txt,omitempty"`
@@ -106,7 +106,7 @@ func equalStrings(a, b []string) bool {
 //
 // A domain's receiver set is redundancy, not an all-must-match set: the check is
 // "ok" as long as at least one expected hostname is published, so an operator who
-// points MX at a single Antler receiver is not dragged to a mismatch by the
+// points MX at a single Tusk receiver is not dragged to a mismatch by the
 // others. Matched lists which expected hostnames were found; Found is the
 // published set; Unexpected lists published hostnames that are not our receivers.
 // The state is "mismatch" only when MX records exist but none is one of ours,
@@ -163,19 +163,19 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 	return view
 }
 
-// CheckTXT returns the current check for the domain's _mailmoose-mx TXT record
+// CheckTXT returns the current check for the domain's _mail-proof TXT record
 // against the exact key the receiver will require. expectedValue is the copy-ready
 // record shown to the operator. The check is exact: exactly one MM1 record must be
 // published for keyID with a public key equal to want.
 //
 // The record is parsed by the same mxwire.ParseDomainTXT the receiver applies, so
-// the local check and the Antler receiver cannot disagree about whether a
+// the local check and the Tusk receiver cannot disagree about whether a
 // published record is valid: an extra field, a duplicate MM1 record or an
 // oversized record fails here exactly as it fails there. A divergent second
 // implementation is what let the dialog show a green "matching" record next to a
 // receiver refusing with "key unavailable".
 func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string, want []byte, expectedValue string) DNSRecordView {
-	name := "_mailmoose-mx." + domain
+	name := "_mail-proof." + domain
 	view := DNSRecordView{Kind: "txt", Name: name, Expected: expectedValue}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
@@ -203,7 +203,7 @@ func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string
 }
 
 // CheckDKIM returns the current check for a Direct MX sending domain's DKIM
-// public-key TXT record against the key MailMoose signs with. expectedValue is
+// public-key TXT record against the key Mammoth Mail signs with. expectedValue is
 // the copy-ready record shown to the operator. The check mirrors CheckMX's
 // shape: "ok" when a record is published and its p= value equals wantBase64,
 // "pending" when the name definitively carries no record yet, "mismatch" when a

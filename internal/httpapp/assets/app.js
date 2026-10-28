@@ -12,7 +12,7 @@
   var node = document.querySelector('[data-conn-status]');
   var noop = function () {};
   if (!node) {
-    window.mailmooseStatus = { connecting: noop, connected: noop, disconnected: noop, error: noop, busy: noop };
+    window.mammothmailStatus = { connecting: noop, connected: noop, disconnected: noop, error: noop, busy: noop };
     return;
   }
   var label = node.querySelector('.conn-label');
@@ -89,7 +89,7 @@
     render();
   }
 
-  window.mailmooseStatus = {
+  window.mammothmailStatus = {
     connecting: function () { conn = 'connecting'; render(); },
     connected: function () { conn = 'live'; render(); },
     disconnected: function () { conn = 'disconnected'; render(); },
@@ -249,7 +249,7 @@
     }
   }
 
-  window.mailmooseCopy = { text: copyText, wire: wire, announce: announce, select: select };
+  window.mammothmailCopy = { text: copyText, wire: wire, announce: announce, select: select };
 })();
 
 (function () {
@@ -258,7 +258,7 @@
   // delete-dialog copy controls inert. Values are read on click because the
   // delete dialogs populate their data-copy attributes when they open.
   document.querySelectorAll('[data-copy]').forEach(function (el) {
-    window.mailmooseCopy.wire(el, {
+    window.mammothmailCopy.wire(el, {
       text: function () { return el.getAttribute('data-copy') || ''; },
       select: function () {
         // The delete-dialog icon buttons have no text of their own; the nearby
@@ -272,7 +272,7 @@
       onSuccess: function () {
         el.classList.add('copied');
         window.setTimeout(function () { el.classList.remove('copied'); }, 1200);
-        window.mailmooseCopy.announce('Copied to clipboard', 'ok');
+        window.mammothmailCopy.announce('Copied to clipboard', 'ok');
       }
     });
   });
@@ -299,8 +299,8 @@
   }
 
   function wire(input, opts) {
-    if (!input || input._mailmooseCombo) {
-      return input && input._mailmooseCombo;
+    if (!input || input._mammothmailCombo) {
+      return input && input._mammothmailCombo;
     }
     opts = opts || {};
     var id = 'combo-' + (++uid);
@@ -449,7 +449,7 @@
       }
     };
     api.close = close;
-    input._mailmooseCombo = api;
+    input._mammothmailCombo = api;
     return api;
   }
 
@@ -460,7 +460,7 @@
     }
   });
 
-  window.mailmooseCombo = { wire: wire, close: closeAll };
+  window.mammothmailCombo = { wire: wire, close: closeAll };
 })();
 
 // The existing header status flag is also the durable action queue entry point.
@@ -903,7 +903,7 @@
     applyFilter();
     // The header spinner reads every status, so routine refreshes still show
     // there while staying out of the banner, rows and counts.
-    if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
+    if (window.mammothmailStatus) { window.mammothmailStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
     paint();
     notice.hidden = true;
     notice.removeAttribute('data-error');
@@ -917,7 +917,7 @@
     active = true;
     fetch('/ui/actions', {credentials:'same-origin'}).then(function (r) { if (!r.ok) { throw new Error('Queue unavailable'); } return r.json(); })
       .then(update).catch(function () {
-        if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', false); }
+        if (window.mammothmailStatus) { window.mammothmailStatus.busy('metadata', false); }
         notice.hidden = false;
         notice.setAttribute('data-error', '1');
         notice.textContent = 'Queue unavailable. Try again.';
@@ -983,9 +983,9 @@
     hide();
   });
   window.addEventListener('resize', function () { if (bubble.open) { place(); } });
-  window.mailmooseRefreshActions = refresh;
+  window.mammothmailRefreshActions = refresh;
   // Test-only seam: the harness needs to drive one poll with a fixed payload.
-  window.mailmooseActionUpdateForTest = update;
+  window.mammothmailActionUpdateForTest = update;
   window.setInterval(refresh, 10000);
   document.addEventListener('visibilitychange', refresh);
   refresh();
@@ -1599,7 +1599,7 @@
   });
 
   if (copyBtn) {
-    window.mailmooseCopy.wire(copyBtn, {
+    window.mammothmailCopy.wire(copyBtn, {
       text: function () { return resultSecret.textContent; },
       select: resultSecret
     });
@@ -1626,10 +1626,10 @@
     });
   }
 
-  // mailmooseShowKeyResult renders a one-time secret in the shared key dialog,
+  // mammothmailShowKeyResult renders a one-time secret in the shared key dialog,
   // matching the Add/Edit client flow. onDone, when supplied, runs when the
   // user dismisses the result (used by the Clients & Access tab).
-  window.mailmooseShowKeyResult = function (data, onDone) {
+  window.mammothmailShowKeyResult = function (data, onDone) {
     if (!data || typeof data !== 'object') {
       return;
     }
@@ -2113,7 +2113,7 @@
     form.appendChild(actions);
     // Wrap the input in the combobox only once it is in the tree, so wire() can
     // insert its dropdown alongside it.
-    groupCombo = window.mailmooseCombo.wire(groupInput, { options: function () { return groupNamesFor(groupEdit ? groupEdit.table : 'inboxes'); } });
+    groupCombo = window.mammothmailCombo.wire(groupInput, { options: function () { return groupNamesFor(groupEdit ? groupEdit.table : 'inboxes'); } });
     groupDialog.appendChild(form);
     document.body.appendChild(groupDialog);
     form.addEventListener('submit', function (event) {
@@ -2185,8 +2185,8 @@
   function setOriginalOrder(table, rows) {
     var counter = 0;
     rows.forEach(function (row) {
-      if (typeof row.__mailmooseOriginalOrder !== 'number') {
-        row.__mailmooseOriginalOrder = counter;
+      if (typeof row.__mammothmailOriginalOrder !== 'number') {
+        row.__mammothmailOriginalOrder = counter;
       }
       counter++;
     });
@@ -2234,7 +2234,7 @@
     var config = tables[table];
     if (!spec) {
       return rows.slice().sort(function (a, b) {
-        return a.__mailmooseOriginalOrder - b.__mailmooseOriginalOrder;
+        return a.__mammothmailOriginalOrder - b.__mammothmailOriginalOrder;
       });
     }
     return rows.slice().sort(function (a, b) {
@@ -2247,7 +2247,7 @@
         result = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
       }
       if (!result) {
-        result = a.__mailmooseOriginalOrder - b.__mailmooseOriginalOrder;
+        result = a.__mammothmailOriginalOrder - b.__mammothmailOriginalOrder;
       }
       return spec.direction === 'desc' ? -result : result;
     });
@@ -2527,7 +2527,7 @@
     }
   });
 
-  window.mailmooseDashboardGroups = { refresh: function () {
+  window.mammothmailDashboardGroups = { refresh: function () {
     if (preferencesReady) {
       refresh();
     }
@@ -3756,13 +3756,13 @@ function clearUrlParams(names) {
   // Approvals tab: the authoring mode selector, saved through the authoring
   // endpoint when the dialog is saved.
   var authoringMode = document.getElementById('inbox-authoring-mode');
-  var authDefaultMode = 'mailmoose_approval';
+  var authDefaultMode = 'local_approval';
   // The current inbox is standalone (remote) or not. A domain inbox is preset to
-  // MailMoose approval, so the mode selector is hidden rather than offered.
+  // Mammoth Mail approval, so the mode selector is hidden rather than offered.
   var authStandalone = false;
   function syncAuthoringControls() {
     if (!authStandalone) {
-      // Domain inbox: preset to MailMoose approval. Only the approver field
+      // Domain inbox: preset to Mammoth Mail approval. Only the approver field
       // remains; the selector is hidden.
       var approverInputD = document.getElementById('inbox-edit-approver-email');
       var approverNoteD = document.getElementById('inbox-approver-note');
@@ -3784,11 +3784,11 @@ function clearUrlParams(names) {
     }
     // Effective mode: the explicit selection, else the kind default.
     var effective = (authoringMode && authoringMode.value) ? authoringMode.value : authDefaultMode;
-    var approval = effective === 'mailmoose_approval';
+    var approval = effective === 'local_approval';
     var desc = document.getElementById('inbox-authoring-desc');
     if (desc) {
       desc.textContent = approval
-        ? 'MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).'
+        ? 'Mammoth Mail approval keeps the draft in Mammoth Mail for an in-app decision (and, if an approver is set, a tokenized email).'
         : 'When a client with Assistant permission requests to send, the draft will be placed in the connected mailbox\'s Drafts folder.';
     }
     var approverInput = document.getElementById('inbox-edit-approver-email');
@@ -3828,12 +3828,12 @@ function clearUrlParams(names) {
     }
     if (desc) {
       desc.textContent = authStandalone
-        ? 'How this inbox handles a request to send. MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email). Create draft places the draft in the connected mailbox\'s Drafts folder and never sends it.'
+        ? 'How this inbox handles a request to send. Mammoth Mail approval keeps the draft in Mammoth Mail for an in-app decision (and, if an approver is set, a tokenized email). Create draft places the draft in the connected mailbox\'s Drafts folder and never sends it.'
         : '';
     }
     if (controls) {
       // The mode selector exists only for a standalone inbox; a domain inbox is
-      // preset to MailMoose approval.
+      // preset to Mammoth Mail approval.
       controls.hidden = !authStandalone;
     }
     // The tab is "Approvals" for a standalone inbox; the approver field is
@@ -4032,8 +4032,8 @@ function clearUrlParams(names) {
     field.hidden = false;
     input.value = '';
     dashboardGroupNames = [];
-    if (!input._mailmooseCombo) {
-      window.mailmooseCombo.wire(input, { options: function () { return dashboardGroupNames; } });
+    if (!input._mammothmailCombo) {
+      window.mammothmailCombo.wire(input, { options: function () { return dashboardGroupNames; } });
     }
     fetch('/ui/dashboard/preferences', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { if (!r.ok) { throw new Error('preferences unavailable'); } return r.json(); })
@@ -4048,8 +4048,8 @@ function clearUrlParams(names) {
           seen[name] = true;
           return true;
         });
-        if (input._mailmooseCombo) {
-          input._mailmooseCombo.setOptions();
+        if (input._mammothmailCombo) {
+          input._mammothmailCombo.setOptions();
         }
       })
       .catch(function () {
@@ -4903,8 +4903,8 @@ function clearUrlParams(names) {
       }
       return res.json();
     }).then(function (data) {
-      if (typeof window.mailmooseShowKeyResult === 'function') {
-        window.mailmooseShowKeyResult(data, function () {
+      if (typeof window.mammothmailShowKeyResult === 'function') {
+        window.mammothmailShowKeyResult(data, function () {
           window.location.href = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
         });
       } else {
@@ -5495,7 +5495,7 @@ function bindInboxSettingsShell(dlg) {
       root.querySelector('[data-google-begin] button[type=submit], [data-google-begin] button:last-child').disabled = true;
     }
   }).catch(function (e) { status.textContent = e.message; });
-  window.mailmooseCopy.wire(root.querySelector('[data-google-copy]'), {
+  window.mammothmailCopy.wire(root.querySelector('[data-google-copy]'), {
     text: function () { return root.querySelector('[data-google-callback]').value; },
     select: function () { return root.querySelector('[data-google-callback]'); }
   });
@@ -5835,11 +5835,11 @@ function generateBearerSecret() {
     host.dataset.unread = '';
   }
   // load() renders the message body; the reconnect banner it may need is built
-  // by the shared mailmooseReconnectBanner helper.
+  // by the shared mammothmailReconnectBanner helper.
   function load() {
     if (active) { return; }
     active = true;
-    window.mailmooseStatus.busy('body', true);
+    window.mammothmailStatus.busy('body', true);
     host.replaceChildren();
     var status = document.createElement('div');
     status.className = 'load-status pending';
@@ -5931,7 +5931,7 @@ function generateBearerSecret() {
       // Retry that could only fail again.
       var conn = failure && failure.connection;
       if (conn && conn.state === 'disconnected') {
-        host.replaceChildren(window.mailmooseReconnectBanner(conn));
+        host.replaceChildren(window.mammothmailReconnectBanner(conn));
         return;
       }
       host.replaceChildren(status);
@@ -5946,7 +5946,7 @@ function generateBearerSecret() {
       status.appendChild(retry);
     }).finally(function () {
       window.clearTimeout(timeout);
-      window.mailmooseStatus.busy('body', false);
+      window.mammothmailStatus.busy('body', false);
       active = false;
     });
   }
@@ -5960,7 +5960,7 @@ function generateBearerSecret() {
     return;
   }
   var code = document.getElementById('cf-code');
-  window.mailmooseCopy.wire(btn, {
+  window.mammothmailCopy.wire(btn, {
     text: function () { return code ? code.textContent : ''; },
     select: code
   });
@@ -5973,7 +5973,7 @@ function generateBearerSecret() {
     return;
   }
   var val = document.getElementById('dkim-private-key');
-  window.mailmooseCopy.wire(btn, {
+  window.mammothmailCopy.wire(btn, {
     text: function () { return val ? val.textContent : ''; },
     select: val
   });
@@ -5985,12 +5985,12 @@ function generateBearerSecret() {
     return;
   }
   var url = document.getElementById('domain-credential-url');
-  window.mailmooseCopy.wire(btn, {
+  window.mammothmailCopy.wire(btn, {
     text: function () { return url ? url.textContent : ''; },
     select: url,
     onSuccess: function () {
       btn.classList.add('copied');
-      window.mailmooseCopy.announce('Webhook URL copied.');
+      window.mammothmailCopy.announce('Webhook URL copied.');
       window.setTimeout(function () { btn.classList.remove('copied'); }, 1500);
     }
   });
@@ -6000,7 +6000,7 @@ function generateBearerSecret() {
   // Copy-to-clipboard for a value the server rendered into an attribute, used by
   // the DKIM TXT record's Copy button on the sending dialog.
   document.querySelectorAll('[data-copy-value]').forEach(function (btn) {
-    window.mailmooseCopy.wire(btn, {
+    window.mammothmailCopy.wire(btn, {
       text: function () { return btn.getAttribute('data-copy-value') || ''; },
       select: function () { return btn.previousElementSibling; }
     });
@@ -6008,7 +6008,7 @@ function generateBearerSecret() {
 })();
 
 (function () {
-  // Live DKIM published-record light on the sending dialog, mirroring the Antler
+  // Live DKIM published-record light on the sending dialog, mirroring the Tusk
   // status poll: while the dialog is open, refresh the record dot so an operator
   // watching DNS propagate sees it turn green without closing and reopening. The
   // server reads the watcher's shared cached verdict, so a poll is cheap and
@@ -6075,12 +6075,12 @@ function generateBearerSecret() {
     // group so a copy never picks up another provider's URL.
     var scope = btn.closest('.provider-fields') || dlg;
     var url = scope.querySelector('.setup-webhook-url');
-    window.mailmooseCopy.wire(btn, {
+    window.mammothmailCopy.wire(btn, {
       text: function () { return url ? url.textContent : ''; },
       select: url,
       onSuccess: function () {
         btn.classList.add('copied');
-        window.mailmooseCopy.announce('Webhook URL copied.');
+        window.mammothmailCopy.announce('Webhook URL copied.');
         window.setTimeout(function () { btn.classList.remove('copied'); }, 1500);
       }
     });
@@ -6146,9 +6146,9 @@ function generateBearerSecret() {
 (function () {
   // syncDialMXService materialises or removes the editable Receiver URLs field
   // for a Dial MX provider group. The field is only valid for the custom
-  // service, so for Antler MX it is kept out of the DOM; switching the service
+  // service, so for Tusk MX it is kept out of the DOM; switching the service
   // select to custom injects the field from its inert <template>. The server
-  // independently rejects a supplied receiver_urls for Antler.
+  // independently rejects a supplied receiver_urls for Tusk.
   function syncDialMXService(group) {
     if (!group || group.getAttribute('data-provider') !== 'dialmx') {
       return;
@@ -6300,7 +6300,7 @@ function generateBearerSecret() {
     try { initialUnexpected = JSON.parse(form.dataset.antlerUnexpected || '[]') || []; } catch (err) { initialUnexpected = []; }
     var initialDNS = [];
     try { initialDNS = JSON.parse(form.dataset.antlerDns || '[]') || []; } catch (err) { initialDNS = []; }
-    // The recorded Antler manifest source is seeded too, so the status view says
+    // The recorded Tusk manifest source is seeded too, so the status view says
     // where its receiver set came from — the live GitHub manifest or the built-in
     // defaults — without waiting for the first fetch.
     var initialManifest = null;
@@ -6312,7 +6312,7 @@ function generateBearerSecret() {
     if (statusMode && danger) {
       // Keep key rotation and removing the receiving config; drop the
       // provider-specific Worker-secret regenerate, which is not part of an
-      // Antler MX setup.
+      // Tusk MX setup.
       Array.prototype.forEach.call(danger.children, function (child) {
         var button = child.querySelector('button');
         var remove = button && button.className.indexOf('danger') !== -1;
@@ -6328,21 +6328,21 @@ function generateBearerSecret() {
     wizard.innerHTML = '<p class="antler-progress" aria-live="polite"></p>' +
       '<section data-antler-step="0"><h3>Contact email</h3></section>' +
       '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div></section>' +
-      '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
+      '<section data-antler-step="2" hidden><h3>Tusk receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Receiver authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
       '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><p class="antler-manifest-note muted small" hidden></p></div>' +
       '<p class="antler-error error" role="alert" hidden></p>';
     // A plain-language intro shown on the first step only, mirroring the
-    // "Inbound: Antler MX" extract in docs/EMAIL_PROVIDERS.md: what the service
+    // "Inbound: Tusk MX" extract in docs/EMAIL_PROVIDERS.md: what the service
     // is, the mail-flow diagram, and the outbound-only connection, without the
     // setup steps the wizard already walks through.
     var intro = document.createElement('section');
     intro.className = 'antler-intro';
-    intro.innerHTML = '<p>Antler MX is a <b>free hosted SMTP receiver for your domain</b>. It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose your web interface to the internet.</p>' +
-      '<figure><img src="/assets/antler-mx-diagram.svg" alt="Public senders deliver to the hosted Antler relay; MailMoose connects to it outbound, so no inbound port forwarding is needed."></figure>' +
-      '<p>MailMoose makes an <b>outbound connection</b> to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to MailMoose over that connection. Antler is a receiving relay, not a hosted mailbox or an outgoing mail service.</p>' +
-      '<p class="muted small">Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.</p>';
+    intro.innerHTML = '<p>Tusk MX is a <b>free hosted SMTP receiver for your domain</b>. It is included as a receiving option in Mammoth Mail. You do not need to run another container, open inbound SMTP ports, or expose your web interface to the internet.</p>' +
+      '<figure><img src="/assets/tusk-mx-diagram.svg" alt="Public senders deliver to the hosted Tusk relay; Mammoth Mail connects to it outbound, so no inbound port forwarding is needed."></figure>' +
+      '<p>Mammoth Mail makes an <b>outbound connection</b> to the hosted Tusk receivers. Tusk accepts incoming SMTP and passes messages to Mammoth Mail over that connection. Tusk is a receiving relay, not a hosted mailbox or an outgoing mail service.</p>' +
+      '<p class="muted small">Tusk MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.</p>';
     group.appendChild(wizard);
     wizard.insertBefore(intro, wizard.querySelector('[data-antler-step="0"]'));
     function moveField(input, index) {
@@ -6467,7 +6467,7 @@ function generateBearerSecret() {
       if (isReady(status)) { return 'green'; }
       return ['connecting', 'deferred'].indexOf(status.state) !== -1 ? 'amber' : 'red';
     }
-    // receiverLabel renders the specific Antler reason next to the traffic light,
+    // receiverLabel renders the specific Tusk reason next to the traffic light,
     // not a generic word: the receiver's own verdict ("not in MX", "key
     // unavailable", "authentication failed") is the most precise thing we know
     // about that connector. The raw reason stays in the row's tooltip. The HTTP
@@ -6522,7 +6522,7 @@ function generateBearerSecret() {
     function copyField(text) {
       var copy = document.createElement('button');
       copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy';
-      window.mailmooseCopy.wire(copy, {
+      window.mammothmailCopy.wire(copy, {
         text: text,
         select: function () { return copy.previousElementSibling; }
       });
@@ -6572,7 +6572,7 @@ function generateBearerSecret() {
         ]));
       }
       if (needMX && (instructions.mx || []).length) {
-        var mxPrompt = 'An Antler receiver reports that its hostname is not in this domain\x27s MX records. Check these MX records:';
+        var mxPrompt = 'A Tusk receiver reports that its hostname is not in this domain\x27s MX records. Check these MX records:';
         var mxRecords = instructions.mx || [];
         if (mxRecords.length) { block.appendChild(remediationLine(mxPrompt, [])); }
         mxRecords.forEach(function (record, index) {
@@ -6585,7 +6585,7 @@ function generateBearerSecret() {
       return block;
     }
     // unexpectedMXBlock warns that the domain's MX records name servers which are
-    // not Antler receivers. Mail may still be delivered via a ready Antler
+    // not Tusk receivers. Mail may still be delivered via a ready Tusk
     // receiver, but routing is ambiguous, so the dashboard light is amber and this
     // block names the offending servers and suggests removing them. It is empty
     // when no extra records are published.
@@ -6595,7 +6595,7 @@ function generateBearerSecret() {
       if (!extra.length) { return block; }
       block.className = 'antler-dns-remediation antler-extra-mx';
       var p = document.createElement('p');
-      p.textContent = 'Additional MX servers exist for ' + domainName + '. Mail may not be delivered via Antler. Remove these records unless you intend them:';
+      p.textContent = 'Additional MX servers exist for ' + domainName + '. Mail may not be delivered via Tusk. Remove these records unless you intend them:';
       block.appendChild(p);
       extra.forEach(function (host) {
         var line = document.createElement('div');
@@ -6709,7 +6709,7 @@ function generateBearerSecret() {
       records.appendChild(unexpectedMXBlock({ unexpected_mx: unexpected || [] }, domainName));
       records.appendChild(remediationBlock(receivingDNS(statuses), instructions || {}, mxName));
     }
-    // mxRecordName is the name column for the Antler MX rows. A two-label name
+    // mxRecordName is the name column for the Tusk MX rows. A two-label name
     // is a zone apex and reads best as the provider's "@". A name with more
     // labels is a subdomain of some zone, so it must never be "@": that would
     // publish the MX on the parent zone and send mail to the wrong domain. Spell
@@ -6731,13 +6731,13 @@ function generateBearerSecret() {
       var manifestNote = wizard.querySelector('.antler-manifest-note');
       if (!manifest) { manifestNote.hidden = true; manifestNote.textContent = ''; return; }
       if (manifest.source === 'embedded') {
-        manifestNote.textContent = 'Could not fetch Antler receivers from GitHub — using built-in defaults';
+        manifestNote.textContent = 'Could not fetch Tusk receivers from GitHub — using built-in defaults';
       } else {
         var when = '';
         var at = manifest.at ? new Date(manifest.at) : null;
         // An unparsable timestamp still names the source; only the time is dropped.
         if (at && !isNaN(at.getTime())) { when = ' at ' + at.toLocaleTimeString(); }
-        manifestNote.textContent = 'Antler receivers updated from GitHub' + when;
+        manifestNote.textContent = 'Tusk receivers updated from GitHub' + when;
       }
       manifestNote.hidden = false;
     }
@@ -6841,7 +6841,7 @@ function generateBearerSecret() {
         var action = document.createElement('td');
         var copy = document.createElement('button');
         copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
-        window.mailmooseCopy.wire(copy, {
+        window.mammothmailCopy.wire(copy, {
           text: value,
           select: function () { return tr.querySelector('.antler-value'); }
         });
@@ -6892,8 +6892,8 @@ function generateBearerSecret() {
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
-      wizard.querySelector('.antler-progress').textContent = rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
-      wizard.querySelector('[data-antler-step="1"] h3').textContent = rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
+      wizard.querySelector('.antler-progress').textContent = rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Tusk MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Tusk MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('[data-antler-step="1"] h3').textContent = rotating ? 'Replace your authorization TXT record' : statusMode ? 'Tusk MX status' : 'Publish your DNS records';
       wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
       // The saved-status view replaces the separate receiver panel with a
       // per-receiver status table and an inline remediation block.
@@ -6901,7 +6901,7 @@ function generateBearerSecret() {
         panel.hidden = statusMode ? (index === 2 || index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
       });
       advancedLabel.hidden = statusMode;
-      // The intro belongs to the hosted Antler service and reads once, so it
+      // The intro belongs to the hosted Tusk service and reads once, so it
       // shows on the first step only — not in the saved status view, and not
       // when the operator has switched to custom receivers.
       intro.hidden = statusMode || custom || step !== 0;
@@ -6909,7 +6909,7 @@ function generateBearerSecret() {
         wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
         var contactDescription = wizard.querySelector('[data-antler-step="0"] p');
         if (contactDescription) { contactDescription.hidden = true; }
-        wizard.querySelector('[data-antler-step="1"] h3').textContent = 'Antler MX status';
+        wizard.querySelector('[data-antler-step="1"] h3').textContent = 'Tusk MX status';
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
       if (statusMode) { wizard.querySelector('[data-antler-step="1"] > p').hidden = true; }
@@ -7118,7 +7118,7 @@ function generateBearerSecret() {
       refresh();
     }
     function attachListeners() {
-      var shared = window.mailmooseEventsSource || null;
+      var shared = window.mammothmailEventsSource || null;
       if (!shared || shared === attachedTo) { return; }
       if (attachedTo) {
         attachedTo.removeEventListener('mx.health_changed', onPush);
@@ -7155,7 +7155,7 @@ function generateBearerSecret() {
     scheduleStatusPoll();
     // The dialog re-attaches to the shared stream whenever it is opened, in case
     // the dashboard reconnected while it was closed.
-    window.addEventListener('mailmoose:source', attachListeners);
+    window.addEventListener('mammothmail:source', attachListeners);
     attachListeners();
     // A status dialog the server marked to open draws its complete connector
     // table synchronously here, before the browser paints the open dialog, so it
@@ -7609,7 +7609,7 @@ function generateBearerSecret() {
         if (err.name === 'SecurityError' && rpID &&
             /relying party|rp id|rpid|registrable domain/i.test(message)) {
           message = 'Passkeys are configured for "' + rpID + '", but you are visiting "' + window.location.hostname +
-            '". Open MailMoose at its configured BASE_URL, or ask your administrator to correct BASE_URL to the UI URL and restart MailMoose. ' +
+            '". Open Mammoth Mail at its configured BASE_URL, or ask your administrator to correct BASE_URL to the UI URL and restart Mammoth Mail. ' +
             'Use DEDICATED_RECEIVER_URL for a separate inbound receiver URL.';
         }
         setStatus(statusEl, message, true);
@@ -7841,7 +7841,7 @@ function generateBearerSecret() {
 
   // setReceivingLabel writes the server's provider label into a dashboard Domain
   // row's Receiving cell. The row is server-rendered, so a receiving dialog that
-  // stores a provider while the row is on screen — the Antler MX wizard saves the
+  // stores a provider while the row is on screen — the Tusk MX wizard saves the
   // provider on its first step, so cancelling a setup part-way leaves the domain
   // configured — would otherwise keep drawing an amber "Add" beside a live light
   // until a manual reload. An empty label leaves the cell alone: a domain with no
@@ -7938,8 +7938,8 @@ function generateBearerSecret() {
           setTrafficLight(row, info ? info.light : '', info ? info.title : '', 'data-sending-light', 'data-sending-button');
         });
       }
-      if (window.mailmooseDashboardGroups) {
-        window.mailmooseDashboardGroups.refresh();
+      if (window.mammothmailDashboardGroups) {
+        window.mammothmailDashboardGroups.refresh();
       }
       return;
     }
@@ -7948,11 +7948,11 @@ function generateBearerSecret() {
       // rather than an in-list strip; the cached mail stays usable throughout.
       if (data.remote) {
         var syncing = !!data.remote_syncing;
-        window.mailmooseStatus.busy('sync', syncing);
-        window.mailmooseStatus.error(!syncing && data.remote_status === 'error' ? 'Mail sync failed. Retry by refreshing the remote connector.' : '');
+        window.mammothmailStatus.busy('sync', syncing);
+        window.mammothmailStatus.error(!syncing && data.remote_status === 'error' ? 'Mail sync failed. Retry by refreshing the remote connector.' : '');
       } else {
-        window.mailmooseStatus.busy('sync', false);
-        window.mailmooseStatus.error('');
+        window.mammothmailStatus.busy('sync', false);
+        window.mammothmailStatus.error('');
       }
       if (data.remote_syncing) {
         window.setTimeout(schedule, 1500);
@@ -8094,7 +8094,7 @@ function generateBearerSecret() {
     listInFlight = true;
     // The refresh itself is reported by the header status flag, which delays a
     // brief spinner so a fast reconcile never flashes one.
-    window.mailmooseStatus.busy('list', true);
+    window.mammothmailStatus.busy('list', true);
     var jobs = [];
     if (wantList) {
       jobs.push(fetchFragment(liveURL('list'), '[data-live-list]').then(swapFragment));
@@ -8129,7 +8129,7 @@ function generateBearerSecret() {
       var host = listHost();
       if (host) { host.insertBefore(feedback, host.firstChild); }
     }).then(function () {
-      window.mailmooseStatus.busy('list', false);
+      window.mammothmailStatus.busy('list', false);
       listInFlight = false;
     });
   }
@@ -8226,30 +8226,30 @@ function generateBearerSecret() {
     closedForHidden = false;
     if (wasClosed) {
       // Reopening after a deliberate hidden-tab close is not a drop.
-      window.mailmooseStatus.connecting();
+      window.mammothmailStatus.connecting();
     }
     try {
       source = new EventSource('/ui/events/stream');
     } catch (err) {
       source = null;
-      window.mailmooseStatus.disconnected();
+      window.mammothmailStatus.disconnected();
       return;
     }
-    // Share the one connection so other UI closures (the Antler MX status
+    // Share the one connection so other UI closures (the Tusk MX status
     // dialog) can listen for named events without opening a second stream. The
     // event tells them the source object was replaced, so a dialog open across a
     // reconnect re-attaches to the live stream instead of a dead one.
-    window.mailmooseEventsSource = source;
-    try { window.dispatchEvent(new Event('mailmoose:source')); } catch (err) { /* older browsers: dialogs also re-attach on open */ }
+    window.mammothmailEventsSource = source;
+    try { window.dispatchEvent(new Event('mammothmail:source')); } catch (err) { /* older browsers: dialogs also re-attach on open */ }
     source.onopen = function () {
       retryDelay = 1000;
-      window.mailmooseStatus.connected();
+      window.mammothmailStatus.connected();
       // A reconnect may have missed a light change, so re-ask for lights.
       wantLights = true;
       refresh();
     };
     source.onmessage = schedule;
-	  source.addEventListener('actions.changed', function () { schedule(); if (window.mailmooseRefreshActions) { window.mailmooseRefreshActions(); } });
+	  source.addEventListener('actions.changed', function () { schedule(); if (window.mammothmailRefreshActions) { window.mammothmailRefreshActions(); } });
     // Named message events (id/event/data) do not fire onmessage; listen for the
     // durable types the UI cares about, plus the transient receiver-health ping.
     ['message.received', 'message.sent', 'message.trashed', 'message.restored',
@@ -8282,7 +8282,7 @@ function generateBearerSecret() {
       if (closedForHidden || document.hidden) {
         return;
       }
-      window.mailmooseStatus.disconnected();
+      window.mammothmailStatus.disconnected();
       // Reconnect manually so we control backoff and catch up with a snapshot.
       var delay = retryDelay;
       retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
@@ -8298,7 +8298,7 @@ function generateBearerSecret() {
     if (source) {
       source.close();
       source = null;
-      window.mailmooseEventsSource = null;
+      window.mammothmailEventsSource = null;
     }
   }
 
@@ -8357,10 +8357,10 @@ function generateBearerSecret() {
   var watchdog;
   function loading(text) {
     if (hasFlag) {
-      window.mailmooseStatus.busy('nav', true);
+      window.mammothmailStatus.busy('nav', true);
       window.clearTimeout(watchdog);
       watchdog = window.setTimeout(function () {
-        window.mailmooseStatus.busy('nav', false);
+        window.mammothmailStatus.busy('nav', false);
       }, 60000);
       return;
     }
@@ -8397,7 +8397,7 @@ function generateBearerSecret() {
     window.clearTimeout(watchdog);
     // A page restored from the bfcache (browser Back) never navigated away, so
     // any pending navigation loading state is stale.
-    window.mailmooseStatus.busy('nav', false);
+    window.mammothmailStatus.busy('nav', false);
     if (notice) { notice.hidden = true; }
   });
 }());
@@ -8641,14 +8641,14 @@ function generateBearerSecret() {
   });
 })();
 
-// mailmooseReconnectBanner builds the per-inbox reconnect banner the server
+// mammothmailReconnectBanner builds the per-inbox reconnect banner the server
 // renders, from the connection state the /ui/actions poll reports. It is used by
 // the message reader (a failure the client only discovers after painting) and by
 // the sync strip (a verdict recorded while the page is already open), so both
 // surfaces show the same control. The controls keep the same hooks as the
 // server-rendered markup: the delegated handlers below open the One dialog or
 // start the provider's in-place reconnect.
-function mailmooseReconnectBanner(conn, inboxID) {
+function mammothmailReconnectBanner(conn, inboxID) {
   var banner = document.createElement('div');
   banner.className = 'banner danger';
   banner.setAttribute('role', 'alert');
@@ -8683,7 +8683,7 @@ function mailmooseReconnectBanner(conn, inboxID) {
   }
   return banner;
 }
-window.mailmooseReconnectBanner = mailmooseReconnectBanner;
+window.mammothmailReconnectBanner = mammothmailReconnectBanner;
 
 // syncReconnectBanner puts that banner at the top of the mailbox content when
 // the page did not already render one, so a connection the provider rejected
@@ -8691,7 +8691,7 @@ window.mailmooseReconnectBanner = mailmooseReconnectBanner;
 function syncReconnectBanner(conn, inboxID) {
   var content = document.querySelector('.mailcontent');
   if (!content || content.querySelector('[data-inbox-reconnect]')) { return; }
-  content.insertBefore(mailmooseReconnectBanner(conn, inboxID), content.firstChild);
+  content.insertBefore(mammothmailReconnectBanner(conn, inboxID), content.firstChild);
 }
 
 // The One import screen lets the operator tick whole rows. Any click in a row

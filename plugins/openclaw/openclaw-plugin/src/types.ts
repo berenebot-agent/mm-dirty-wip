@@ -1,13 +1,13 @@
 /**
- * Shared types for the MailMoose OpenClaw channel plugin.
+ * Shared types for the Mammoth Mail OpenClaw channel plugin.
  *
- * MailMoose is an email front end: this plugin dials OUT to the MailMoose
+ * Mammoth Mail is an email front end: this plugin dials OUT to the Mammoth Mail
  * relay with an authenticated WebSocket, receives inbound email events and
  * sends replies back over the same socket. No inbound port is required on the
  * OpenClaw host.
  */
 
-export type MailMooseChannelConfig = {
+export type MammothMailChannelConfig = {
   enabled?: boolean;
   name?: string;
   baseUrl?: string;
@@ -23,7 +23,7 @@ export type CoreConfig = {
   [key: string]: unknown;
 };
 
-export type ResolvedMailMooseAccount = {
+export type ResolvedMammothMailAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
@@ -37,8 +37,8 @@ export type ResolvedMailMooseAccount = {
   tokenStatus: "available" | "missing";
 };
 
-/** One inbound email event as delivered by MailMoose on the relay socket. */
-export type MailMooseInboundEvent = {
+/** One inbound email event as delivered by Mammoth Mail on the relay socket. */
+export type MammothMailInboundEvent = {
   text: string;
   message_type?: string;
   user_id: string;
@@ -63,7 +63,7 @@ export type RelayFrame = {
   type?: string;
   bufferId?: string;
   requestId?: string;
-  event?: MailMooseInboundEvent;
+  event?: MammothMailInboundEvent;
   action?: {
     op?: string;
     chat_id?: string;

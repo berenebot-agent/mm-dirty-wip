@@ -36,7 +36,7 @@ done
 
 # The single Go entrypoint: runs Go inside the pinned image with persistent
 # caches (and, since the suite is SQLite-heavy, an in-RAM scratch /tmp).
-go_wrapper="$repo_root/mailmoose-go.sh"
+go_wrapper="$repo_root/mammothmail-go.sh"
 if [ ! -x "$go_wrapper" ]; then
     echo "go-test-timings.sh: missing or non-executable $go_wrapper" >&2
     exit 2

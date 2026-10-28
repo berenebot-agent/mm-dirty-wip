@@ -5,9 +5,12 @@
 #
 #   docker compose -f docker-compose.advanced.yml up -d
 services:
-  mailmoose:
-    image: mailmoose:latest
-    build: .
+  mammothmail:
+    image: mammothmail:latest
+    build:
+      context: .
+      args:
+        MAIL_BUILD: ${MAIL_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # Direct MX is configured in each domain's Receiving settings and uses the
@@ -39,8 +42,8 @@ services:
     # to open, `cap_drop: [ALL]` removes the setuid/setgid/chown capabilities
     # the drop requires, and the embedded edge cannot be spawned under a
     # separate uid. With `user:`/`cap_drop:` set, choose Remote in Admin -> MX
-    # receiver and run the separate mailmoose-remote-mx container; Included is
+    # receiver and run the separate mammothmail-remote-mx container; Included is
     # unavailable in a strictly non-root core.
     #
     #   cap_drop: [ALL]
-    #   user: "${MAILMOOSE_RUN_UID:-65532}:${MAILMOOSE_RUN_GID:-65532}"
+    #   user: "${MAIL_RUN_UID:-65532}:${MAIL_RUN_GID:-65532}"

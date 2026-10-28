@@ -19,7 +19,7 @@ func isTerminalFD(fd int) bool {
 
 // readSecretLine reads one line from a terminal with echo disabled, restoring
 // the previous terminal state before returning. It is intentionally limited to
-// Linux, the only platform MailMoose ships on; other builds use
+// Linux, the only platform Mammoth Mail ships on; other builds use
 // --password-file only.
 func readSecretLine(f *os.File) (string, error) {
 	fd := int(f.Fd())

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -27,6 +28,40 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
+// buildVersion is stamped at build time with -ldflags. When it is empty (a plain
+// `go build`), the build identity falls back to the VCS revision, then to the
+// binary's own build time, so /healthz always names something an operator can
+// compare with the commit they deployed.
+var buildVersion = ""
+
+// buildIdentity resolves the running build's identity.
+func buildIdentity(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if buildVersion != "" {
+		return buildVersion
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		revision := ""
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+			case "vcs.modified":
+				if s.Value == "true" && revision != "" {
+					revision += "-dirty"
+				}
+			}
+		}
+		if revision != "" {
+			return revision
+		}
+		return info.Main.Version
+	}
+	return "unknown"
+}
+
 func main() {
 	// Operator commands run in the same binary but before any server setup, so
 	// they do not require a full application configuration (or an encryption
@@ -41,7 +76,8 @@ func main() {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
-	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir)
+	cfg.Build = buildIdentity(cfg.Build)
+	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir, "build", cfg.Build)
 
 	// Install ordered resolver failover before any network client or goroutine
 	// starts, so outbound provider HTTP, SMTP, direct MX, SPF/DKIM/DMARC and
@@ -136,7 +172,7 @@ func main() {
 	dialManager := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS, AllowPrivateDestinations: !cfg.RequirePublicOutbound()})
 	svc.DialMX = dialManager
 	svc.InstallDialMXStatusObserver()
-	// Antler MX endpoints are resolved live from the repository manifest at
+	// Tusk MX endpoints are resolved live from the repository manifest at
 	// setup-save time, cached, and fall back to the embedded copy. The snapshot
 	// is stored per domain, so existing setups never move.
 	svc.AntlerEndpoints = mxdial.DefaultAntlerResolver()
@@ -339,7 +375,7 @@ func ensureSystemAdmin(svc *app.Service, log *slog.Logger) {
 		os.Exit(1)
 	}
 	if !has {
-		log.Info("MailMoose has not been configured; complete the first-run setup page, or set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
+		log.Info("Mammoth Mail has not been configured; complete the first-run setup page, or set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
 	}
 }
 
@@ -362,7 +398,7 @@ func edgeExit(edge *launcher.Edge) <-chan struct{} {
 func startStandbyEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
 	if os.Getuid() != 0 {
 		return nil, fmt.Errorf("the container must start as root so the embedded edge can run under a separate uid; " +
-			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or use remote mode with the mailmoose-remote-mx container (see README.md)")
+			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or use remote mode with the mammothmail-remote-mx container (see README.md)")
 	}
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)

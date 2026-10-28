@@ -21,7 +21,7 @@ API keys can have **Read**, **Assistant**, or **Owner** access to each inbox. Re
 
 An Assistant's request to send depends on the inbox's authoring mode:
 
-- **MailMoose approval:** The draft waits for approval in MailMoose or by email. This is the mode for domain inboxes.
+- **Mammoth Mail approval:** The draft waits for approval in Mammoth Mail or by email. This is the mode for domain inboxes.
 - **Remote draft:** The draft is placed in the connected mailbox's Drafts folder for you to review and send. This is the default for standalone inboxes. No approval email is sent.
 
 An inbox sender allow list reduces who can reach an agent, but is not proof of sender identity. Email sender addresses can be spoofed. Treat incoming email as untrusted input.
@@ -41,7 +41,7 @@ Authorization: Bearer mmm_...
 An agent can discover its permissions and the available operations from:
 
 ```text
-/.well-known/mailmoose
+/.well-known/mail-api
 /agent
 /v1/bootstrap
 /openapi.json
@@ -67,7 +67,7 @@ Read `/v1/inboxes/{id}` for the mailbox `capabilities`: `folders`, `move`,
 `create_folders`, `rename_folders`, `delete_folders`, `labels`,
 `create_labels`, `rename_labels` and `delete_labels`. They say what the
 mailbox supports; do not infer it from the inbox type. A message's location
-is its `folder_id` (one MailMoose folder id, or `null`) and its labels are
+is its `folder_id` (one Mammoth Mail folder id, or `null`) and its labels are
 the additive `label_ids` (`tag:Name`, empty for IMAP) — a folder is never a
 label. `/v1/inboxes/{id}/label-catalog` lists the labels themselves and
 repeats the label half of the capabilities. The
@@ -78,7 +78,7 @@ library, while Bash needs `curl` and `jq`.
 
 ## Hermes Relay
 
-Hermes connects *out* to MailMoose over a WebSocket. No inbound port is required on the Hermes host. Unacknowledged messages are replayed when it reconnects.
+Hermes connects *out* to Mammoth Mail over a WebSocket. No inbound port is required on the Hermes host. Unacknowledged messages are replayed when it reconnects.
 
 1. **Copy the generated block** into your gateway's `.env` — usually `~/.hermes/.env`. Replace any existing `GATEWAY_RELAY_*` lines; only one relay connection can own a gateway.
 
@@ -135,15 +135,15 @@ The OpenClaw channel plugin is included in this repository but is not yet publis
 cd plugins/openclaw/openclaw-plugin
 npm ci && npm run build
 npm pack --pack-destination /tmp
-openclaw plugins install npm-pack:/tmp/mailmoose-openclaw-0.1.0.tgz --accept-capabilities
+openclaw plugins install npm-pack:/tmp/mammothmail-openclaw-0.1.0.tgz --accept-capabilities
 ```
 
 The plugin requires Node 24.16 or later in the supported 24.x or 26.x ranges. If installing from a local directory instead of a package, OpenClaw also requires `--force`.
 
-In MailMoose, choose **Add Connector → OpenClaw**, then **One-time code**. Run the generated command on the OpenClaw host:
+In Mammoth Mail, choose **Add Connector → OpenClaw**, then **One-time code**. Run the generated command on the OpenClaw host:
 
 ```bash
-openclaw channels add --channel mailmoose --code https://mail.example.com/#<one-time-code>
+openclaw channels add --channel mammothmail --code https://mail.example.com/#<one-time-code>
 ```
 
 The plugin must be installed first. The code is single-use and expires after 15 minutes. The setup screen also offers a manual configuration block.
@@ -174,13 +174,15 @@ Choose the payload when creating the connector:
 - **Notify:** A small JSON event with the inbox, message reference, and cursor. Fetch content separately through the API.
 - **Forward:** The original MIME message as `message/rfc822`. For standalone mailboxes, the content is fetched live from the provider.
 
-Each delivery carries `X-MailMoose-Event`, `X-MailMoose-Delivery`, and `X-MailMoose-Cursor`. Forward deliveries also include the original transport envelope addresses as percent-encoded `X-MailMoose-Envelope-From` and `X-MailMoose-Envelope-To` headers. The envelope sender is relay-supplied, not proof of identity.
+Each delivery carries `X-Mail-Event`, `X-Mail-Delivery`, and `X-Mail-Cursor`. Forward deliveries also include the original transport envelope addresses as percent-encoded `X-Mail-Envelope-From` and `X-Mail-Envelope-To` headers. The envelope sender is relay-supplied, not proof of identity.
 
-Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-MailMoose-Signature`. Verify it at your endpoint.
+Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-Mail-Signature`. Verify it at your endpoint.
+
+During the transition every webhook header is also sent under its pre-rename `X-MailMoose-*` name (for example `X-MailMoose-Signature`) with the same value. Move to the `X-Mail-*` names; the old names will be removed in a later release, announced in the CHANGELOG.
 
 ### Verify the signature
 
-The signing key is the connector secret itself, used as UTF-8 bytes. It looks like base64url but is not encoded: do not base64-decode it. MailMoose signs the Unix timestamp, a literal `.`, then the exact request body it sends:
+The signing key is the connector secret itself, used as UTF-8 bytes. It looks like base64url but is not encoded: do not base64-decode it. Mammoth Mail signs the Unix timestamp, a literal `.`, then the exact request body it sends:
 
 ```text
 v1 = hex(HMAC-SHA256(secret, t + "." + body))
@@ -223,12 +225,12 @@ Verify before parsing anything, because the signature covers the raw bytes, not 
 
 ```python
 # Notify: body is JSON.
-if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+if not verify(secret, request.headers.get("X-Mail-Signature", ""), request.body):
     return 401
 event = json.loads(request.body)
 
 # Forward: body is the original MIME message (message/rfc822).
-if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+if not verify(secret, request.headers.get("X-Mail-Signature", ""), request.body):
     return 401
 ```
 
@@ -238,12 +240,12 @@ A receiver that rejects a timestamp older than its tolerance also rejects replay
 
 Deliveries are strictly ordered per connector. The oldest undelivered event is attempted first, and while it waits for a retry, later events for that connector wait behind it. It stops blocking only when it is delivered with a 2xx, terminally failed once the retry window is exhausted, or skipped because the message is Spam, internal, or deleted. Other connectors are not blocked, including another webhook on the same inbox.
 
-A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-MailMoose-Delivery`**, because a retry repeats the same event and delivery ID.
+A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-Mail-Delivery`**, because a retry repeats the same event and delivery ID.
 
-For exact header encoding and the request contract, see the shared [contract fixture](../tests/fixtures/mailmoose-webhook-contract.json) and [API.md](API.md).
+For exact header encoding and the request contract, see the shared [contract fixture](../tests/fixtures/mammothmail-webhook-contract.json) and [API.md](API.md).
 
 ## Troubleshooting
 
 - **No relay events:** Check the connector status, role, and delivery log. An HTML-only email may arrive with a placeholder; fetch the body through the API.
-- **OpenClaw reports an unknown channel:** Install the MailMoose plugin before running the setup command.
+- **OpenClaw reports an unknown channel:** Install the Mammoth Mail plugin before running the setup command.
 - **Webhook not firing:** Check that the destination is HTTPS, that the inbox has deliverable mail, and that the delivery log shows successful attempts.

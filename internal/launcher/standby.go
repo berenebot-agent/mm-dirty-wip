@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -32,6 +33,12 @@ func StartStandby(ctx context.Context, spec Spec, log *slog.Logger) (*Edge, erro
 	}
 	if os.Getuid() != 0 {
 		return nil, errors.New("launcher: must be root to start the embedded edge")
+	}
+	// uid 0 (root) is a valid credential; only reject negative values and the
+	// range uint32(spec.UID) would wrap. Config validation keeps MX_UID/MX_GID
+	// strictly positive, so deployed edges never run as root via a Spec.
+	if spec.UID < 0 || spec.UID > math.MaxInt32 || spec.GID < 0 || spec.GID > math.MaxInt32 {
+		return nil, fmt.Errorf("launcher: edge uid/gid must fit a 32-bit uid, got %d:%d", spec.UID, spec.GID)
 	}
 	// Parent writes commands on cmdW, child reads cmdR (fd 3). Child writes
 	// replies on repW (fd 4), parent reads repR.
@@ -129,8 +136,8 @@ func StandbyEnv(cmdFD, replyFD int) []string {
 	if lvl := strings.TrimSpace(os.Getenv(dialmx.EnvLogLevel)); lvl != "" {
 		env = append(env, dialmx.EnvLogLevel+"="+lvl)
 	}
-	if servers := strings.TrimSpace(os.Getenv("MAILMOOSE_DNS_FALLBACK_SERVERS")); servers != "" {
-		env = append(env, "MAILMOOSE_DNS_FALLBACK_SERVERS="+servers)
+	if servers := strings.TrimSpace(os.Getenv("MAIL_DNS_FALLBACK_SERVERS")); servers != "" {
+		env = append(env, "MAIL_DNS_FALLBACK_SERVERS="+servers)
 	}
 	return env
 }

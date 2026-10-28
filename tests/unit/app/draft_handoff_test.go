@@ -170,7 +170,7 @@ func standaloneDraft(t *testing.T, svc *app.Service, accountID string, box model
 // TestRequestSendStandaloneDefaultsToRemoteDraft proves a standalone inbox's
 // default authoring mode is a one-way remote handoff: RequestSend freezes the
 // draft, creates a handling record, and never creates a
-// MailMoose approval request.
+// Mammoth Mail approval request.
 func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
 	t.Parallel()
 	svc, u, _, _ := testService(t)
@@ -186,7 +186,7 @@ func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
 	if got.Status != model.DraftStatusPendingApproval {
 		t.Fatalf("draft not frozen: %q", got.Status)
 	}
-	// No MailMoose approval request was created.
+	// No Mammoth Mail approval request was created.
 	if srs, err := svc.Store.ListSendRequests(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, false, 10); err != nil || len(srs) != 0 {
 		t.Fatalf("standalone handoff created an approval request: %+v err=%v", srs, err)
 	}
@@ -492,7 +492,7 @@ func TestRemoteDraftRequestRequiresCanAssist(t *testing.T) {
 }
 
 // TestRemoteDraftModeSnapshotImmutable proves the mode is snapshotted per request:
-// flipping the inbox setting to MailMooseApproval after a handoff is created does
+// flipping the inbox setting to LocalApproval after a handoff is created does
 // not convert the in-flight handoff.
 func TestRemoteDraftModeSnapshotImmutable(t *testing.T) {
 	t.Parallel()
@@ -505,8 +505,8 @@ func TestRemoteDraftModeSnapshotImmutable(t *testing.T) {
 	if _, err := svc.RequestSend(ctx, asst, d.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	// Flip the inbox to MailMooseApproval.
-	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	// Flip the inbox to LocalApproval.
+	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	// The in-flight request is still a handoff with mode remote_draft and is not
@@ -520,11 +520,11 @@ func TestRemoteDraftModeSnapshotImmutable(t *testing.T) {
 	}
 }
 
-// TestRemoteDraftModeMailMooseOptIn proves an operator can opt a standalone inbox
-// back into the MailMoose approval workflow, which then creates a real send
+// TestRemoteDraftModeMammothMailOptIn proves an operator can opt a standalone inbox
+// back into the Mammoth Mail approval workflow, which then creates a real send
 // request with a queued notification even though the inbox has no domain provider
 // (the notification is queued and held, not failed).
-func TestRemoteDraftModeMailMooseOptIn(t *testing.T) {
+func TestRemoteDraftModeMammothMailOptIn(t *testing.T) {
 	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
@@ -535,7 +535,7 @@ func TestRemoteDraftModeMailMooseOptIn(t *testing.T) {
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	d := standaloneDraft(t, svc, u.AccountID, box)
@@ -574,7 +574,7 @@ func TestHandleRemoteApprovalControlMatchesFromWithoutEnvelope(t *testing.T) {
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	d := standaloneDraft(t, svc, u.AccountID, box)
@@ -611,7 +611,7 @@ func TestHandleRemoteApprovalControlRejectsMismatchedFrom(t *testing.T) {
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	d := standaloneDraft(t, svc, u.AccountID, box)
@@ -646,7 +646,7 @@ func TestHandleRemoteApprovalControlExcludesHandoffHeader(t *testing.T) {
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, own, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	d := standaloneDraft(t, svc, u.AccountID, box)
@@ -661,6 +661,11 @@ func TestHandleRemoteApprovalControlExcludesHandoffHeader(t *testing.T) {
 	raw := []byte(model.HandoffHeader + ": hnd_x\r\nFrom: Ben <" + approverAddress + ">\r\nSubject: [GH-APPROVE:" + token + "]\r\n\r\nbody")
 	if err := svc.HandleRemoteApprovalControl(ctx, box, parsed, raw); !errors.Is(err, transport.ErrInboundIgnored) {
 		t.Fatalf("handoff-header control err=%v", err)
+	}
+	// A draft appended before the rename keeps the old spelling.
+	legacy := []byte(model.LegacyHandoffHeader + ": hnd_x\r\nFrom: Ben <" + approverAddress + ">\r\nSubject: [GH-APPROVE:" + token + "]\r\n\r\nbody")
+	if err := svc.HandleRemoteApprovalControl(ctx, box, parsed, legacy); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("legacy handoff-header control err=%v", err)
 	}
 	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, d.ID)
 	if err != nil || sr.Status != model.SendRequestPending {

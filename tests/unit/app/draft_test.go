@@ -48,3 +48,33 @@ func TestSendDraftConsumesAndAttaches(t *testing.T) {
 		t.Fatalf("draft attachment file not removed: %v", err)
 	}
 }
+
+// TestSendDraftReplayRejectsForwardSource covers the one mismatched retry the
+// replay fingerprint can catch: a consumed draft retried with the same key but
+// naming a forward source must conflict, not report the earlier message sent
+// while the new draft it was created from lingers unconsumed.
+func TestSendDraftReplayRejectsForwardSource(t *testing.T) {
+	t.Parallel()
+	svc, u, _, box := testService(t)
+	ctx := context.Background()
+	admin := model.Principal{AccountID: u.AccountID, Admin: true}
+	draft, err := svc.Store.CreateDraft(ctx, admin, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := app.SendInput{InboxID: box.ID, To: draft.To, Subject: draft.Subject, Text: draft.Text}
+	if _, err = svc.SendDraft(ctx, admin, draft.ID, in, "draft-replay-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	forward := in
+	forward.ForwardOfMessageID = "msg_somewhere_else"
+	if _, err = svc.SendDraft(ctx, admin, draft.ID, forward, "draft-replay-key"); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("mismatched retry err=%v, want conflict", err)
+	}
+	// The identical retry still replays, so a lost response is not turned into an
+	// error.
+	if res, rerr := svc.SendDraft(ctx, admin, draft.ID, in, "draft-replay-key"); rerr != nil || res.Message.ID == "" {
+		t.Fatalf("identical retry = %+v, %v", res, rerr)
+	}
+}

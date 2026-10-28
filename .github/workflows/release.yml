@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mammothmail
 
 jobs:
   gate:
@@ -42,7 +42,7 @@ jobs:
         run: go test -mod=readonly -race -count=1 -timeout=60s ./...
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: plugins/openclaw/openclaw-plugin/package-lock.json
       - name: OpenClaw build and tests
@@ -141,6 +141,6 @@ jobs:
             echo "GitHub Release already exists; skipping."
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "MailMoose $GITHUB_REF_NAME" \
+              --title "Mammoth Mail $GITHUB_REF_NAME" \
               --generate-notes
           fi

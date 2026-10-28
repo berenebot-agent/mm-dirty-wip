@@ -466,7 +466,7 @@ func fixture(from, to, subject string, attachment []byte) ([]byte, string, error
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, "", fmt.Errorf("could not generate fixture ID")
 	}
-	id := "<mailmoose-one-probe-" + hex.EncodeToString(nonce[:]) + "@example.invalid>"
+	id := "<mammothmail-one-probe-" + hex.EncodeToString(nonce[:]) + "@example.invalid>"
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 	fmt.Fprintf(&b, "From: %s\r\nTo: %s\r\nSubject: %s\r\nMessage-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=%q\r\n\r\n", from, to, subject, id, w.Boundary())
@@ -474,7 +474,7 @@ func fixture(from, to, subject string, attachment []byte) ([]byte, string, error
 	if err != nil {
 		return nil, "", err
 	}
-	_, _ = io.WriteString(body, "MailMoose One compatibility probe. Disposable test data only.\r\n")
+	_, _ = io.WriteString(body, "Mammoth Mail One compatibility probe. Disposable test data only.\r\n")
 	if len(attachment) > 0 {
 		a, err := w.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/octet-stream"}, "Content-Disposition": {`attachment; filename="one-probe.bin"`}, "Content-Transfer-Encoding": {"base64"}})
 		if err != nil {
@@ -499,7 +499,7 @@ func envelope(raw []byte) any {
 
 func (p *probe) draftGate(ctx context.Context, email string) (err error) {
 	attachment := bytes.Repeat([]byte("disposable-one-probe-fixture\n"), 3000)
-	raw, _, err := fixture(email, email, "MailMoose One compatibility probe — disposable draft", attachment)
+	raw, _, err := fixture(email, email, "Mammoth Mail One compatibility probe — disposable draft", attachment)
 	if err != nil {
 		return err
 	}
@@ -564,7 +564,7 @@ func (p *probe) draftGate(ctx context.Context, email string) (err error) {
 	if e != nil || !bytes.Equal(decoded, attachment) || att.Size != len(attachment) {
 		return fmt.Errorf("attachment byte round trip failed")
 	}
-	updated, _, e := fixture(email, email, "MailMoose One compatibility probe — updated disposable draft", nil)
+	updated, _, e := fixture(email, email, "Mammoth Mail One compatibility probe — updated disposable draft", nil)
 	if e != nil {
 		return e
 	}
@@ -582,7 +582,7 @@ func (p *probe) draftGate(ctx context.Context, email string) (err error) {
 }
 
 func (p *probe) sendGate(ctx context.Context, email string) error {
-	raw, _, err := fixture(email, p.opts.SendTo, "MailMoose One compatibility probe — approved test send", nil)
+	raw, _, err := fixture(email, p.opts.SendTo, "Mammoth Mail One compatibility probe — approved test send", nil)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,6 @@
-# @mailmoose/openclaw
+# @mammothmail/openclaw
 
-MailMoose's OpenClaw channel plugin. For supported installation, setup,
+Mammoth Mail's OpenClaw channel plugin. For supported installation, setup,
 configuration and security instructions, see the
 [OpenClaw connector guide](../../../docs/CONNECTORS.md#4-openclaw-connector).
 

@@ -237,7 +237,7 @@ func TestResendNonReceivedEventRequiresSignature(t *testing.T) {
 }
 
 // TestResendFansOutToAllRecipients proves a single Resend delivery addressed to
-// several MailMoose inboxes is delivered to each, exactly once.
+// several Mammoth Mail inboxes is delivered to each, exactly once.
 func TestResendFansOutToAllRecipients(t *testing.T) {
 	svc, server, principal, box := resendIngestFixture(t)
 	ctx := context.Background()

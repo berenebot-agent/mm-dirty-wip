@@ -148,7 +148,7 @@ func TestPasskeySysadminCannotDisablePassword(t *testing.T) {
 	if svc.Config.WebAuthnRPID() == "" {
 		t.Skip("webauthn not configured for fixture")
 	}
-	u, _, err := svc.Store.SyncSystemAdmin(context.Background(), "MailMoose", "admin@example.com", "correct horse battery staple", svc.Config.DefaultQuotaBytes)
+	u, _, err := svc.Store.SyncSystemAdmin(context.Background(), "Mammoth Mail", "admin@example.com", "correct horse battery staple", svc.Config.DefaultQuotaBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

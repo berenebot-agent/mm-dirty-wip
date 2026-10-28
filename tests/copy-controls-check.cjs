@@ -123,7 +123,7 @@ function makeWorld(options) {
     getSelection() { return { removeAllRanges() {}, addRange() {} }; },
     setTimeout() { return 1; },
     clearTimeout() {},
-    mailmooseCopy: null
+    mammothmailCopy: null
   };
   const context = vm.createContext({ window, document, navigator, Promise });
 
@@ -157,7 +157,7 @@ async function secureContext() {
 
   const ordinaryButton = new Element('BUTTON');
   ordinaryButton.textContent = 'Copy';
-  world.window.mailmooseCopy.wire(ordinaryButton, { text: 'ordinary copy value' });
+  world.window.mammothmailCopy.wire(ordinaryButton, { text: 'ordinary copy value' });
   ordinaryButton.dispatch('click');
   await flushPromises();
   assert.equal(world.copied.at(-1), 'ordinary copy value', 'ordinary copy control writes its value');

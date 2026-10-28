@@ -41,7 +41,7 @@ func validRelayKind(kind RelayKind) bool {
 
 // CreateRelayEnrollToken mints a one-time setup code for a relay connector of
 // the given kind. The code is only an authority: the claimant supplies the
-// MailMoose URL, and the code remembers which connector it creates.
+// Mammoth Mail URL, and the code remembers which connector it creates.
 func (s *Store) CreateRelayEnrollToken(ctx context.Context, accountID, inboxID, name string, kind RelayKind, ttl time.Duration) (string, error) {
 	if !validRelayKind(kind) {
 		return "", ErrForbidden

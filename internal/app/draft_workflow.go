@@ -124,13 +124,13 @@ func equalTokenHash(a, b string) bool {
 // RequestSend records an assistant's request that a draft be authorized and
 // sent, freezing the draft. The inbox's authoring mode decides what happens:
 //
-//   - MailMooseApproval (a domain inbox's preset and default): the in-product
+//   - LocalApproval (a domain inbox's preset and default): the in-product
 //     approval workflow. When the inbox has a configured approver the
 //     approval-request email is queued in the same transaction that creates the
 //     request; the explicit external flag is therefore optional and only forces
 //     an error when the inbox has no approver.
 //   - RemoteDraft (a standalone inbox's default): a one-way handoff that places
-//     the frozen draft in the inbox's connected remote Drafts folder. MailMoose
+//     the frozen draft in the inbox's connected remote Drafts folder. Mammoth Mail
 //     never sends it.
 //
 // The mode is read once here and snapshotted onto the request, so a later inbox
@@ -152,7 +152,7 @@ func (s *Service) RequestSend(ctx context.Context, p model.Principal, draftID st
 		return model.Draft{}, err
 	}
 	// A RemoteDraft inbox hands the draft off one-way. The explicit external flag
-	// is a MailMooseApproval intent and does not force a handoff, so an operator
+	// is a LocalApproval intent and does not force a handoff, so an operator
 	// who explicitly asks for external approval on a handoff inbox gets an error
 	// rather than a silent mode switch.
 	if settings.Mode == model.AuthoringRemoteDraft {

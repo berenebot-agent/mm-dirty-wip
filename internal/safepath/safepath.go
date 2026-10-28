@@ -1,7 +1,7 @@
 // Package safepath resolves a stored relative path beneath a data root and
 // rejects any value that could escape it.
 //
-// Every on-disk location MailMoose stores is server-generated and kept under
+// Every on-disk location Mammoth Mail stores is server-generated and kept under
 // DataDir, and the relative form is what is persisted. The path is therefore
 // never attacker-controlled today. Join is a defence-in-depth guard so a future
 // path that does store a client-supplied value cannot turn a read, open or

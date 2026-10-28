@@ -39,6 +39,40 @@ const FolderLabelMapping = `CREATE TABLE inbox_folder_labels (
 // FolderLabelMappingHash pins the schema after the folder-label mapping.
 const FolderLabelMappingHash = "b78427c46676da829537b76c9a54845b2deaf8882b822603a98535728c4dfbc5"
 
+// SentPlacementBackfill files completed outbound mail that predates explicit
+// Sent filing in its inbox's Sent folder, the placement every new send records
+// (see MarkSent's filing clause, which picks the same folder of either inbox
+// kind). Only mail in an inbox that already holds a Sent folder is touched; an
+// inbox whose folder tree was never listed keeps its NULL placements, which the
+// Sent-folder reads still widen to the role. Re-applying it is safe: it changes
+// data only, so the pinned schema hash never moves.
+const SentPlacementBackfill = `UPDATE messages
+SET mailbox_id = (SELECT f.id FROM inbox_folders f
+                  WHERE f.inbox_id = messages.inbox_id
+                    AND f.role = 'sent'
+                  ORDER BY f.path LIMIT 1)
+WHERE direction = 'outbound'
+  AND status = 'sent'
+  AND mailbox_id IS NULL
+  AND EXISTS (SELECT 1 FROM inbox_folders f
+              WHERE f.inbox_id = messages.inbox_id
+                AND f.role = 'sent');`
+
+// SentPlacementBackfillHash pins the schema after the Sent placement backfill.
+// The backfill is data-only, so the pinned schema stays the previous lineage's.
+const SentPlacementBackfillHash = FolderLabelMappingHash
+
+// AuthoringLocalApprovalRename rewrites the stored approval mode to its renamed
+// value (formerly mailmoose_approval). Data-only, so the pinned schema hash
+// does not move.
+const AuthoringLocalApprovalRename = `UPDATE inboxes SET authoring_mode='local_approval'
+WHERE authoring_mode='mailmoose_approval';
+UPDATE assistant_handling_requests SET mode='local_approval'
+WHERE mode='mailmoose_approval';`
+
+// AuthoringLocalApprovalRenameHash pins the schema after the approval-mode rename.
+const AuthoringLocalApprovalRenameHash = SentPlacementBackfillHash
+
 // Queryer is the read surface shared by a pinned connection and a transaction.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -55,6 +89,8 @@ func migrations() []migration {
 	return []migration{
 		{"001", Baseline, BaselineHash},
 		{"002", FolderLabelMapping, FolderLabelMappingHash},
+		{"003", SentPlacementBackfill, SentPlacementBackfillHash},
+		{"004", AuthoringLocalApprovalRename, AuthoringLocalApprovalRenameHash},
 	}
 }
 

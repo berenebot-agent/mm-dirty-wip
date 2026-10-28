@@ -1,4 +1,4 @@
-// Package privdrop covers the deployment case where a MailMoose process is
+// Package privdrop covers the deployment case where a Mammoth Mail process is
 // started as root — for example the default image (no Dockerfile USER, so the
 // container boots as root) or `user: "0:0"` in Compose — so a Docker-created
 // bind-mount directory can be fixed up without host-side chown commands. It
@@ -33,11 +33,11 @@ const (
 // no-op, so callers can log the runtime identity without re-reading the
 // environment). Once dropped, privileges cannot be regained.
 func DropToRuntimeUser(dir string) (dropped bool, uid int, gid int, err error) {
-	uid, err = envID("MAILMOOSE_RUN_UID", DefaultUID)
+	uid, err = envID("MAIL_RUN_UID", DefaultUID)
 	if err != nil {
 		return false, 0, 0, err
 	}
-	gid, err = envID("MAILMOOSE_RUN_GID", DefaultGID)
+	gid, err = envID("MAIL_RUN_GID", DefaultGID)
 	if err != nil {
 		return false, 0, 0, err
 	}
@@ -97,14 +97,14 @@ func DropTo(uid, gid int) error {
 
 // ResolvedIdentity returns the UID and GID the running process would be
 // configured with if DropToRuntimeUser were invoked now. It honours
-// MAILMOOSE_RUN_UID / MAILMOOSE_RUN_GID and falls back to DefaultUID/DefaultGID.
+// MAIL_RUN_UID / MAIL_RUN_GID and falls back to DefaultUID/DefaultGID.
 // It does not perform any privilege change.
 func ResolvedIdentity() (uid, gid int, err error) {
-	uid, err = envID("MAILMOOSE_RUN_UID", DefaultUID)
+	uid, err = envID("MAIL_RUN_UID", DefaultUID)
 	if err != nil {
 		return 0, 0, err
 	}
-	gid, err = envID("MAILMOOSE_RUN_GID", DefaultGID)
+	gid, err = envID("MAIL_RUN_GID", DefaultGID)
 	if err != nil {
 		return 0, 0, err
 	}

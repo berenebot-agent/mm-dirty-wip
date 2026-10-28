@@ -13,13 +13,13 @@ import (
 
 // DefaultAppBinary and DefaultMXBinary are the image install paths.
 const (
-	DefaultAppBinary = "/usr/local/bin/mailmoose"
-	DefaultMXBinary  = "/usr/local/bin/mailmoose-mx"
+	DefaultAppBinary = "/usr/local/bin/mammothmail"
+	DefaultMXBinary  = "/usr/local/bin/mammothmail-mx"
 )
 
 // Spec is everything needed to spawn the embedded edge.
 type Spec struct {
-	// Binary is the mailmoose-mx executable.
+	// Binary is the mammothmail-mx executable.
 	Binary string
 	// UID/GID the edge runs as, separate from the app runtime user.
 	UID int
@@ -30,12 +30,12 @@ type Spec struct {
 
 // ResolveBinary returns the edge binary path, honouring an override for tests.
 func ResolveBinary() string {
-	if v := strings.TrimSpace(os.Getenv("MAILMOOSE_MX_BIN")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MAIL_MX_BIN")); v != "" {
 		return v
 	}
 	if exe, err := os.Executable(); err == nil {
-		// Prefer a sibling mailmoose-mx next to the running app binary.
-		sibling := filepath.Join(filepath.Dir(exe), "mailmoose-mx")
+		// Prefer a sibling mammothmail-mx next to the running app binary.
+		sibling := filepath.Join(filepath.Dir(exe), "mammothmail-mx")
 		if _, err := os.Stat(sibling); err == nil {
 			return sibling
 		}

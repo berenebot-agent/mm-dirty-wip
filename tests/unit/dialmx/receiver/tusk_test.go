@@ -14,7 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// TestAntlerRegistrationMetadataLogged proves the optional Antler MX contact
+// TestAntlerRegistrationMetadataLogged proves the optional Tusk MX contact
 // email and setup id supplied on DomainAuth are carried through the domain
 // proof and message handoff metadata, and that the proof itself still succeeds
 // from DNS authority alone (the metadata is never authority).

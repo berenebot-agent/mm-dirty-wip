@@ -28,7 +28,7 @@ import (
 // does not choose one. Receivers find the public key through the s= tag in the
 // DKIM-Signature header, so the selector is purely a namespace for rotations:
 // for domain example.com it names the record at <selector>._domainkey.example.com.
-const DefaultSelector = "mailmoose"
+const DefaultSelector = "mammothmail"
 
 // rsaKeyBits is the generated key size. 2048 is the smallest size universally
 // accepted by DKIM verifiers in the wild.

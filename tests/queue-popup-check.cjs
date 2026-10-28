@@ -102,7 +102,7 @@ function run() {
     }
   };
   const window = {
-    mailmooseStatus: { busy() {} },
+    mammothmailStatus: { busy() {} },
     addEventListener() {},
     setInterval() { return 0; },
     setTimeout() { return 0; },
@@ -122,7 +122,7 @@ function run() {
     console
   };
   vm.runInNewContext(moduleSource, context);
-  assert.equal(typeof window.mailmooseActionUpdateForTest, 'function', 'test seam is exported');
+  assert.equal(typeof window.mammothmailActionUpdateForTest, 'function', 'test seam is exported');
   document.open();
   return { window, body, menu, document };
 }
@@ -147,7 +147,7 @@ function rows(body) {
 // line it already has.
 {
   const { window, body } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [{ id: 'act-id', message_id: 'msg_abcdefghijklmnop', state: 'pending', inbox_name: 'Sales', input: { kind: 'move' } }]
   });
@@ -160,7 +160,7 @@ function rows(body) {
 // With nothing flagged there is nothing to clear, so the control stays away.
 {
   const { window, body } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [{ id: 'live-id', message_id: 'msg_1', state: 'pending', input: { kind: 'delete' } }]
   });
@@ -171,7 +171,7 @@ function rows(body) {
 // A failed action is flagged: the control appears and takes the row away.
 {
   const { window, body, menu } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [{ id: 'fail-id', message_id: 'msg_1', state: 'failed', error: 'provider refused', input: { kind: 'delete' } }]
   });
@@ -194,9 +194,9 @@ function rows(body) {
     csrf: 'token',
     items: [{ id: 'fail-id', message_id: 'msg_1', state: 'failed', error: 'provider refused', input: { kind: 'delete' } }]
   };
-  window.mailmooseActionUpdateForTest(payload);
+  window.mammothmailActionUpdateForTest(payload);
   clearButton(body).onclick();
-  window.mailmooseActionUpdateForTest(payload);
+  window.mammothmailActionUpdateForTest(payload);
   assert.equal(rows(body).length, 0, 'the cleared row stays cleared across a poll');
   assert.equal(clearButton(body).hidden, true, 'the control stays away');
 }
@@ -204,7 +204,7 @@ function rows(body) {
 // Live work is not a notification: it stays on the drawer.
 {
   const { window, body } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [
       { id: 'fail-id', message_id: 'msg_1', state: 'failed', error: 'provider refused', input: { kind: 'delete' } },
@@ -220,7 +220,7 @@ function rows(body) {
 // A metadata sync that stopped for a reason is flagged too.
 {
   const { window, body } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     syncs: [
       { inbox_id: 'in_1', name: 'Sales', provider: 'IMAP', state: 'error', phase: 'initial', indexed: 3, total: 10, error: 'provider refused' },

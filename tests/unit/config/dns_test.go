@@ -10,7 +10,7 @@ import (
 
 func TestDNSFallbackDefaults(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	t.Setenv("MAILMOOSE_DNS_FALLBACK_SERVERS", "")
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestDNSFallbackDefaults(t *testing.T) {
 
 func TestDNSFallbackCustomAndOff(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	t.Setenv("MAILMOOSE_DNS_FALLBACK_SERVERS", "10.0.0.53, [::1]:5353")
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "10.0.0.53, [::1]:5353")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestDNSFallbackCustomAndOff(t *testing.T) {
 		t.Fatalf("DNSFallbackServers = %v, want %v", cfg.DNSFallbackServers, want)
 	}
 
-	t.Setenv("MAILMOOSE_DNS_FALLBACK_SERVERS", "off")
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "off")
 	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestDNSFallbackCustomAndOff(t *testing.T) {
 
 func TestDNSFallbackRejectsHostname(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	t.Setenv("MAILMOOSE_DNS_FALLBACK_SERVERS", "dns.example")
-	if _, err := config.Load(); err == nil || !strings.Contains(err.Error(), "MAILMOOSE_DNS_FALLBACK_SERVERS") {
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "dns.example")
+	if _, err := config.Load(); err == nil || !strings.Contains(err.Error(), "MAIL_DNS_FALLBACK_SERVERS") {
 		t.Fatalf("hostname fallback server error = %v", err)
 	}
 }

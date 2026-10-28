@@ -48,7 +48,7 @@ var (
 	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
 	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
 	qQ           = p("q", "string", false, "Search text. Omit for a filter-only search. Local mail uses FTS5; connected inboxes use provider search. Advanced syntax is not portable.")
-	qFolder      = p("folder", "string", false, "Scope to one canonical folder ID returned by the inbox Folders API. Only messages whose projected folder_id matches are returned. Legacy standalone folder paths remain accepted; prefer stable MailMoose IDs.")
+	qFolder      = p("folder", "string", false, "Scope to one canonical folder ID returned by the inbox Folders API. Only messages whose projected folder_id matches are returned. Legacy standalone folder paths remain accepted; prefer stable Mammoth Mail IDs.")
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
 	qContentType = p("content_type", "string", false, "Remote attachment media-type hint; downloads are served as application/octet-stream with attachment disposition and nosniff.")

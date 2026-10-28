@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -142,6 +143,21 @@ func validFolderRole(role string) bool {
 	default:
 		return false
 	}
+}
+
+// RemoteFolderUIDValidity returns the UIDVALIDITY last observed for a folder by
+// a sync pass. ok is false when the folder is unknown or its validity was never
+// resolved, so the caller must ask the server instead of caching a zero.
+func (s *Store) RemoteFolderUIDValidity(ctx context.Context, accountID, inboxID, path string) (uint32, bool, error) {
+	var validity uint32
+	err := s.read.QueryRowContext(ctx, `SELECT remote_uid_validity FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=?`, accountID, inboxID, path).Scan(&validity)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return validity, validity != 0, nil
 }
 
 // GetFolderByPath resolves one folder of an inbox by its stable path.
@@ -855,4 +871,57 @@ func (s *Store) CountFolderMessages(ctx context.Context, p model.Principal, inbo
 		stats.Unread[id] = unread
 	}
 	return stats, rows.Err()
+}
+
+// localFolderMessageCounts counts a local mailbox's mail per folder role, using
+// the same membership rules the message listing applies. A role's count is the
+// size of the view that role selects: Spam is spam-flagged mail, Trash is
+// trashed mail, Sent is completed outbound mail, and Inbox is the Inbox bucket
+// including the implicit unfiled (mailbox_id IS NULL) mail. A role with no
+// folder in this inbox is absent from the map.
+//
+// It exists because a folder's message_count is otherwise only ever fed from the
+// remote index, which holds nothing for a local mailbox.
+func (s *Store) localFolderMessageCounts(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
+	base := `SELECT count(*), sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM messages m
+		WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0`
+	// The role's own visibility rule is part of its membership, so the count never
+	// includes mail the role view hides (Spam is not counted as Inbox mail, a
+	// trashed message is only in Trash).
+	queries := map[string]struct {
+		where string
+		args  []any
+	}{
+		model.FolderRoleInbox: {
+			where: ` AND m.deleted_at IS NULL AND m.is_spam=0
+				AND (m.mailbox_id IS NULL OR m.mailbox_id IN (SELECT f.id FROM inbox_folders f WHERE f.inbox_id=m.inbox_id AND f.role=?))`,
+			args: []any{model.FolderRoleInbox},
+		},
+		model.FolderRoleSent: {
+			where: ` AND m.deleted_at IS NULL AND m.is_spam=0 AND m.direction='outbound' AND m.status='sent'`,
+		},
+		model.FolderRoleSpam: {
+			where: ` AND m.deleted_at IS NULL AND m.is_spam=1`,
+		},
+		model.FolderRoleTrash: {
+			where: ` AND m.deleted_at IS NOT NULL`,
+		},
+	}
+	roles := make([]string, 0, len(queries))
+	for role := range queries {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	out := map[string][2]int{}
+	for _, role := range roles {
+		q := queries[role]
+		var total int
+		var unread sql.NullInt64
+		args := append([]any{accountID, inboxID}, q.args...)
+		if err := s.read.QueryRowContext(ctx, base+q.where, args...).Scan(&total, &unread); err != nil {
+			return nil, err
+		}
+		out[role] = [2]int{total, int(unread.Int64)}
+	}
+	return out, nil
 }

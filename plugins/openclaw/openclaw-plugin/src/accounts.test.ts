@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeBaseUrl, resolveMailMooseAccount } from "../src/accounts.js";
+import { normalizeBaseUrl, resolveMammothMailAccount } from "../src/accounts.js";
 
 test("normalizes valid http(s) base URLs", () => {
   assert.equal(normalizeBaseUrl("https://mail.example.com/"), "https://mail.example.com");
@@ -10,10 +10,10 @@ test("normalizes valid http(s) base URLs", () => {
 });
 
 test("resolves the implicit default account from root channel config", () => {
-  const account = resolveMailMooseAccount({
+  const account = resolveMammothMailAccount({
     cfg: {
       channels: {
-        mailmoose: {
+        mammothmail: {
           baseUrl: "https://mail.example.com",
           gatewayId: "gw-1",
           secret: "s",
@@ -28,18 +28,18 @@ test("resolves the implicit default account from root channel config", () => {
 });
 
 test("an incomplete config is not configured", () => {
-  const account = resolveMailMooseAccount({
-    cfg: { channels: { mailmoose: { baseUrl: "https://mail.example.com" } } },
+  const account = resolveMammothMailAccount({
+    cfg: { channels: { mammothmail: { baseUrl: "https://mail.example.com" } } },
   });
   assert.equal(account.configured, false);
   assert.equal(account.tokenStatus, "missing");
 });
 
 test("allowFrom entries are normalized and trimmed", () => {
-  const account = resolveMailMooseAccount({
+  const account = resolveMammothMailAccount({
     cfg: {
       channels: {
-        mailmoose: {
+        mammothmail: {
           baseUrl: "https://mail.example.com",
           gatewayId: "gw-1",
           secret: "s",

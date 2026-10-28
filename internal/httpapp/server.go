@@ -62,17 +62,19 @@ var favicon32PNG []byte
 //go:embed assets/apple-touch-icon.png
 var appleTouchIconPNG []byte
 
-//go:embed assets/mailmoose.py
+//go:embed assets/mammothmail.py
 var pythonClient []byte
 
-//go:embed assets/mailmoose.sh
+//go:embed assets/mammothmail.sh
 var bashClient []byte
 
 //go:embed assets/curl-cookbook.txt
 var curlCookbook []byte
 
-// The Antler MX mail-flow diagram shown in the receiving wizard. Kept in step
-// with the docs copy at assets/antler-mx-diagram.svg (docs/EMAIL_PROVIDERS.md).
+// The Tusk MX mail-flow diagram shown in the receiving wizard. Kept in step
+// with the docs copy at assets/tusk-mx-diagram.svg (docs/EMAIL_PROVIDERS.md).
+// The embed name and the antler-mx-diagram.svg route keep the pre-rename
+// spelling so installed UIs and long-lived caches keep working.
 //
 //go:embed assets/antler-mx-diagram.svg
 var antlerMXDiagramSVG []byte
@@ -164,7 +166,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	// reports 501 rather than offering a button that cannot work.
 	if rpID := svc.Config.WebAuthnRPID(); rpID != "" && svc.Config.SecureContext() {
 		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
-			RPDisplayName: "MailMoose",
+			RPDisplayName: "Mammoth Mail",
 			RPID:          rpID,
 			RPOrigins:     svc.Config.WebAuthnOrigins(),
 		})
@@ -191,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
 	m.HandleFunc("GET /assets/antler-mx-diagram.svg", s.showAntlerMXDiagram)
+	m.HandleFunc("GET /assets/tusk-mx-diagram.svg", s.showAntlerMXDiagram)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
 	m.HandleFunc("GET /favicon-16x16.png", s.showFavicon16)
 	m.HandleFunc("GET /favicon-32x32.png", s.showFavicon32)
@@ -373,6 +376,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}/live", s.withSession(s.uiInboxLive))
 
 	// Discovery.
+	m.HandleFunc("GET /.well-known/mail-api", s.discovery)
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
@@ -620,7 +624,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
-		w.Header().Set("Link", `</.well-known/mailmoose>; rel="help"; title="Agents: GET /.well-known/mailmoose for API reference"`)
+		w.Header().Set("Link", `</.well-known/mail-api>; rel="help"; title="Agents: GET /.well-known/mail-api for API reference"`)
 		// HSTS is only meaningful on a deployment that requires HTTPS; the
 		// redirect middleware runs over plaintext, so this is reached only on
 		// a TLS request (or a trusted proxy-reported HTTPS request).
@@ -814,7 +818,7 @@ func (s *Server) withPreAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Add("Vary", "Cookie")
 			w.WriteHeader(http.StatusForbidden)
-			s.render(w, r, `<section class="card"><h1>Unable to verify your sign-in request</h1><p>Refresh the page containing the form and try again. If this keeps happening, make sure cookies are enabled.</p><p><strong>Self-hosting?</strong> Check that <code>BASE_URL</code> matches the address you use to open MailMoose, including <code>http://</code> or <code>https://</code>. An HTTPS base URL can prevent sign-in when you access the app over HTTP.</p><a href="/login">Return to sign in</a></section>`, pageData{Title: "Unable to verify your sign-in request"})
+			s.render(w, r, `<section class="card"><h1>Unable to verify your sign-in request</h1><p>Refresh the page containing the form and try again. If this keeps happening, make sure cookies are enabled.</p><p><strong>Self-hosting?</strong> Check that <code>BASE_URL</code> matches the address you use to open Mammoth Mail, including <code>http://</code> or <code>https://</code>. An HTTPS base URL can prevent sign-in when you access the app over HTTP.</p><a href="/login">Return to sign in</a></section>`, pageData{Title: "Unable to verify your sign-in request"})
 			return
 		}
 		next(w, r)
@@ -825,13 +829,13 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := strings.TrimSpace(r.Header.Get("Authorization"))
 		if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mail-api"`)
 			writeError(w, 401, "bearer API key required")
 			return
 		}
 		p, err := s.Service.Store.APIKeyPrincipal(r.Context(), strings.TrimSpace(h[7:]))
 		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mail-api"`)
 			writeError(w, 401, "invalid API key")
 			return
 		}
@@ -1333,8 +1337,10 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 }
 
 // health is the liveness response shared by /healthz, /health and /v1/health.
+// The build identity travels with it so a deployed container can be identified
+// without shell access.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"status": "ok"})
+	writeJSON(w, 200, map[string]any{"status": "ok", "build": s.Service.Config.Build})
 }
 
 // docsRedirect points the conventional /docs path at the served agent guide.

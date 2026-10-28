@@ -157,7 +157,7 @@ func TestProofLookupsQueryAbsoluteNames(t *testing.T) {
 	if !a.Accepted {
 		t.Fatalf("auth = %+v, want accepted", a)
 	}
-	if want := "_mailmoose-mx.example.test."; txtName != want {
+	if want := "_mail-proof.example.test."; txtName != want {
 		t.Errorf("TXT lookup queried %q, want %q", txtName, want)
 	}
 	if want := "example.test."; mxName != want {

@@ -473,7 +473,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 // BuildDraftMessage renders a message for storage as a draft (for example a
 // remote-Drafts handoff). Unlike BuildMessage it INCLUDES the Bcc header: a
 // draft is a self-contained message a human or editor later sends from their own
-// client, where no MailMoose envelope exists, so the Bcc recipients must travel
+// client, where no Mammoth Mail envelope exists, so the Bcc recipients must travel
 // with the stored draft. Do NOT use this to transmit mail.
 func BuildDraftMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {
 	return buildMessage(from, to, cc, bcc, subject, text, html, messageID, inReplyTo, refs, date, attachments, true)

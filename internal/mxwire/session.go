@@ -202,7 +202,7 @@ type DomainAuth struct {
 	Domain string `json:"domain"`
 	KeyID  string `json:"key_id"`
 	// ContactEmail and SetupID are optional registration metadata carried by a
-	// core that enrolled through a named shared service (Antler MX). They are
+	// core that enrolled through a named shared service (Tusk MX). They are
 	// operational metadata, not credentials: domain authority remains the
 	// DNS-anchored Ed25519 proof. Older cores omit both; older receivers that
 	// reject unknown fields require a coordinated upgrade.
@@ -386,7 +386,7 @@ func AuthTranscript(c Challenge) ([]byte, error) {
 		return nil, fmt.Errorf("mxwire: invalid nonce")
 	}
 	h := sha256.New()
-	for _, field := range [][]byte{[]byte("mailmoose-mx-v1"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
+	for _, field := range [][]byte{[]byte("mail-mx-v1"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
 		var length [4]byte
 		binary.BigEndian.PutUint32(length[:], uint32(len(field)))
 		h.Write(length[:])

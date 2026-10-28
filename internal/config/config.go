@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/mail"
 	"net/netip"
@@ -57,7 +58,7 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 	// AdminAccountName is the display name for the system administrator's own
-	// account. Defaults to "MailMoose". It is only used when the system
+	// account. Defaults to "Mammoth Mail". It is only used when the system
 	// administrator is first created.
 	AdminAccountName  string
 	MaxMessageBytes   int64
@@ -119,9 +120,14 @@ type Config struct {
 	// DNSFallbackServers are the ordered public resolvers tried when the host's
 	// configured DNS servers fail an exchange. A nil slice means failover is
 	// disabled and the native resolver is left untouched. Populated from
-	// MAILMOOSE_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
+	// MAIL_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
 	// defaults and "off" disables failover.
 	DNSFallbackServers []string
+	// Build identifies the running binary: the commit stamped at build time, or
+	// the build timestamp when only that is known. It is reported by /healthz
+	// and the discovery document so an operator can tell "not fixed" from "not
+	// deployed".
+	Build string
 }
 
 func Load() (Config, error) {
@@ -143,9 +149,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dnsFallbackServers, err := dnsfallback.ParseServers(env("MAILMOOSE_DNS_FALLBACK_SERVERS", ""))
+	dnsFallbackServers, err := dnsfallback.ParseServers(env("MAIL_DNS_FALLBACK_SERVERS", ""))
 	if err != nil {
-		return Config{}, fmt.Errorf("MAILMOOSE_DNS_FALLBACK_SERVERS: %w", err)
+		return Config{}, fmt.Errorf("MAIL_DNS_FALLBACK_SERVERS: %w", err)
 	}
 	baseURL := strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/")
 	baseHost, err := parseBaseHost(baseURL)
@@ -196,6 +202,7 @@ func Load() (Config, error) {
 		InboundTLSKeyFile:       strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 		DNSFallbackServers:      dnsFallbackServers,
+		Build:                   strings.TrimSpace(os.Getenv("MAIL_BUILD")),
 	}
 	if cfg.Mode != "selfhosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted")
@@ -231,8 +238,8 @@ func Load() (Config, error) {
 	// validated here: the persisted mx_settings row is the authoritative
 	// receiver configuration, so a stale or partial legacy value must not fail
 	// startup.
-	if cfg.MXUID <= 0 || cfg.MXGID <= 0 {
-		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")
+	if cfg.MXUID <= 0 || cfg.MXGID <= 0 || cfg.MXUID > math.MaxInt32 || cfg.MXGID > math.MaxInt32 {
+		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive integers within the 32-bit uid range")
 	}
 	if cfg.MXReceiptRetention <= 0 {
 		return Config{}, fmt.Errorf("MX_RECEIPT_RETENTION_HOURS must be positive")
@@ -304,9 +311,9 @@ func loadAdmin() (adminConfig, error) {
 			return adminConfig{}, fmt.Errorf("ADMIN_PASSWORD %w", err)
 		}
 	}
-	name := strings.TrimSpace(env("ADMIN_ACCOUNT_NAME", "MailMoose"))
+	name := strings.TrimSpace(env("ADMIN_ACCOUNT_NAME", "Mammoth Mail"))
 	if name == "" {
-		name = "MailMoose"
+		name = "Mammoth Mail"
 	}
 	return adminConfig{email: email, password: password, accountName: name}, nil
 }

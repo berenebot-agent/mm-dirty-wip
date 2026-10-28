@@ -33,8 +33,8 @@ func TestAdminFromEnv(t *testing.T) {
 	if cfg.AdminPassword != "correct-horse-battery-staple" {
 		t.Fatalf("AdminPassword = %q", cfg.AdminPassword)
 	}
-	if cfg.AdminAccountName != "MailMoose" {
-		t.Fatalf("AdminAccountName = %q, want MailMoose", cfg.AdminAccountName)
+	if cfg.AdminAccountName != "Mammoth Mail" {
+		t.Fatalf("AdminAccountName = %q, want Mammoth Mail", cfg.AdminAccountName)
 	}
 }
 
@@ -63,8 +63,8 @@ func TestAdminUnset(t *testing.T) {
 	if cfg.AdminEmail != "" || cfg.AdminPassword != "" {
 		t.Fatal("unset admin must stay empty so the stored login is preserved")
 	}
-	if cfg.AdminAccountName != "MailMoose" {
-		t.Fatalf("AdminAccountName = %q, want MailMoose", cfg.AdminAccountName)
+	if cfg.AdminAccountName != "Mammoth Mail" {
+		t.Fatalf("AdminAccountName = %q, want Mammoth Mail", cfg.AdminAccountName)
 	}
 }
 

@@ -260,15 +260,8 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			}
 			g, err := client.Get(ctx, t, item.ID, "metadata")
 			if err != nil {
-				var mb *model.MailboxError
-				if errors.As(err, &mb) && mb.Kind == model.ErrKindNotFound {
-					if id, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, item.ID); e == nil {
-						return m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
-					} else if errors.Is(e, store.ErrNotFound) {
-						return nil
-					} else {
-						return e
-					}
+				if vanished, e := m.googleMessageVanished(ctx, account, inbox, item.ID, err); vanished {
+					return e
 				}
 				return err
 			}
@@ -339,6 +332,15 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 				}
 				g, e := client.Get(ctx, t, id, "metadata")
 				if e != nil {
+					// Gmail deletes a message's history entry asynchronously, so a
+					// history window can still name a message that is already gone.
+					// Treat it as vanished, not as a failed pass.
+					if vanished, ve := m.googleMessageVanished(ctx, account, inbox, id, e); vanished {
+						if ve != nil {
+							return store.RemoteIndexStatus{}, ve
+						}
+						continue
+					}
 					return store.RemoteIndexStatus{}, e
 				}
 				if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
@@ -441,6 +443,27 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, e
 }
 
+// googleMessageVanished reports whether a messages.get failure is Gmail's
+// not_found for a message that left the mailbox between the history/list snapshot
+// and the fetch. That is a benign race, not a failed pass: a history window can
+// still name a message Gmail has already deleted. When it is one, any stale cached
+// row is dropped and the caller skips the message.
+func (m *RemoteMailboxService) googleMessageVanished(ctx context.Context, account, inbox, providerID string, err error) (bool, error) {
+	var mb *model.MailboxError
+	if !errors.As(err, &mb) || mb.Kind != model.ErrKindNotFound {
+		return false, nil
+	}
+	id, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, providerID)
+	if e != nil {
+		return true, nil
+	}
+	e = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
+	if errors.Is(e, store.ErrNotFound) {
+		return true, nil
+	}
+	return true, e
+}
+
 // googleArchiveDestination is the internal handle of the Gmail archive
 // operation: it removes the Inbox label. It is not a folder and never appears
 // in a folder list or a folder filter.
@@ -476,7 +499,8 @@ func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal
 	}
 	// An empty scope is the whole mailbox, including the mail that carries no
 	// system label. A folder scope is a system folder view; a user label is an
-	// additive label and selects no folder.
+	// additive label and selects no folder. Either way Trash and Spam are
+	// excluded by default, so every inbox kind's plain read means the same thing.
 	folder = m.googleFolderScope(ctx, p.AccountID, inbox, folder)
 	if cached {
 		// UI navigation serves the cache. Advance an initial or partial index
@@ -495,7 +519,7 @@ func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal
 			return RemoteListResult{}, e
 		}
 	}
-	r, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before})
+	r, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, ExcludeSpam: folder == "", ExcludeTrash: folder == "", Limit: limit, Before: before})
 	if e != nil {
 		return RemoteListResult{}, e
 	}
@@ -680,9 +704,9 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		}
 		l, e = client.CreateLabel(ctx, t, name)
 	} else {
-		fs, e := m.Service.Store.ListFolders(ctx, p.AccountID, inbox)
-		if e != nil {
-			return model.Folder{}, e
+		fs, ferr := m.Service.Store.ListFolders(ctx, p.AccountID, inbox)
+		if ferr != nil {
+			return model.Folder{}, ferr
 		}
 		var f *model.Folder
 		for i := range fs {
@@ -699,8 +723,19 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		}
 		if mode == "rename" {
 			l, e = client.RenameLabel(ctx, t, f.Path, name)
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
 		} else {
 			e = client.DeleteLabel(ctx, t, f.Path)
+			var mb *model.MailboxError
+			if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+				// Gmail no longer has the label: the delete already landed.
+				e = nil
+			}
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
 			l.ID = f.Path
 		}
 	}
@@ -708,6 +743,13 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		return model.Folder{}, e
 	}
 	if e = m.googleFolders(ctx, p.AccountID, inbox, t); e != nil {
+		if mode == "delete" {
+			// The label is deleted at Gmail; a failed mirror leaves a stale row, so
+			// queue the reconcile rather than report a failed delete that happened.
+			m.Service.Log.Warn("mirror deleted Gmail label", "inbox_id", inbox, "error", e)
+			m.ScheduleRefresh(p.AccountID, inbox)
+			return model.Folder{}, nil
+		}
 		return model.Folder{}, e
 	}
 	if mode == "delete" {

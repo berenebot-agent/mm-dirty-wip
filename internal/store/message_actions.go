@@ -22,7 +22,7 @@ type MessageActionInput struct {
 	LabelOp     string    `json:"label_op,omitempty"`
 	// ProviderLabel marks Label as a provider-owned name (a Gmail user label or
 	// an Outlook category), which may be hierarchical. It relaxes name validation
-	// to the provider's own rule instead of the MailMoose-native rule that
+	// to the provider's own rule instead of the MammothMail-native rule that
 	// rejects path separators.
 	ProviderLabel bool `json:"provider_label,omitempty"`
 	// TrashTarget is populated only by the durable Empty Trash coordinator.
@@ -58,12 +58,21 @@ func scanAction(row interface{ Scan(...any) error }) (MessageAction, error) {
 	return a, err
 }
 
+// EnqueueMessageAction records one ordered mutation. An identical move that is
+// still pending or running is returned instead of being queued twice, so a
+// client that re-issues a move it already submitted (for example after a 202)
+// cannot double-apply it.
 func (s *Store) EnqueueMessageAction(ctx context.Context, p model.Principal, inboxID, messageID string, in MessageActionInput) (MessageAction, error) {
 	if !p.CanAssist(inboxID) {
 		return MessageAction{}, ErrForbidden
 	}
 	if _, err := s.GetInbox(ctx, p, inboxID); err != nil {
 		return MessageAction{}, err
+	}
+	if in.Kind == "move" || in.Kind == "classify" {
+		if existing, ok := s.sameMoveInFlight(ctx, p.AccountID, inboxID, messageID, in); ok {
+			return existing, nil
+		}
 	}
 	raw, err := json.Marshal(in)
 	if err != nil {
@@ -176,6 +185,26 @@ func (s *Store) SettleMessageAction(ctx context.Context, id, state, reason strin
 	}
 	_, err := s.write.ExecContext(ctx, `UPDATE inbox_message_actions SET state=?,last_error=?,next_attempt_at=?,claim_owner='',settled_at=? WHERE id=?`, state, publicRemoteIndexError(reason), timeText(next), settled, id)
 	return err
+}
+
+// sameMoveInFlight reports the message's pending or running move/classify action
+// when it targets the same destination as in.
+func (s *Store) sameMoveInFlight(ctx context.Context, accountID, inboxID, messageID string, in MessageActionInput) (MessageAction, bool) {
+	rows, err := s.read.QueryContext(ctx, actionSelect+` WHERE account_id=? AND inbox_id=? AND message_id=? AND state IN ('pending','running') ORDER BY rowid`, accountID, inboxID, messageID)
+	if err != nil {
+		return MessageAction{}, false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		a, err := scanAction(rows)
+		if err != nil {
+			return MessageAction{}, false
+		}
+		if (a.Input.Kind == "move" || a.Input.Kind == "classify") && a.Input.Kind == in.Kind && a.Input.Destination == in.Destination {
+			return a, true
+		}
+	}
+	return MessageAction{}, false
 }
 
 // ListMessageActionsForMessage returns every action recorded for one message,

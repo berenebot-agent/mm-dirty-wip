@@ -20,7 +20,7 @@ func TestInboundMXProviderLabel(t *testing.T) {
 	if !ok {
 		t.Fatal("mx inbound provider not registered")
 	}
-	if got, want := provider.Description(), "Direct MX (SMTP to the MailMoose receiver)"; got != want {
+	if got, want := provider.Description(), "Direct MX (SMTP to the Mammoth Mail receiver)"; got != want {
 		t.Fatalf("mx description = %q, want %q", got, want)
 	}
 	fields := provider.ConfigFields()
@@ -40,7 +40,7 @@ func TestInboundRemoteMXProvider(t *testing.T) {
 	if provider.Description() != "Remote MX" {
 		t.Fatalf("remotemx description = %q", provider.Description())
 	}
-	if got := transport.InboundSelectLabel(provider); got != "Remote MailMoose MX (your own receiver)" {
+	if got := transport.InboundSelectLabel(provider); got != "Remote Mammoth Mail MX (your own receiver)" {
 		t.Fatalf("remotemx select label = %q", got)
 	}
 	fields := provider.ConfigFields()

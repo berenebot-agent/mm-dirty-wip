@@ -16,7 +16,7 @@
 #
 # Never touches:
 #   - tests/logs/history.tsv   (append-only ledger)
-#   - tests/logs/mailmoose-mx  (test fixture binary, used by the launcher RSS test)
+#   - tests/logs/mammothmail-mx  (test fixture binary, used by the launcher RSS test)
 #   - tests/logs/latest        (symlink pointer)
 
 set -eu
@@ -51,7 +51,7 @@ collect_evictions() {
     done
 }
 
-collect_evictions 'mailmoose-go/*.log' "$KEEP_GO"
+collect_evictions 'mammothmail-go/*.log' "$KEEP_GO"
 collect_evictions 'gatehouse-go/*.log' "$KEEP_GO"
 collect_evictions 'runs/*' "$KEEP_RUNS"
 

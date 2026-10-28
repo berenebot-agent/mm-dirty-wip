@@ -57,14 +57,14 @@ func TestMXReceiverSettingsInstallationURLPolicy(t *testing.T) {
 
 	// Default (private outbound allowed): a cleartext LAN URL is accepted.
 	svcAllow, _, _ := newMXServiceWithOutboundPolicy(t, true)
-	if _, err := svcAllow.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: "http://mailmoose-mx:8443", BearerKey: "k"}); err != nil {
+	if _, err := svcAllow.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: "http://mammothmail-mx:8443", BearerKey: "k"}); err != nil {
 		t.Fatalf("default cleartext remote URL rejected: %v", err)
 	}
 
 	// Operator confines outbound to the public internet: cleartext and
 	// private-literal URLs are refused.
 	svcStrict, _, _ := newMXServiceWithOutboundPolicy(t, false)
-	for _, bad := range []string{"http://mailmoose-mx:8443", "http://10.0.0.5:8443", "https://127.0.0.1:8443"} {
+	for _, bad := range []string{"http://mammothmail-mx:8443", "http://10.0.0.5:8443", "https://127.0.0.1:8443"} {
 		if _, err := svcStrict.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: bad, BearerKey: "k"}); !errors.Is(err, app.ErrMXInvalidInput) {
 			t.Fatalf("public-only policy accepted %q: %v", bad, err)
 		}

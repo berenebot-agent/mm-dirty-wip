@@ -1,22 +1,22 @@
 /**
- * MailMoose relay client.
+ * Mammoth Mail relay client.
  *
  * Dial-out WebSocket transport shared with the Hermes connector:
  *   hello -> descriptor -> inbound/outbound frames -> inbound_ack.
  *
- * The client never exposes an inbound port; MailMoose pushes mail down the
- * socket this process opened. The durable cursor lives on MailMoose: an event
+ * The client never exposes an inbound port; Mammoth Mail pushes mail down the
+ * socket this process opened. The durable cursor lives on Mammoth Mail: an event
  * is acked only after the inbound handler resolves.
  */
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import type { MailMooseInboundEvent, RelayFrame } from "./types.js";
+import type { MammothMailInboundEvent, RelayFrame } from "./types.js";
 
-export type MailMooseRelayOptions = {
+export type MammothMailRelayOptions = {
   baseUrl: string;
   gatewayId: string;
   secret: string;
-  onInbound: (event: MailMooseInboundEvent) => Promise<void>;
+  onInbound: (event: MammothMailInboundEvent) => Promise<void>;
   onStatus?: (status: "connected" | "disconnected" | "recovering") => void;
   log?: {
     info?: (message: string) => void;
@@ -56,7 +56,7 @@ const COMPLETED_TTL_MS = 10 * 60_000;
 const MAX_COMPLETED = 1024;
 const WS_OPEN = 1;
 
-/** Builds the relay WebSocket URL for a MailMoose base URL. */
+/** Builds the relay WebSocket URL for a Mammoth Mail base URL. */
 export function websocketUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -77,7 +77,7 @@ export function relayBearer(gatewayId: string, secret: string, now = Date.now())
   return Buffer.from(`${payload}:${signature}`, "utf8").toString("base64url");
 }
 
-export class MailMooseRelay {
+export class MammothMailRelay {
   private socket?: RelaySocket;
   private stopped = false;
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
@@ -87,13 +87,13 @@ export class MailMooseRelay {
   private readonly heartbeatIntervalMs: number;
   private readonly completedTtlMs: number;
   private readonly maxCompleted: number;
-  private readonly createSocket: NonNullable<MailMooseRelayOptions["createSocket"]>;
+  private readonly createSocket: NonNullable<MammothMailRelayOptions["createSocket"]>;
   /** Events whose handler is still running, keyed by buffer id. */
   private inFlight = new Map<string, Promise<void>>();
   /** Recently completed buffer ids, so a post-disconnect replay is acked only. */
   private completed = new Map<string, number>();
 
-  constructor(private readonly options: MailMooseRelayOptions) {
+  constructor(private readonly options: MammothMailRelayOptions) {
     this.initialReconnectDelayMs = options.reconnectDelayMs ?? INITIAL_RECONNECT_DELAY_MS;
     this.reconnectDelayMs = this.initialReconnectDelayMs;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
@@ -125,7 +125,7 @@ export class MailMooseRelay {
     this.stopped = true;
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
-      pending.reject(new Error(`mailmoose: relay stopped before result ${id}`));
+      pending.reject(new Error(`mammothmail: relay stopped before result ${id}`));
     }
     this.pending.clear();
     const socket = this.socket;
@@ -136,24 +136,24 @@ export class MailMooseRelay {
   }
 
   /**
-   * Sends a reply on a MailMoose thread and resolves with the sent message id.
+   * Sends a reply on a Mammoth Mail thread and resolves with the sent message id.
    * replyTo, when supplied, is the exact inbound message/arrival that started
-   * the turn; MailMoose then replies to that email rather than guessing from
+   * the turn; Mammoth Mail then replies to that email rather than guessing from
    * the conversation id.
    */
   async sendText(threadId: string, text: string, replyTo?: string | null): Promise<string> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WS_OPEN) {
-      throw new Error("mailmoose: relay is not connected");
+      throw new Error("mammothmail: relay is not connected");
     }
     if (!threadId.trim() || !text.trim()) {
-      throw new Error("mailmoose: thread id and text are required");
+      throw new Error("mammothmail: thread id and text are required");
     }
     const requestId = crypto.randomUUID();
     const result = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error("mailmoose: outbound result timeout"));
+        reject(new Error("mammothmail: outbound result timeout"));
       }, OUTBOUND_RESULT_TIMEOUT_MS);
       timer.unref?.();
       this.pending.set(requestId, { resolve, reject, timer });
@@ -176,7 +176,7 @@ export class MailMooseRelay {
           return;
         }
         this.options.log?.warn?.(
-          `mailmoose: relay connection failed: ${error instanceof Error ? error.message : String(error)}`,
+          `mammothmail: relay connection failed: ${error instanceof Error ? error.message : String(error)}`,
         );
         this.options.onStatus?.("recovering");
         await sleep(this.reconnectDelayMs, signal);
@@ -214,7 +214,7 @@ export class MailMooseRelay {
 
       socket.on("open", () => {
         this.options.onStatus?.("connected");
-        socket.send(JSON.stringify({ type: "hello", platform: "email", botId: "mailmoose-openclaw" }));
+        socket.send(JSON.stringify({ type: "hello", platform: "email", botId: "mammothmail-openclaw" }));
       });
 
       socket.on("message", (raw) => {
@@ -255,7 +255,7 @@ export class MailMooseRelay {
       if (frame.result?.success) {
         pending.resolve(String(frame.result.message_id ?? frame.requestId));
       } else {
-        pending.reject(new Error(String(frame.result?.error ?? "MailMoose send failed")));
+        pending.reject(new Error(String(frame.result?.error ?? "Mammoth Mail send failed")));
       }
       return;
     }
@@ -284,7 +284,7 @@ export class MailMooseRelay {
   }
 
   /** Runs one agent turn with heartbeats while it is in flight. */
-  private async processInbound(bufferId: string, event: MailMooseInboundEvent): Promise<void> {
+  private async processInbound(bufferId: string, event: MammothMailInboundEvent): Promise<void> {
     const heartbeat = setInterval(() => {
       if (!this.isCompleted(bufferId)) {
         this.sendFrame({ type: "inbound_processing", bufferId });

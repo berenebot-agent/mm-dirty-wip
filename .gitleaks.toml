@@ -1,10 +1,10 @@
-# MailMoose gitleaks config.
+# Mammoth Mail gitleaks config.
 # Extends the bundled gitleaks default rules (see [extend].use_default),
 # then allowlists specific historical commits that were reviewed and found to
 # contain only test fixtures or documentation prose -- never live credentials.
 # New code is covered by the default rules; do not append new test secrets to
 # these commits (commits are immutable).
-title = "mailmoose"
+title = "mammothmail"
 [extend]
 use_default = true
 [allowlist]

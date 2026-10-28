@@ -18,7 +18,7 @@ func TestRemoteMXUIExplainsOutboundConnectionAndShowsReceiverSettings(t *testing
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=remotemx").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	for _, want := range []string{
 		"Set up a receiver you run separately.",
-		"MailMoose connects outbound to it over HTTP/2.",
+		"Mammoth Mail connects outbound to it over HTTP/2.",
 		"Remote SMTP receiving guide",
 		"Point the MX records for <code>example.com</code> at that hostname",
 		"configured on the receiver itself, not here",
@@ -90,7 +90,7 @@ func TestRemoteMXSingleSaveAndRemove(t *testing.T) {
 		t.Fatalf("receiver not saved: %+v %v", receiver, err)
 	}
 	// A refusal already returned by the account receiver API must also be visible
-	// in the domain Receiving dialog, not only in the Antler status list.
+	// in the domain Receiving dialog, not only in the Tusk status list.
 	svc.RemoteMXRuntime = uatRemoteMXStatus{}
 	panel := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=remotemx").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	if !strings.Contains(panel, `data-remote-mx-status`) || !strings.Contains(panel, "receiver refused the session (HTTP 405)") {

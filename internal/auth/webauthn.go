@@ -1,7 +1,7 @@
 // Package auth's WebAuthn support implements passkey registration and login.
 // It is deliberately thin: the protocol cryptography (CBOR, attestation, COSE
 // keys, origin/RP checks) lives in github.com/go-webauthn/webauthn, and this
-// file only wires it to MailMoose's user store and a short-lived, in-memory
+// file only wires it to Mammoth Mail's user store and a short-lived, in-memory
 // challenge store.
 package auth
 
@@ -26,7 +26,7 @@ type WebAuthnConfig struct {
 	RPOrigins     []string
 }
 
-// WebAuthnUser is the credential-bearing view of a MailMoose user the ceremony
+// WebAuthnUser is the credential-bearing view of a Mammoth Mail user the ceremony
 // layer needs. WebAuthnID must be stable and unique; the store uses the user's
 // row id encoded to bytes.
 type WebAuthnUser struct {
@@ -134,7 +134,7 @@ func NewWebAuthnService(cfg WebAuthnConfig) (*WebAuthnService, error) {
 		return nil, errors.New("webauthn: at least one RP origin is required")
 	}
 	if cfg.RPDisplayName == "" {
-		cfg.RPDisplayName = "MailMoose"
+		cfg.RPDisplayName = "Mammoth Mail"
 	}
 	wa, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: cfg.RPDisplayName,

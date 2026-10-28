@@ -623,3 +623,153 @@ func TestRemoteThreadsKeysetPaginationNoSkip(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// TestReconcileKeepsFolderIDOnRename proves a renamed remote folder keeps its
+// Mammoth Mail id when the provider's own identity (StableID) is unchanged, rather
+// than being re-minted under the new path. That is what makes a client-held
+// folder id survive a rename.
+func TestReconcileKeepsFolderIDOnRename(t *testing.T) {
+	t.Parallel()
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const labelID = "Label_42"
+	folders, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: labelID, StableID: labelID, Name: "Old Name", Selectable: true, UIDValidity: 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before model.Folder
+	for _, f := range folders {
+		if f.Path == labelID {
+			before = f
+		}
+	}
+	if before.ID == "" {
+		t.Fatal("folder not indexed")
+	}
+	// The provider renamed it: same label id, new display name.
+	folders, err = st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: labelID, StableID: labelID, Name: "New Name", Selectable: true, UIDValidity: 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after model.Folder
+	for _, f := range folders {
+		if f.Path == labelID {
+			after = f
+		}
+	}
+	if after.ID != before.ID {
+		t.Fatalf("rename re-minted the folder id: %q -> %q", before.ID, after.ID)
+	}
+	if after.Name != "New Name" {
+		t.Fatalf("name = %q want New Name", after.Name)
+	}
+}
+
+// TestReconcileRenameWithoutStableIDMintsNewID pins the behaviour for a provider
+// with no stable folder identity (IMAP): a path it has not seen is a new folder,
+// so a rename there is carried by RenameRemoteFolderPaths instead.
+func TestReconcileRenameWithoutStableIDMintsNewID(t *testing.T) {
+	t.Parallel()
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "Old", Name: "Old", Selectable: true, UIDValidity: 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before model.Folder
+	for _, f := range folders {
+		if f.Path == "Old" {
+			before = f
+		}
+	}
+	folders, err = st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "New", Name: "New", Selectable: true, UIDValidity: 5},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after model.Folder
+	for _, f := range folders {
+		if f.Path == "New" {
+			after = f
+		}
+	}
+	if after.ID == "" || after.ID == before.ID {
+		t.Fatalf("without a stable id the new path must be a new folder: %q -> %q", before.ID, after.ID)
+	}
+}
+
+// TestRenameRemoteFolderPathsMovesSubtreeIDs proves the IMAP rename hint rewrites
+// the renamed folder and every descendant to the new path while keeping each
+// row's id, so a following reconcile finds them where they already are.
+func TestRenameRemoteFolderPathsMovesSubtreeIDs(t *testing.T) {
+	t.Parallel()
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "Projects", Name: "Projects", Selectable: true, UIDValidity: 5},
+		{Path: "Projects/Child", Name: "Child", ParentPath: "Projects", Selectable: true, UIDValidity: 6},
+		{Path: "Projects/Child/Deep", Name: "Deep", ParentPath: "Projects/Child", Selectable: true, UIDValidity: 7},
+		{Path: "Other", Name: "Other", Selectable: true, UIDValidity: 8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, f := range folders {
+		ids[f.Path] = f.ID
+	}
+	moved, err := st.RenameRemoteFolderPaths(ctx, acct, in.ID, "Projects", "Renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved != 2 {
+		t.Fatalf("moved %d descendant rows, want 2", moved)
+	}
+	folders, err = st.ListFolders(ctx, acct, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]model.Folder{}
+	for _, f := range folders {
+		paths[f.Path] = f
+	}
+	for _, want := range []struct{ path, oldPath, parent string }{
+		{"Renamed", "Projects", ""},
+		{"Renamed/Child", "Projects/Child", "Renamed"},
+		{"Renamed/Child/Deep", "Projects/Child/Deep", "Renamed/Child"},
+	} {
+		f, ok := paths[want.path]
+		if !ok {
+			t.Fatalf("folder %q missing after the subtree move", want.path)
+		}
+		if f.ID != ids[want.oldPath] {
+			t.Fatalf("%q id = %q want %q (unchanged)", want.path, f.ID, ids[want.oldPath])
+		}
+		if f.ParentPath != want.parent {
+			t.Fatalf("%q parent = %q want %q", want.path, f.ParentPath, want.parent)
+		}
+	}
+	// A sibling outside the renamed subtree is untouched.
+	if f := paths["Other"]; f.ID != ids["Other"] {
+		t.Fatalf("sibling id changed: %q -> %q", ids["Other"], f.ID)
+	}
+}
