@@ -282,7 +282,7 @@ func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
 		t.Fatalf("one count: %+v %v", items, err)
 	}
 	// With a provider total the denominator is real and is flagged as an
-	// estimate: Gmail/One report a count over every label while MailMoose indexes
+	// estimate: Gmail/One report a count over every label while Mammoth Mail indexes
 	// a folder subset, so the fraction is approximate.
 	if err := svc.Store.SaveMetadataSyncTotal(ctx, u.AccountID, box, 5); err != nil {
 		t.Fatal(err)

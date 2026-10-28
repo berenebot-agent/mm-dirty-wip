@@ -44,7 +44,7 @@ def main():
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        for executable, filename in [("python3", "mailmoose.py"), ("bash", "mailmoose.sh")]:
+        for executable, filename in [("python3", "mammothmail.py"), ("bash", "mammothmail.sh")]:
             command = [executable, str(assets / filename), "--base",
                        f"http://127.0.0.1:{server.server_port}", "--key", "test-key",
                        "--inbox", "inb_test"]

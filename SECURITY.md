@@ -1,6 +1,6 @@
 # Security Policy
 
-MailMoose handles untrusted email, credentials and tenant data, so we take
+Mammoth Mail handles untrusted email, credentials and tenant data, so we take
 security reports seriously. Thank you for helping keep the project and its
 operators safe.
 
@@ -128,7 +128,7 @@ an address is not proof that the original sender controls that address.
 
 **Status:** intentional approval delivery — decision `D133`.
 
-An approval notification addressed to a separate MailMoose-managed approver inbox
+An approval notification addressed to a separate MammothMail-managed approver inbox
 is ordinary incoming mail there. Its authorized readers can see the token, just
 as readers could if that inbox were hosted by another provider. The requesting
 inbox still consumes mail carrying an issued token rather than exposing it to its
@@ -157,9 +157,9 @@ service even without reading its response.
 **Status:** accepted risk (decision `D097`; consistent with `D058`/`D059`).
 
 A standalone inbox has no provider-signed inbound envelope. When an assistant
-submits a draft for approval on a standalone inbox set to **MailMoose
+submits a draft for approval on a standalone inbox set to **Mammoth Mail
 approvals**, the approval email is delivered back through the inbox's own
-connected mailbox and returned to MailMoose over a path whose envelope sender is
+connected mailbox and returned to Mammoth Mail over a path whose envelope sender is
 not attested. The approval decision therefore matches the **message `From`
 address** directly against the nominated approver
 (`Service.HandleRemoteApprovalControl` in `internal/app/control.go`), together
@@ -204,7 +204,7 @@ A 32-byte `APP_ENCRYPTION_KEY` has no legacy derivation and is used directly.
 
 ## Supported versions
 
-MailMoose is in public beta. Only the latest release and the current `main`
+Mammoth Mail is in public beta. Only the latest release and the current `main`
 branch are supported; there is no backport line for older versions.
 
 ## What to expect
@@ -221,13 +221,13 @@ details.
 
 ## Operators
 
-If you run MailMoose, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
+If you run Mammoth Mail, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
 snapshot of `/data` backed up separately, as described in the README's backup
 section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.
 
 The root encryption key is optional to supply. When `APP_ENCRYPTION_KEY` is
-unset, MailMoose generates one into `<DATA_DIR>/encryption_key` (mode 0600) on
+unset, Mammoth Mail generates one into `<DATA_DIR>/encryption_key` (mode 0600) on
 first start and logs the path. Setting your own key is what keeps the key out of
 a `/data` backup, so a backup that leaks cannot decrypt stored provider
 credentials; a generated key lives in `/data` and a `/data` backup is therefore
@@ -244,10 +244,10 @@ responses, diagnostic bundles, admin pages, or API responses. Prefer the
 `*_FILE` forms with Docker secrets over a plain environment variable. Because
 the configured secret owns this login, the account settings page blocks the
 system administrator from changing its email or password and
-`mailmoose admin reset-password` refuses it, directing the operator to the
+`mammothmail admin reset-password` refuses it, directing the operator to the
 configuration instead. Resets for ordinary users revoke all their browser
 sessions and record an audit event without recording the password; API keys are
-revoked only on an explicit `mailmoose admin revoke-api-keys`.
+revoked only on an explicit `mammothmail admin revoke-api-keys`.
 
 The system administrator may additionally register passkeys (WebAuthn). These
 are **additive**: they are an independent sign-in method the configuration never

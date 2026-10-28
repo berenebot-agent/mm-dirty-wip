@@ -195,7 +195,7 @@ func TestPostmarkGeneratedCredentialFlash(t *testing.T) {
 	}
 	editor := domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=receiving&provider=postmark").Body.String()
 	group := providerGroupHTML(t, dialogHTML(t, editor, "domain-receiving-dialog-"+d.ID), "postmark")
-	if !strings.Contains(group, "credentials are already saved") || strings.Contains(group, "setup-webhook-url") || strings.Contains(group, "Save in MailMoose first") {
+	if !strings.Contains(group, "credentials are already saved") || strings.Contains(group, "setup-webhook-url") || strings.Contains(group, "Save in Mammoth Mail first") {
 		t.Fatal("configured Postmark must explain one-time credentials without offering a bare URL")
 	}
 }

@@ -62,10 +62,10 @@ var favicon32PNG []byte
 //go:embed assets/apple-touch-icon.png
 var appleTouchIconPNG []byte
 
-//go:embed assets/mailmoose.py
+//go:embed assets/mammothmail.py
 var pythonClient []byte
 
-//go:embed assets/mailmoose.sh
+//go:embed assets/mammothmail.sh
 var bashClient []byte
 
 //go:embed assets/curl-cookbook.txt
@@ -164,7 +164,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	// reports 501 rather than offering a button that cannot work.
 	if rpID := svc.Config.WebAuthnRPID(); rpID != "" && svc.Config.SecureContext() {
 		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
-			RPDisplayName: "MailMoose",
+			RPDisplayName: "Mammoth Mail",
 			RPID:          rpID,
 			RPOrigins:     svc.Config.WebAuthnOrigins(),
 		})
@@ -814,7 +814,7 @@ func (s *Server) withPreAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Add("Vary", "Cookie")
 			w.WriteHeader(http.StatusForbidden)
-			s.render(w, r, `<section class="card"><h1>Unable to verify your sign-in request</h1><p>Refresh the page containing the form and try again. If this keeps happening, make sure cookies are enabled.</p><p><strong>Self-hosting?</strong> Check that <code>BASE_URL</code> matches the address you use to open MailMoose, including <code>http://</code> or <code>https://</code>. An HTTPS base URL can prevent sign-in when you access the app over HTTP.</p><a href="/login">Return to sign in</a></section>`, pageData{Title: "Unable to verify your sign-in request"})
+			s.render(w, r, `<section class="card"><h1>Unable to verify your sign-in request</h1><p>Refresh the page containing the form and try again. If this keeps happening, make sure cookies are enabled.</p><p><strong>Self-hosting?</strong> Check that <code>BASE_URL</code> matches the address you use to open Mammoth Mail, including <code>http://</code> or <code>https://</code>. An HTTPS base URL can prevent sign-in when you access the app over HTTP.</p><a href="/login">Return to sign in</a></section>`, pageData{Title: "Unable to verify your sign-in request"})
 			return
 		}
 		next(w, r)

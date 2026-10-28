@@ -85,10 +85,10 @@ func TestDomainSendingDKIMResponse(t *testing.T) {
 	}
 }
 
-// TestDomainSendingDKIMKeyIsGeneratedAndDerived proves the key is MailMoose's:
+// TestDomainSendingDKIMKeyIsGeneratedAndDerived proves the key is Mammoth Mail's:
 // a caller cannot supply one (the field is not settable), the generated key is
 // used, and the reported public key is derived from it so the record an operator
-// publishes always matches what MailMoose signs with.
+// publishes always matches what Mammoth Mail signs with.
 func TestDomainSendingDKIMKeyIsGeneratedAndDerived(t *testing.T) {
 	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)

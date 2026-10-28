@@ -136,7 +136,7 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 			id.provider = "unknown"
 			if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, m.InboxID); err == nil {
 				id.kind = box.Kind
-				id.provider = "mailmoose"
+				id.provider = "mammothmail"
 				if box.Kind == model.InboxKindStandalone {
 					id.provider = "imap"
 					switch {
@@ -188,7 +188,7 @@ func (s *Server) labelIdentity(ctx context.Context, p model.Principal, box model
 	return id
 }
 
-// labelFolderIndex resolves native folder paths to stable MailMoose identities.
+// labelFolderIndex resolves native folder paths to stable Mammoth Mail identities.
 func (s *Server) labelFolderIndex(ctx context.Context, p model.Principal, box model.Inbox) (map[string]model.Folder, map[string]model.Folder) {
 	folders, err := s.labelFolders(ctx, p, box)
 	if err != nil {

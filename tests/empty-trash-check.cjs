@@ -101,7 +101,7 @@ function run() {
     }
   };
   const window = {
-    mailmooseStatus: { busy() {} },
+    mammothmailStatus: { busy() {} },
     addEventListener() {},
     setInterval() { return 0; },
     setTimeout() { return 0; },
@@ -121,7 +121,7 @@ function run() {
     console
   };
   vm.runInNewContext(moduleSource, context);
-  assert.equal(typeof window.mailmooseActionUpdateForTest, 'function', 'test seam is exported');
+  assert.equal(typeof window.mammothmailActionUpdateForTest, 'function', 'test seam is exported');
   // The popup paints only while open; a header click opens it, but the module
   // also installs its own click-away handler that our synthetic click would
   // trigger, so open it through the control's dedicated activation path.
@@ -146,7 +146,7 @@ function texts(row, className) {
 // A completed parent operation leaves the drawer as soon as it completes.
 {
   const { window, body, document } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [
       { id: 'child-id', message_id: 'msg_1', state: 'pending', input: { kind: 'purge' } },
@@ -161,7 +161,7 @@ function texts(row, className) {
 // Discovery phase reports finding messages, not a purged count.
 {
   const { window, body, document } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [{ id: 'find-id', message_id: 'empty-trash:box', state: 'pending', input: { kind: 'empty_trash' }, empty_trash: { phase: 'discovering', total: 12, purged: 0, queued: 0 } }]
   });
@@ -171,7 +171,7 @@ function texts(row, className) {
 // Failed parents keep the retry path and surface the public detail.
 {
   const { window, body, document } = run();
-  window.mailmooseActionUpdateForTest({
+  window.mammothmailActionUpdateForTest({
     csrf: 'token',
     items: [{ id: 'fail-id', message_id: 'empty-trash:box', state: 'failed', error: 'No remote Trash folder mapped', input: { kind: 'empty_trash' }, empty_trash: { phase: 'discovering', total: 0, purged: 0, queued: 0 } }]
   });

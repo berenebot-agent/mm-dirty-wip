@@ -71,12 +71,12 @@ func TestAuthoringModeDefaultsByKind(t *testing.T) {
 	standalone := standaloneBox(t, s, u.AccountID, "agent@remote.example")
 
 	own := owner(domain, u.AccountID)
-	// Domain default: MailMoose approval.
+	// Domain default: Mammoth Mail approval.
 	ds, err := s.GetInboxAuthoringSettings(ctx, own, domain.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds.Mode != model.AuthoringMailMooseApproval {
+	if ds.Mode != model.AuthoringLocalApproval {
 		t.Fatalf("domain default mode=%q", ds.Mode)
 	}
 	// Standalone default: RemoteDraft, with the connected address as notify.
@@ -92,14 +92,14 @@ func TestAuthoringModeDefaultsByKind(t *testing.T) {
 		t.Fatalf("standalone notify=%q overridden=%v", ss.NotifyAddress, ss.NotifyOverridden)
 	}
 	// An explicit override is honoured and cleared.
-	if err = s.SetInboxAuthoringMode(ctx, ownS, standalone.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err = s.SetInboxAuthoringMode(ctx, ownS, standalone.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.SetInboxNotifyAddress(ctx, ownS, standalone.ID, "notify@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetInboxAuthoringSettings(ctx, ownS, standalone.ID)
-	if got.Mode != model.AuthoringMailMooseApproval || got.NotifyAddress != "notify@example.com" || !got.NotifyOverridden {
+	if got.Mode != model.AuthoringLocalApproval || got.NotifyAddress != "notify@example.com" || !got.NotifyOverridden {
 		t.Fatalf("override settings=%+v", got)
 	}
 	if err = s.SetInboxNotifyAddress(ctx, ownS, standalone.ID, ""); err != nil {
@@ -133,11 +133,11 @@ func TestAuthoringModeDomainPresetApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds.Mode != model.AuthoringMailMooseApproval {
+	if ds.Mode != model.AuthoringLocalApproval {
 		t.Fatalf("domain mode after rejected set=%q", ds.Mode)
 	}
 	// A domain inbox can still be pinned explicitly to the approval workflow.
-	if err := s.SetInboxAuthoringMode(ctx, own, domain.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := s.SetInboxAuthoringMode(ctx, own, domain.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	// A legacy domain row stored as remote_draft normalizes on read.
@@ -150,7 +150,7 @@ func TestAuthoringModeDomainPresetApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds.Mode != model.AuthoringMailMooseApproval {
+	if ds.Mode != model.AuthoringLocalApproval {
 		t.Fatalf("legacy domain remote_draft did not normalize: %q", ds.Mode)
 	}
 }

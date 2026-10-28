@@ -148,7 +148,7 @@ func TestFreshBaselineAndRestart(t *testing.T) {
 	if err := dbschema.Validate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 3 || scalar(t, db, `PRAGMA user_version`) != 1 {
+	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 4 || scalar(t, db, `PRAGMA user_version`) != 1 {
 		t.Fatal("fresh database did not get exactly the public baseline")
 	}
 	if scalar(t, db, `SELECT count(*) FROM sqlite_schema WHERE name IN ('api_keys','api_key_mailbox_roles','hermes_connections','external_aliases','one_accounts','system_settings','outbound_credentials','inbound_credentials','idx_inboxes_id_account')`) != 0 {

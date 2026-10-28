@@ -54,9 +54,9 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	if strings.Contains(body, "Do not use the SMTP greeting hostname") {
 		t.Fatal("Direct MX setup retains redundant MX-target guidance")
 	}
-	// The client domain points at MailMoose's URL host, not the mx.test greeting.
+	// The client domain points at Mammoth Mail's URL host, not the mx.test greeting.
 	if !strings.Contains(body, `Point the MX records for <code>example.com</code> at <code>example.test</code>`) {
-		t.Fatalf("Direct MX panel must name the client domain and MailMoose URL host:\n%s", body)
+		t.Fatalf("Direct MX panel must name the client domain and Mammoth Mail URL host:\n%s", body)
 	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
 		t.Fatal("account admin must see status only, not receiver controls")
@@ -261,7 +261,7 @@ func TestDirectMXLabel(t *testing.T) {
 	svc, h, u, domain, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)
-	if !strings.Contains(body, "Direct MX (SMTP to the MailMoose receiver)") {
+	if !strings.Contains(body, "Direct MX (SMTP to the Mammoth Mail receiver)") {
 		t.Fatalf("provider option missing the Direct MX label:\n%s", body)
 	}
 }

@@ -141,6 +141,6 @@ jobs:
             echo "GitHub Release already exists; skipping."
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "MailMoose $GITHUB_REF_NAME" \
+              --title "Mammoth Mail $GITHUB_REF_NAME" \
               --generate-notes
           fi

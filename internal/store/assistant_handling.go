@@ -236,7 +236,7 @@ func (s *Store) InboxAccountID(ctx context.Context, inboxID string) (string, err
 // CreateAssistantHandling records a RemoteDraft handoff and freezes its draft in
 // one transaction. The caller must have validated that the draft is sendable and
 // that the inbox accepts a handoff. It returns the requested event plus any
-// expiry event produced when clearing a stale MailMooseApproval request for the
+// expiry event produced when clearing a stale LocalApproval request for the
 // same draft so the two request kinds never coexist.
 func (s *Store) CreateAssistantHandling(ctx context.Context, p model.Principal, ins AssistantHandlingInsert) (model.AssistantHandlingRequest, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)

@@ -142,7 +142,7 @@ func TestMessageContractAcrossInboxKinds(t *testing.T) {
 				t.Fatal("list unexpectedly contains HTML")
 			}
 			if kind == "domain" {
-				if item["inbox_kind"] != "domain" || item["provider"] != "mailmoose" || item["message_transport"] != "mailgun" || item["direction"] != "inbound" || item["is_spam"] != false || item["snippet"] != "contract body" {
+				if item["inbox_kind"] != "domain" || item["provider"] != "mammothmail" || item["message_transport"] != "mailgun" || item["direction"] != "inbound" || item["is_spam"] != false || item["snippet"] != "contract body" {
 					t.Fatalf("lost local metadata: %+v", item)
 				}
 			} else {

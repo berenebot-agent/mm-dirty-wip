@@ -147,13 +147,13 @@ func TestCheckMXQueriesAbsoluteName(t *testing.T) {
 }
 
 // TestCheckTXTQueriesAbsoluteName proves the same for the TXT check: the
-// _mailmoose-mx name must be qualified or a search-suffix failure can mask its
+// _mammothmail-mx name must be qualified or a search-suffix failure can mask its
 // absent answer as dns_error.
 func TestCheckTXTQueriesAbsoluteName(t *testing.T) {
 	var got string
 	res := recordingResolver{txt: func(name string) { got = name }}
 	CheckTXT(context.Background(), res, "example.test", "id", []byte("x"), "v=MM1")
-	if want := "_mailmoose-mx.example.test."; got != want {
+	if want := "_mammothmail-mx.example.test."; got != want {
 		t.Fatalf("TXT lookup queried %q, want %q", got, want)
 	}
 }
@@ -213,7 +213,7 @@ func TestCheckTXTAgreesWithReceiverParser(t *testing.T) {
 // published, red (mismatch) when a different key is published, and dns_error
 // when the lookup cannot be completed.
 func TestCheckDKIM(t *testing.T) {
-	const name = "mailmoose._domainkey.example.test"
+	const name = "mammothmail._domainkey.example.test"
 	const want = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"
 	for _, tc := range []struct {
 		name    string

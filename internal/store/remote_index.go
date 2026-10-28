@@ -149,7 +149,7 @@ type RemoteFolderSync struct {
 	RemoteStatus string
 	// StableID is the provider's own identity for the folder, which survives a
 	// rename (a Gmail label id, a Graph folder id). It is stored as the row's
-	// path, so it lets a renamed folder keep its MailMoose id instead of being
+	// path, so it lets a renamed folder keep its Mammoth Mail id instead of being
 	// re-minted under the new path. Empty for a provider with no entity id
 	// (IMAP), whose renames are carried by RenameRemoteFolderPaths instead.
 	StableID string
@@ -241,7 +241,7 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 		if err == sql.ErrNoRows && f.StableID != "" && f.StableID != path {
 			// The provider renamed the folder: its stable identity is unchanged but
 			// it now sits at a new path. Reuse the row and move it, so the folder and
-			// every client holding its id keep the same MailMoose id.
+			// every client holding its id keep the same Mammoth Mail id.
 			err = tx.QueryRowContext(ctx, `SELECT id FROM inbox_folders WHERE inbox_id=? AND origin='remote' AND path=?`, inboxID, f.StableID).Scan(&existingID)
 			renamed = err == nil
 			// The old path and the new one are both claimed once the row moves, so a

@@ -407,7 +407,7 @@ func TestIncludedReceiverIgnoresLegacyHostnameEnv(t *testing.T) {
 	rt.reconcile(ctx)
 	edge.mu.Lock()
 	defer edge.mu.Unlock()
-	if len(edge.configure) != 1 || edge.configure[0].Hostname != "mailmoose-mx" || edge.configure[0].SMTP.Hostname != "mailmoose-mx" {
+	if len(edge.configure) != 1 || edge.configure[0].Hostname != "mammothmail-mx" || edge.configure[0].SMTP.Hostname != "mammothmail-mx" {
 		t.Fatalf("legacy environment changed persisted receiver settings: %+v", edge.configure)
 	}
 }

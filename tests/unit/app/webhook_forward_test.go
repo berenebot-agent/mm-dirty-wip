@@ -500,7 +500,7 @@ func receivedEvents(t *testing.T, svc *app.Service, accountID, inboxID string) [
 }
 
 // TestWebhookForwardContractFixture exports a synthetic request fixture for the
-// joint MailMoose/Billbot wire-contract check when BILLBOT_CONTRACT_FIXTURE is
+// joint Mammoth Mail/Billbot wire-contract check when BILLBOT_CONTRACT_FIXTURE is
 // set to a file path whose parent directory exists. It is skipped otherwise, so
 // ordinary test runs never write files.
 func TestWebhookForwardContractFixture(t *testing.T) {
@@ -545,7 +545,7 @@ func TestWebhookForwardContractFixture(t *testing.T) {
 		"body_base64":  base64.StdEncoding.EncodeToString(body),
 		"auth_header":  auth,
 		"bearer_token": token,
-		"note":         "synthetic MailMoose forward webhook request; do not use as live data",
+		"note":         "synthetic Mammoth Mail forward webhook request; do not use as live data",
 	}
 	blob, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {

@@ -787,7 +787,7 @@ func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
 // when the caller named no folder; an explicit folder always wins and a role
 // then narrows it, so trashed=true on a folder outside Trash selects nothing and
 // folder=Sent&direction=outbound is Sent. A standalone folder is named by its
-// stable MailMoose id or by its provider path: the id is resolved to the
+// stable Mammoth Mail id or by its provider path: the id is resolved to the
 // provider path, because a provider does not know our ids (Microsoft's path is
 // the Graph folder id, so passing a fld_ id through reads the whole mailbox).
 // The bool reports whether anything can match. An unknown path is passed
@@ -812,7 +812,7 @@ func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, fol
 		}
 		return mapped.Path, true
 	}
-	// A standalone folder is named by its stable MailMoose id or by its provider
+	// A standalone folder is named by its stable Mammoth Mail id or by its provider
 	// path. A folder this inbox does not know keeps the caller's value so the
 	// backend's own scope check answers "not in this mailbox's scope" (404)
 	// instead of silently turning it into a whole-mailbox read.

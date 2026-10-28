@@ -48,8 +48,8 @@ func verifyWith(t *testing.T, signed []byte, domain, selector string, publicPEM 
 }
 
 // TestGeneratedKeySignsAndVerifies is the load-bearing test for this package:
-// a key MailMoose generates must produce a signature that verifies against the
-// public key MailMoose hands the operator. If these two ever diverge, mail is
+// a key Mammoth Mail generates must produce a signature that verifies against the
+// public key Mammoth Mail hands the operator. If these two ever diverge, mail is
 // silently sent unsigned-but-looking-signed.
 func TestGeneratedKeySignsAndVerifies(t *testing.T) {
 	privPEM, pubPEM, err := dkimsign.GenerateRSA2048()
@@ -60,11 +60,11 @@ func TestGeneratedKeySignsAndVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePrivateKey: %v", err)
 	}
-	signed, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mailmoose", key)
+	signed, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mammothmail", key)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	verifs := verifyWith(t, signed, "example.com", "mailmoose", pubPEM)
+	verifs := verifyWith(t, signed, "example.com", "mammothmail", pubPEM)
 	if len(verifs) != 1 {
 		t.Fatalf("got %d signatures, want exactly 1", len(verifs))
 	}
@@ -87,7 +87,7 @@ func TestSignPrependsSignatureHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePrivateKey: %v", err)
 	}
-	signed, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mailmoose", key)
+	signed, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mammothmail", key)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSignRejectsEmptyInputs(t *testing.T) {
 		t.Fatalf("ParsePrivateKey: %v", err)
 	}
 	for name, tc := range map[string]struct{ domain, selector string }{
-		"no domain":   {"", "mailmoose"},
+		"no domain":   {"", "mammothmail"},
 		"no selector": {"example.com", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -124,7 +124,7 @@ func TestSignRejectsEmptyInputs(t *testing.T) {
 			}
 		})
 	}
-	if _, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mailmoose", nil); err == nil {
+	if _, err := dkimsign.Sign([]byte(sampleMessage), "example.com", "mammothmail", nil); err == nil {
 		t.Fatal("expected an error for a nil key")
 	}
 }
@@ -190,7 +190,7 @@ func TestPublicKeyPEMIsDerivedFromPrivateKey(t *testing.T) {
 }
 
 func TestRecordNameAndTXTValue(t *testing.T) {
-	if got, want := dkimsign.RecordName("mailmoose", "example.com"), "mailmoose._domainkey.example.com"; got != want {
+	if got, want := dkimsign.RecordName("mammothmail", "example.com"), "mammothmail._domainkey.example.com"; got != want {
 		t.Errorf("RecordName = %q, want %q", got, want)
 	}
 	got := dkimsign.TXTRecordValue("QUJDMTIz")

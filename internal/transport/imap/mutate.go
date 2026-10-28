@@ -266,7 +266,7 @@ func (a *Adapter) ExpungeUIDs(ctx context.Context, folder string, uidValidity ui
 func (a *Adapter) DeleteMessage(ctx context.Context, loc Locator) error {
 	// Refuse before marking the message \Deleted when the server cannot remove
 	// it by UID: otherwise the message is left flagged \Deleted (hidden by many
-	// clients) while the caller is told the delete failed, so MailMoose and the
+	// clients) while the caller is told the delete failed, so Mammoth Mail and the
 	// provider disagree. A blanket EXPUNGE is never issued.
 	if !a.caps.UIDPlus {
 		return Unsupported("deleting a message requires UIDPLUS or IMAP4rev2; a blanket EXPUNGE is not issued")

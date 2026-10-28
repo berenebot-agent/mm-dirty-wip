@@ -61,7 +61,7 @@ func antlerManifestViewFromConfig(values map[string]any) *antlerManifestView {
 // resolver lookup on every status poll is wasted work. Callers that need the
 // checks call dialMXDNS afterwards (the setup wizard, and the dashboard light).
 func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg store.DomainReceivingConfig) dialMXLiveView {
-	view := dialMXLiveView{TXTName: "_mailmoose-mx." + domainName}
+	view := dialMXLiveView{TXTName: "_mammothmail-mx." + domainName}
 	values := map[string]any{}
 	if dec, err := s.Service.DecryptDomainReceivingConfig(cfg); err == nil {
 		values = dec
@@ -186,7 +186,7 @@ func (s *Server) dialMXExtraMX(domainID string) []string {
 // one connector is green but the domain's MX records also name servers that are
 // not Antler receivers (mail is delivered, but routing is ambiguous and may not
 // go via Antler); red otherwise. A receiver reports "ready" only after it has
-// proved BOTH domain authority (its _mailmoose-mx TXT key) and routing (its own
+// proved BOTH domain authority (its _mammothmail-mx TXT key) and routing (its own
 // SMTP hostname is published in the domain's MX records), so a ready row already
 // means mail will be delivered and the aggregate needs no separate MX check
 // beyond the extra-record warning. A receiver that is not routed reports
@@ -202,7 +202,7 @@ func (s *Server) dialMXExtraMX(domainID string) []string {
 func dialMXHealth(statuses []mxdialStatusView, unexpectedMX []string, now time.Time) (light, title string) {
 	for _, st := range statuses {
 		if st.Reason == "replaced" {
-			return "danger", "Another connection took over this receiver's domain binding — check for another MailMoose instance using the same domain key"
+			return "danger", "Another connection took over this receiver's domain binding — check for another Mammoth Mail instance using the same domain key"
 		}
 	}
 	ready := 0

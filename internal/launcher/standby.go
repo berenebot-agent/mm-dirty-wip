@@ -136,8 +136,8 @@ func StandbyEnv(cmdFD, replyFD int) []string {
 	if lvl := strings.TrimSpace(os.Getenv(dialmx.EnvLogLevel)); lvl != "" {
 		env = append(env, dialmx.EnvLogLevel+"="+lvl)
 	}
-	if servers := strings.TrimSpace(os.Getenv("MAILMOOSE_DNS_FALLBACK_SERVERS")); servers != "" {
-		env = append(env, "MAILMOOSE_DNS_FALLBACK_SERVERS="+servers)
+	if servers := strings.TrimSpace(os.Getenv("MAMMOTHMAIL_DNS_FALLBACK_SERVERS")); servers != "" {
+		env = append(env, "MAMMOTHMAIL_DNS_FALLBACK_SERVERS="+servers)
 	}
 	return env
 }

@@ -12,19 +12,19 @@
 # directory basename, so a checkout whose parent directory is also named
 # "repo" would collide with any sibling project and make each project see the
 # other's containers as orphans, tearing them down with `--remove-orphans`.
-name: mailmoose
+name: mammothmail
 
 services:
-  mailmoose:
-    container_name: mailmoose
-    image: mailmoose:latest
+  mammothmail:
+    container_name: mammothmail
+    image: mammothmail:latest
     build:
       context: .
       args:
-        # Stamp the deployed commit: MAILMOOSE_BUILD=$(git rev-parse --short HEAD)
+        # Stamp the deployed commit: MAMMOTHMAIL_BUILD=$(git rev-parse --short HEAD)
         # docker compose up -d --build. Empty records the build timestamp instead;
         # either is reported by /healthz as "build".
-        MAILMOOSE_BUILD: ${MAILMOOSE_BUILD:-}
+        MAMMOTHMAIL_BUILD: ${MAMMOTHMAIL_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # System administrator credentials: when set in .env they are authoritative

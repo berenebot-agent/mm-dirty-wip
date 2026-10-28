@@ -228,7 +228,7 @@ func outboundProviderLabel(provider string) string {
 
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
 // keyed on the receiving domain rather than the full recipient, so random local
-// parts on a MailMoose-controlled domain cannot each produce an audit row; the
+// parts on a MammothMail-controlled domain cannot each produce an audit row; the
 // offending recipient is still recorded in the detail for operational
 // visibility.
 func (s *Service) auditUnrouted(provider, recipient string) {
@@ -320,7 +320,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 // transactionally, then publishes the realtime event. A future SMTP ingress can
 // call the same core with its own authorization context.
 //
-// A provider event may address several MailMoose recipients (Resend carries the
+// A provider event may address several Mammoth Mail recipients (Resend carries the
 // full To list). Each distinct inbox is delivered to once, under its own
 // sender-allow-list and quota rules; a delivery to one inbox never suppresses
 // or duplicates another.
@@ -809,7 +809,7 @@ func (s *Service) saveDomainSendingConfig(ctx context.Context, accountID, domain
 	if err != nil {
 		return store.DomainSendingConfig{}, err
 	}
-	// Direct MX signs with a key MailMoose generates. This runs here rather than
+	// Direct MX signs with a key Mammoth Mail generates. This runs here rather than
 	// in validateConfig because it is provider-specific key material. The key
 	// lives on the domain row; this copies it into the config so the delivery
 	// path signs from the values the operator was shown.
@@ -1654,7 +1654,7 @@ func (s *Service) CreateRelay(ctx context.Context, p model.Principal, inboxID, n
 // CreateRelayEnrollCode mints a one-time setup code that a connector host
 // redeems at POST /relay/enroll. The code carries the inbox, name and
 // connector kind; it is the authority, not an address, so the claiming host
-// supplies the MailMoose URL.
+// supplies the Mammoth Mail URL.
 func (s *Service) CreateRelayEnrollCode(ctx context.Context, p model.Principal, inboxID, name string, kind store.RelayKind, ttl time.Duration) (string, error) {
 	if !p.Admin {
 		return "", store.ErrForbidden

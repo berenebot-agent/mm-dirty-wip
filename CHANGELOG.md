@@ -166,6 +166,16 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **Product renamed to Mammoth Mail (API change explicitly approved).** The
+  approval authoring mode `mailmoose_approval` is now **`local_approval`**
+  everywhere it appears in the API, including `GET`/`PUT
+  /v1/inboxes/{id}/authoring`. Clients sending or reading the old value must
+  switch. Stored values are migrated (migration 004). The DNS proof record
+  moves from `_mailmoose-mx.<domain>` to **`_mammothmail-mx.<domain>`**, which
+  every domain must republish. The display name, environment variables, client
+  configuration path and script names change to Mammoth Mail / `mammothmail`.
+  See **D160**.
+
 - **Unsupported-operation error code (API change explicitly approved).**
   Unsupported mailbox operations keep HTTP **409**, but return
   `code: "unsupported_operation"` instead of `conflict`. Ordinary conflicts

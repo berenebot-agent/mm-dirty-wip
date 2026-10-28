@@ -14,6 +14,7 @@ tests/logs/
 # run via the Docker wrapper; lands root-owned in the working tree).
 /server
 # Built on demand by `make mx-fixture` (used by the launcher RSS test).
+tests/fixtures/mammothmail-mx
 tests/fixtures/mailmoose-mx
 repo.zip
 # Scratch/agent working files (ad-hoc test harnesses, probe results). Never

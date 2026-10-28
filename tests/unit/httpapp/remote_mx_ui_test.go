@@ -18,7 +18,7 @@ func TestRemoteMXUIExplainsOutboundConnectionAndShowsReceiverSettings(t *testing
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=remotemx").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	for _, want := range []string{
 		"Set up a receiver you run separately.",
-		"MailMoose connects outbound to it over HTTP/2.",
+		"Mammoth Mail connects outbound to it over HTTP/2.",
 		"Remote SMTP receiving guide",
 		"Point the MX records for <code>example.com</code> at that hostname",
 		"configured on the receiver itself, not here",

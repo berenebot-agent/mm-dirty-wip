@@ -468,7 +468,7 @@ func TestFailureCooldownIsPerDomain(t *testing.T) {
 	t.Parallel()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(_ context.Context, name string) ([]string, error) {
-		if strings.HasPrefix(name, "_mailmoose-mx.bad.test") {
+		if strings.HasPrefix(name, "_mammothmail-mx.bad.test") {
 			return nil, errors.New("dns unavailable")
 		}
 		return []string{mxwire.DomainTXT("key1", pub)}, nil

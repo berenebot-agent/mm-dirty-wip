@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MailMooseRelay, type RelaySocket } from "../src/relay.js";
-import type { MailMooseInboundEvent } from "../src/types.js";
+import { MammothMailRelay, type RelaySocket } from "../src/relay.js";
+import type { MammothMailInboundEvent } from "../src/types.js";
 
 class FakeSocket implements RelaySocket {
   readyState = 0;
@@ -60,12 +60,12 @@ class FakeSocket implements RelaySocket {
 type Fixture = {
   sockets: FakeSocket[];
   abort: AbortController;
-  relay: MailMooseRelay;
+  relay: MammothMailRelay;
 };
 
-function fixture(onInbound: (event: MailMooseInboundEvent) => Promise<void>): Fixture {
+function fixture(onInbound: (event: MammothMailInboundEvent) => Promise<void>): Fixture {
   const sockets: FakeSocket[] = [];
-  const relay = new MailMooseRelay({
+  const relay = new MammothMailRelay({
     baseUrl: "http://mail.example.test",
     gatewayId: "gw-inflight",
     secret: "secret",
@@ -84,7 +84,7 @@ function fixture(onInbound: (event: MailMooseInboundEvent) => Promise<void>): Fi
   return { sockets, abort, relay };
 }
 
-function event(text: string): MailMooseInboundEvent {
+function event(text: string): MammothMailInboundEvent {
   return {
     text,
     message_type: "text",

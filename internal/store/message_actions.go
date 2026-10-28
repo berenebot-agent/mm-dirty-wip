@@ -22,7 +22,7 @@ type MessageActionInput struct {
 	LabelOp     string    `json:"label_op,omitempty"`
 	// ProviderLabel marks Label as a provider-owned name (a Gmail user label or
 	// an Outlook category), which may be hierarchical. It relaxes name validation
-	// to the provider's own rule instead of the MailMoose-native rule that
+	// to the provider's own rule instead of the MammothMail-native rule that
 	// rejects path separators.
 	ProviderLabel bool `json:"provider_label,omitempty"`
 	// TrashTarget is populated only by the durable Empty Trash coordinator.

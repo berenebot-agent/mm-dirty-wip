@@ -1,10 +1,10 @@
-// Cloudflare Worker: forward Email Routing messages to MailMoose.
+// Cloudflare Worker: forward Email Routing messages to Mammoth Mail.
 //
-// This file is a template. MailMoose substitutes the two placeholder
+// This file is a template. Mammoth Mail substitutes the two placeholder
 // values below when it generates your ready-to-paste Worker code in the Admin
 // UI. You do not normally edit this file by hand.
-const WEBHOOK_URL = "__MAILMOOSE_WEBHOOK_URL__";
-const SECRET = "__MAILMOOSE_WEBHOOK_SECRET__";
+const WEBHOOK_URL = "__MAMMOTHMAIL_WEBHOOK_URL__";
+const SECRET = "__MAMMOTHMAIL_WEBHOOK_SECRET__";
 
 export default {
   async email(message, env, ctx) {
@@ -31,9 +31,9 @@ export default {
     if (!resp.ok) {
       const detail = await resp.text();
       // Throwing surfaces the failure in Worker logs and lets Cloudflare retry.
-      // MailMoose returns 4xx for permanent rejections and 5xx for retryable
+      // Mammoth Mail returns 4xx for permanent rejections and 5xx for retryable
       // failures; inspect `resp.status` to distinguish them.
-      throw new Error("mailmoose forward failed: " + resp.status + " " + detail);
+      throw new Error("mammothmail forward failed: " + resp.status + " " + detail);
     }
   },
 };

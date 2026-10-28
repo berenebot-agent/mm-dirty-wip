@@ -6597,3 +6597,44 @@ child paths re-reads `GET /v1/inboxes/{id}/folders`. Documented in `API.md`.
 **Complexity:** One field on the reconcile input, one id-preserving lookup in
 `ReconcileRemoteFolders`, one subtree-rewrite method, one provider check. No new
 dependency, service, table or column.
+
+## D160 — Rename the product to Mammoth Mail; approval mode becomes local_approval
+
+**Context:** The MailMoose name is no longer available for this product. The
+product is renamed to Mammoth Mail. The approval mode `mailmoose_approval` named
+the product rather than the behaviour, so it could not survive a rename. It is
+the same workflow as before: in-application approval with a UI/API decision and
+an optional tokenized email.
+
+**Decision (2026-10-28):**
+
+- Display name: **Mammoth Mail**. Code, package, file and environment identifiers
+  use `mammothmail` / `MAMMOTHMAIL_`, and Go and JavaScript identifiers use
+  `MammothMail`. Environment variables, client configuration path
+  (`~/.mammothmail/client.json`), script and fixture filenames, and the
+  OpenClaw plugin package (`@mammothmail/openclaw`) all follow.
+- **Approval mode is `local_approval`** (was `mailmoose_approval`). Its meaning
+  is unchanged: a domain inbox is preset to it, and a standalone inbox may select
+  it. This is an approved API change, recorded in `CHANGELOG.md` under Changed.
+- **Migration 004 is data-only.** It rewrites `inboxes.authoring_mode` and
+  `assistant_handling_requests.mode` from `mailmoose_approval` to
+  `local_approval`. The pinned schema hash does not move. Event payloads already
+  written with the old value are history and are not rewritten.
+- **DNS proof record:** `_mailmoose-mx.<domain>` becomes `_mammothmail-mx.<domain>`.
+  Each domain must publish the new TXT record, and the Dial MX receiver must be
+  rebuilt with the new code. The old record is no longer read.
+
+**Deliberately unchanged, pending their own approval** (client-facing contract):
+the `X-MailMoose-*` headers (including the webhook signature header), the
+`GET /.well-known/mailmoose` route, the `WWW-Authenticate` realm
+`mailmoose-api`, and the GHCR image names `dirty-wip-mailmoose*`. The repository
+path `github.com/dellarb/mailmoose` (Go module, URLs) is also unchanged; the
+repository has not been renamed.
+The MX wire label `mailmoose-mx-v1` (signed into the authentication transcript
+by both the core and the Dial MX receiver) and the evaluator tag `mailmoose-mx/1`
+are also unchanged: renaming either would break authentication between a core
+and a separately deployed receiver until both are upgraded together.
+
+**Not changed:** `docs/DECISIONS.md` and `CHANGELOG.md` history, graphics and
+logo, and the untracked `tools/` deployment directory, which needs its own
+deployment step.

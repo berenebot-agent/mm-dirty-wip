@@ -87,7 +87,7 @@ func TestDashboardRendersClientsAccessTab(t *testing.T) {
 	assetRR := httptest.NewRecorder()
 	h.ServeHTTP(assetRR, assetReq)
 	asset := assetRR.Body.String()
-	if !strings.Contains(asset, "window.mailmooseShowKeyResult") {
+	if !strings.Contains(asset, "window.mammothmailShowKeyResult") {
 		t.Fatal("access tab must reuse the shared key result view")
 	}
 	if strings.Contains(asset, "window.alert((data.notice") {

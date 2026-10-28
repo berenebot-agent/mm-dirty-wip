@@ -1,9 +1,9 @@
 /**
- * Account resolution for the MailMoose channel.
+ * Account resolution for the Mammoth Mail channel.
  *
- * One MailMoose connector is normally the only account, but the helpers keep
+ * One Mammoth Mail connector is normally the only account, but the helpers keep
  * the same account-scoped shape as every bundled channel so `channels
- * mailmoose accounts.<id>` works if an operator runs several connectors.
+ * mammothmail accounts.<id>` works if an operator runs several connectors.
  */
 import {
   createAccountListHelpers,
@@ -13,20 +13,20 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
-  MailMooseChannelConfig,
-  ResolvedMailMooseAccount,
+  MammothMailChannelConfig,
+  ResolvedMammothMailAccount,
 } from "./types.js";
 
 const { listAccountIds, resolveDefaultAccountId, resolveAccountConfig } =
-  createAccountListHelpers<MailMooseChannelConfig>("mailmoose", {
+  createAccountListHelpers<MammothMailChannelConfig>("mammothmail", {
     normalizeAccountId,
     omitKeys: ["defaultAccount"],
     // Setup writes the connector at the channel root for the default account
     // (like the other bundled channels), so root values must count as the
     // implicit default account.
     hasImplicitDefaultAccount: (cfg) => {
-      const channel = (cfg as CoreConfig).channels?.mailmoose as
-        | MailMooseChannelConfig
+      const channel = (cfg as CoreConfig).channels?.mammothmail as
+        | MammothMailChannelConfig
         | undefined;
       return Boolean(
         channel?.baseUrl?.trim() && channel.gatewayId?.trim() && channel.secret?.trim(),
@@ -36,22 +36,22 @@ const { listAccountIds, resolveDefaultAccountId, resolveAccountConfig } =
 
 export { DEFAULT_ACCOUNT_ID, listAccountIds, resolveDefaultAccountId };
 
-export function listEnabledMailMooseAccounts(cfg: CoreConfig): string[] {
+export function listEnabledMammothMailAccounts(cfg: CoreConfig): string[] {
   return listAccountIds(cfg as never).filter((accountId) => {
-    const account = resolveMailMooseAccount({ cfg, accountId });
+    const account = resolveMammothMailAccount({ cfg, accountId });
     return account.enabled && account.configured;
   });
 }
 
-export type ResolveMailMooseAccountParams = {
+export type ResolveMammothMailAccountParams = {
   cfg: CoreConfig;
   accountId?: string | null;
 };
 
 /** Resolves one account's configuration into its runtime shape. */
-export function resolveMailMooseAccount(
-  params: ResolveMailMooseAccountParams,
-): ResolvedMailMooseAccount {
+export function resolveMammothMailAccount(
+  params: ResolveMammothMailAccountParams,
+): ResolvedMammothMailAccount {
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultAccountId(params.cfg as never));
   const config = resolveAccountConfig(params.cfg as never, accountId) ?? {};
   const baseUrl = normalizeBaseUrl(config.baseUrl);
@@ -73,18 +73,18 @@ export function resolveMailMooseAccount(
   };
 }
 
-export function resolveMailMooseAccountConfig(
+export function resolveMammothMailAccountConfig(
   cfg: CoreConfig,
   accountId: string,
-): MailMooseChannelConfig {
+): MammothMailChannelConfig {
   return resolveAccountConfig(cfg as never, normalizeAccountId(accountId)) ?? {};
 }
 
-export function isMailMooseAccountCurrent(params: {
+export function isMammothMailAccountCurrent(params: {
   cfg: CoreConfig;
-  account: ResolvedMailMooseAccount;
+  account: ResolvedMammothMailAccount;
 }): boolean {
-  const current = resolveMailMooseAccount({
+  const current = resolveMammothMailAccount({
     cfg: params.cfg,
     accountId: params.account.accountId,
   });

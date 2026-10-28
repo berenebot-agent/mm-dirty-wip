@@ -961,7 +961,7 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 		}
 	}
 	postmark := providerGroupHTML(t, dlg, "postmark")
-	if webhookURL(postmark) != "" || strings.Contains(postmark, "setup-copy") || !strings.Contains(postmark, "Save in MailMoose first") {
+	if webhookURL(postmark) != "" || strings.Contains(postmark, "setup-copy") || !strings.Contains(postmark, "Save in Mammoth Mail first") {
 		t.Fatal("Postmark must generate credentials before offering a webhook URL")
 	}
 	// SendGrid is intentionally hidden from the receiving menu until its adapter

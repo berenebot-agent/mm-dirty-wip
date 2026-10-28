@@ -257,7 +257,7 @@ var (
 // unknown-account login is shed under flood instead of blocking.
 func DummyPasswordCheckContext(ctx context.Context, password string, timeout time.Duration) (bool, error) {
 	dummyHashOnce.Do(func() {
-		dummyHash, _ = HashPassword("mailmoose-dummy-password")
+		dummyHash, _ = HashPassword("mammothmail-dummy-password")
 	})
 	return CheckPasswordContext(ctx, dummyHash, password, timeout)
 }

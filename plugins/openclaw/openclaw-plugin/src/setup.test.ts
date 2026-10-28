@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { claimMailMooseSetupCode, parseSetupCode } from "../src/setup.js";
+import { claimMammothMailSetupCode, parseSetupCode } from "../src/setup.js";
 
 test("parseSetupCode reads the base URL from a setup URL fragment", () => {
   const parsed = parseSetupCode({ code: "http://mail.example.com/#abc123" });
@@ -15,7 +15,7 @@ test("parseSetupCode requires a base URL for a bare code", () => {
   assert.equal(parsed.code, "abc123");
 });
 
-test("claimMailMooseSetupCode posts the code and returns credentials", async () => {
+test("claimMammothMailSetupCode posts the code and returns credentials", async () => {
   const calls: Array<{ url: string; body: string }> = [];
   const fetchImpl = (async (url: string, init: { body: string }) => {
     calls.push({ url: String(url), body: init.body });
@@ -23,7 +23,7 @@ test("claimMailMooseSetupCode posts the code and returns credentials", async () 
       status: 200,
     });
   }) as unknown as typeof fetch;
-  const result = await claimMailMooseSetupCode({
+  const result = await claimMammothMailSetupCode({
     baseUrl: "http://mail.example.com/",
     code: "abc",
     gatewayId: "gw-x",
@@ -34,10 +34,10 @@ test("claimMailMooseSetupCode posts the code and returns credentials", async () 
   assert.equal(result.secret, "sec");
 });
 
-test("claimMailMooseSetupCode surfaces an expired code", async () => {
+test("claimMammothMailSetupCode surfaces an expired code", async () => {
   const fetchImpl = (async () => new Response("no", { status: 403 })) as unknown as typeof fetch;
   await assert.rejects(
-    () => claimMailMooseSetupCode({ baseUrl: "http://mail.example.com", code: "x", fetchImpl }),
+    () => claimMammothMailSetupCode({ baseUrl: "http://mail.example.com", code: "x", fetchImpl }),
     /invalid, expired or already used/,
   );
 });

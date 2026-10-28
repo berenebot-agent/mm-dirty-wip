@@ -163,7 +163,7 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 	return view
 }
 
-// CheckTXT returns the current check for the domain's _mailmoose-mx TXT record
+// CheckTXT returns the current check for the domain's _mammothmail-mx TXT record
 // against the exact key the receiver will require. expectedValue is the copy-ready
 // record shown to the operator. The check is exact: exactly one MM1 record must be
 // published for keyID with a public key equal to want.
@@ -175,7 +175,7 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 // implementation is what let the dialog show a green "matching" record next to a
 // receiver refusing with "key unavailable".
 func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string, want []byte, expectedValue string) DNSRecordView {
-	name := "_mailmoose-mx." + domain
+	name := "_mammothmail-mx." + domain
 	view := DNSRecordView{Kind: "txt", Name: name, Expected: expectedValue}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
@@ -203,7 +203,7 @@ func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string
 }
 
 // CheckDKIM returns the current check for a Direct MX sending domain's DKIM
-// public-key TXT record against the key MailMoose signs with. expectedValue is
+// public-key TXT record against the key Mammoth Mail signs with. expectedValue is
 // the copy-ready record shown to the operator. The check mirrors CheckMX's
 // shape: "ok" when a record is published and its p= value equals wantBase64,
 // "pending" when the name definitively carries no record yet, "mismatch" when a

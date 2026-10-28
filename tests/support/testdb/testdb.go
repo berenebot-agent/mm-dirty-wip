@@ -35,7 +35,7 @@ var (
 // buildTemplate migrates a database once, then VACUUMs it into a single file
 // with no WAL side files.
 func buildTemplate() {
-	scratch, err := os.MkdirTemp("", "mailmoose-testdb-template-*")
+	scratch, err := os.MkdirTemp("", "mammothmail-testdb-template-*")
 	if err != nil {
 		templateErr = fmt.Errorf("testdb: create scratch dir: %w", err)
 		return
@@ -64,7 +64,7 @@ func buildTemplate() {
 	}
 	// Move the consolidated file to a path that outlives this function. Keep it
 	// beside the (removed) scratch dir by writing into a stable temp location.
-	final := filepath.Join(os.TempDir(), fmt.Sprintf("mailmoose-testdb-%d.db", os.Getpid()))
+	final := filepath.Join(os.TempDir(), fmt.Sprintf("mammothmail-testdb-%d.db", os.Getpid()))
 	if err := os.Rename(out, final); err != nil {
 		templateErr = fmt.Errorf("testdb: publish template: %w", err)
 		return

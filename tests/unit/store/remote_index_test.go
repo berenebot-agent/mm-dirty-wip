@@ -625,7 +625,7 @@ func TestRemoteThreadsKeysetPaginationNoSkip(t *testing.T) {
 func ptr(s string) *string { return &s }
 
 // TestReconcileKeepsFolderIDOnRename proves a renamed remote folder keeps its
-// MailMoose id when the provider's own identity (StableID) is unchanged, rather
+// Mammoth Mail id when the provider's own identity (StableID) is unchanged, rather
 // than being re-minted under the new path. That is what makes a client-held
 // folder id survive a rename.
 func TestReconcileKeepsFolderIDOnRename(t *testing.T) {

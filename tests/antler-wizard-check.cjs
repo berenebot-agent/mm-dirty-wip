@@ -175,7 +175,7 @@ function harness(mode) {
   form.dataset.antlerConnectors = JSON.stringify(mxList);
   form.dataset.antlerStatus = JSON.stringify(seedStatus);
   form.dataset.antlerDns = JSON.stringify([{ kind: 'mx', state: 'not_found' }, { kind: 'txt', state: 'not_found' }]);
-  form.dataset.antlerInstructions = JSON.stringify({ txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList });
+  form.dataset.antlerInstructions = JSON.stringify({ txt_name: '_mammothmail-mx.example.com', txt_value: 'public-key', mx: mxList });
   form.closestMap = { dialog: dlg };
   const provider = new Element('SELECT');
   provider.value = 'dialmx';
@@ -236,7 +236,7 @@ function harness(mode) {
     dns: world.dns,
     dns_stale: !!world.stale,
     unexpected_mx: world.unexpected,
-    instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList }
+    instructions: { txt_name: '_mammothmail-mx.example.com', txt_value: 'public-key', mx: mxList }
   });
 
   const document = {
@@ -266,15 +266,15 @@ function harness(mode) {
     dispatchEvent(event) { (world.windowEvents[event.type] || []).slice().forEach(fn => fn(event)); return true; },
     location: { assign() {} },
     Event: function (type) { this.type = type; },
-     mailmooseEventsSource: new Element(),
-    // The real app.js installs window.mailmooseCopy (assets/app.js) and every
+     mammothmailEventsSource: new Element(),
+    // The real app.js installs window.mammothmailCopy (assets/app.js) and every
     // copy control routes through it. The closure under test calls
-    // window.mailmooseCopy.wire(btn, opts) while building the Antler
+    // window.mammothmailCopy.wire(btn, opts) while building the Antler
     // remediation block, so the harness must provide the same surface or that
     // path throws before the block is built. Behaviour mirrors the real wire:
     // a function opts.text wins, then opts.text, then btn[data-copy]; a click
     // records the copied value.
-    mailmooseCopy: {
+    mammothmailCopy: {
       text: value => String(value == null ? '' : value),
       announce: text => { world.copied.push(text); },
       select: target => target,
@@ -646,7 +646,7 @@ async function liveUpdates() {
   await h.settle();
 
   // The dialog reuses the dashboard's single SSE connection rather than opening a
-  // second stream, so it attaches to whatever window.mailmooseEventsSource is at
+  // second stream, so it attaches to whatever window.mammothmailEventsSource is at
   // the time rather than creating its own.
   const open = h.dlg.events.open || [];
   assert.ok(open.length > 0, 'the dialog listens for its own open event');
@@ -692,7 +692,7 @@ async function receiverTruth() {
 async function queuedRefresh() {
   const h = harness('status');
   await h.settle();
-  const push = () => h.window.mailmooseEventsSource.emit('mx.dns_changed', { data: '{"payload":{"domain_id":"domain-1"}}' });
+  const push = () => h.window.mammothmailEventsSource.emit('mx.dns_changed', { data: '{"payload":{"domain_id":"domain-1"}}' });
   h.world.holdGet = true;
   push();
   const before = h.gets();

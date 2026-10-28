@@ -282,7 +282,7 @@ func TestDirectMXLostVerdictIsAmbiguous(t *testing.T) {
 }
 
 // TestDirectMXMidBodyDropIsAmbiguous covers the connection dying while the
-// body is still uploading. The mailmoose convention treats any failure from
+// body is still uploading. The mammothmail convention treats any failure from
 // the start of the body upload as ambiguous so the two transports (Direct MX
 // and SMTP) behave identically.
 func TestDirectMXMidBodyDropIsAmbiguous(t *testing.T) {

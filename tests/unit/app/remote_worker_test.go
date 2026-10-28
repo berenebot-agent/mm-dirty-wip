@@ -926,9 +926,9 @@ func seedPendingApproval(t *testing.T, svc *app.Service, box model.Inbox) pendin
 	t.Helper()
 	ctx := context.Background()
 	p := model.Principal{AccountID: box.AccountID, UserID: "u", MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
-	// Use the MailMoose approval authoring mode so the request creates an external
+	// Use the Mammoth Mail approval authoring mode so the request creates an external
 	// approval request rather than a remote-draft handoff.
-	if err := svc.Store.SetInboxAuthoringMode(ctx, p, box.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, p, box.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	// Set an approver so the external request path can queue.

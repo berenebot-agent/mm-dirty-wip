@@ -458,7 +458,7 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 // create or rename changes the tree, and a partial reconcile would prune the
 // siblings the mutation did not mention. For a provider whose folder path is the
 // provider's own stable identity (Gmail label id, Graph folder id) the path is
-// also handed over as StableID, so a renamed folder keeps its MailMoose id.
+// also handed over as StableID, so a renamed folder keeps its Mammoth Mail id.
 func (m *RemoteMailboxService) syncFolderTree(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID string) error {
 	return m.syncFolderTreeRenamed(ctx, sess, inbox, accountID, inboxID, "", "")
 }

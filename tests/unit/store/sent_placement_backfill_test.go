@@ -90,7 +90,7 @@ func TestUpgradeBackfillsUnfiledSentPlacements(t *testing.T) {
 	if _, err := db.ExecContext(ctx, stmt, standaloneSend.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version='003'`); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version IN ('003','004')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
