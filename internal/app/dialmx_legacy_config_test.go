@@ -15,7 +15,7 @@ func TestNormalizeLegacyDialMXReceivingConfig(t *testing.T) {
 	values := map[string]any{
 		"service":                "antler",
 		"antler_receivers":       snapshot,
-		"antler_manifest_source":   "embedded",
+		"antler_manifest_source": "embedded",
 		"antler_manifest_at":     "2026-10-18T05:12:03Z",
 		"receiver_urls":          "https://old.example.test",
 		"setup_id":               "setup_existing",
@@ -50,7 +50,7 @@ func TestNormalizeDialMXPrefersCanonicalKeys(t *testing.T) {
 		"receiver_snapshot":        "canonical",
 		"antler_receivers":         "legacy",
 		"receiver_manifest_source": "github",
-		"antler_manifest_source": "embedded",
+		"antler_manifest_source":   "embedded",
 	}
 	normalizeDialMXReceivingConfig(values)
 	if values["receiver_snapshot"] != "canonical" || values["receiver_manifest_source"] != "github" {
