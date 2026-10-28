@@ -18,7 +18,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// fixedAntler is a deterministic Antler endpoint resolver for HTTP tests. A
+// fixedAntler is a deterministic Tusk endpoint resolver for HTTP tests. A
 // resolver with no source answers as the live GitHub manifest did, with a fixed
 // fetch time so the rendered manifest line is deterministic.
 type fixedAntler struct {
@@ -111,7 +111,7 @@ func dnsLights(t *testing.T, body map[string]any) map[string]string {
 }
 
 // TestDialMXAntlerReceivingAPITrafficLights proves the receiving API returns the
-// Antler instructions, live receiver status and the watcher's published-record
+// Tusk instructions, live receiver status and the watcher's published-record
 // checks, with a green verdict for matching MX and TXT records and a red one for a
 // mismatch.
 func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
@@ -120,7 +120,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
 		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
-		{ID: "antler-2", SessionURL: "https://antler2.example.test", SMTPHostname: "antler2.example.test", MXPriority: 20},
+		{ID: "antler-2", SessionURL: "https://tusk2.example.test", SMTPHostname: "tusk2.example.test", MXPriority: 20},
 	}}
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
 		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
@@ -135,7 +135,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	txtValue := mxwire.DomainTXT(cred.KeyID, pub)
 
 	watchDNS(svc, fakeResolver{
-		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "antler2.example.test.", Pref: 20}},
+		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "tusk2.example.test.", Pref: 20}},
 		txt: []string{txtValue},
 	})
 	srv := httpapp.New(svc, nil)
@@ -171,7 +171,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 
 	instr, _ := body["instructions"].(map[string]any)
 	if instr == nil || instr["service"] != "antler" || instr["contact_email"] != "ops@example.test" {
-		t.Fatalf("instructions missing Antler metadata: %v", body["instructions"])
+		t.Fatalf("instructions missing Tusk metadata: %v", body["instructions"])
 	}
 	mx, _ := instr["mx"].([]any)
 	if len(mx) != 2 {
@@ -215,7 +215,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	// The dashboard setup panel renders the MX instructions and the lights.
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
-	for _, want := range []string{"Antler MX", "10 antler1.example.test", "ops@example.test", "dns-light"} {
+	for _, want := range []string{"Tusk MX", "10 antler1.example.test", "ops@example.test", "dns-light"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("setup panel missing %q", want)
 		}
@@ -605,7 +605,7 @@ func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
 		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
-		{ID: "antler-2", SessionURL: "https://antler2.example.test", SMTPHostname: "antler2.example.test", MXPriority: 20},
+		{ID: "antler-2", SessionURL: "https://tusk2.example.test", SMTPHostname: "tusk2.example.test", MXPriority: 20},
 	}}
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
 		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
@@ -747,7 +747,7 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 }
 
 // TestDialMXAntlerDialogHidesReceiverURLs pins that the editable Receiver URLs
-// field is not present in the Antler MX dialog (it lives only in an inert
+// field is not present in the Tusk MX dialog (it lives only in an inert
 // template), but is present and editable for the custom service.
 func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
 	t.Parallel()
@@ -768,10 +768,10 @@ func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
 	settings := providerGroupHTML(t, body, "dialmx")
 
 	if strings.Contains(stripDialMXReceiverTemplate(settings), `name="cfg_dialmx_receiver_urls"`) {
-		t.Fatalf("Antler dialog renders an editable receiver_urls input:\n%s", settings)
+		t.Fatalf("Tusk dialog renders an editable receiver_urls input:\n%s", settings)
 	}
 	if !strings.Contains(settings, `<template class="dialmx-receiver-urls-field">`) {
-		t.Fatalf("Antler dialog is missing the inert receiver_urls template:\n%s", settings)
+		t.Fatalf("Tusk dialog is missing the inert receiver_urls template:\n%s", settings)
 	}
 
 	// A custom setup keeps the editable input.
@@ -791,7 +791,7 @@ func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
 }
 
 // TestDialMXAntlerAPIRejectsReceiverURLs proves the receiving API refuses a
-// client-supplied receiver_urls for the Antler service, so a crafted request
+// client-supplied receiver_urls for the Tusk service, so a crafted request
 // cannot point the domain at an arbitrary receiver.
 func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 	t.Parallel()
@@ -812,7 +812,7 @@ func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Antler MX") {
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Tusk MX") {
 		t.Fatalf("injected receiver_urls for antler: %d %s", rr.Code, rr.Body.String())
 	}
 	// The rejected save must not have replaced the fixture's existing provider
@@ -869,7 +869,7 @@ func TestDialMXReceivingAPIRejectsReceiverURLsArray(t *testing.T) {
 }
 
 // TestDialMXCustomReceivingAPIHasNoAntlerInstructions pins that a custom setup
-// keeps its manual receiver URLs and does not advertise Antler MX records, and
+// keeps its manual receiver URLs and does not advertise Tusk MX records, and
 // that the watcher computes no MX check for it (the MX hostname is the operator's
 // own), only the TXT check.
 func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
@@ -909,7 +909,7 @@ func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
 	}
 
 	// The dialog must prefill the custom service so a save cannot silently
-	// migrate a legacy configuration to Antler MX.
+	// migrate a legacy configuration to Tusk MX.
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
 	settings := providerGroupHTML(t, dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID), "dialmx")
@@ -919,7 +919,7 @@ func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
 }
 
 // stripDialMXReceiverTemplate removes the inert <template> that carries the
-// Receiver URLs field for an Antler MX setup, so an assertion can check that no
+// Receiver URLs field for a Tusk MX setup, so an assertion can check that no
 // editable input is rendered without tripping on the template's own input.
 func stripDialMXReceiverTemplate(settings string) string {
 	const open = `<template class="dialmx-receiver-urls-field">`

@@ -66,7 +66,7 @@ const (
 )
 
 // DNSVerdict is the combined published-record picture for one domain. Either
-// receiving check is nil when it does not apply (no Antler receivers → no MX
+// receiving check is nil when it does not apply (no Tusk receivers → no MX
 // check); DKIM is nil when the domain does not sign outbound mail.
 type DNSVerdict struct {
 	TXT  *DNSRecordView `json:"txt,omitempty"`
@@ -106,7 +106,7 @@ func equalStrings(a, b []string) bool {
 //
 // A domain's receiver set is redundancy, not an all-must-match set: the check is
 // "ok" as long as at least one expected hostname is published, so an operator who
-// points MX at a single Antler receiver is not dragged to a mismatch by the
+// points MX at a single Tusk receiver is not dragged to a mismatch by the
 // others. Matched lists which expected hostnames were found; Found is the
 // published set; Unexpected lists published hostnames that are not our receivers.
 // The state is "mismatch" only when MX records exist but none is one of ours,
@@ -169,7 +169,7 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 // published for keyID with a public key equal to want.
 //
 // The record is parsed by the same mxwire.ParseDomainTXT the receiver applies, so
-// the local check and the Antler receiver cannot disagree about whether a
+// the local check and the Tusk receiver cannot disagree about whether a
 // published record is valid: an extra field, a duplicate MM1 record or an
 // oversized record fails here exactly as it fails there. A divergent second
 // implementation is what let the dialog show a green "matching" record next to a

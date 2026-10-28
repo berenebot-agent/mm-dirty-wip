@@ -32,7 +32,7 @@ type dialMXLiveView struct {
 	Manifest *antlerManifestView
 }
 
-// antlerManifestView records where a snapshotted Antler MX receiver set came
+// antlerManifestView records where a snapshotted Tusk MX receiver set came
 // from. At is the manifest fetch time (RFC3339) and is empty for the built-in
 // defaults. It carries no secret.
 type antlerManifestView struct {
@@ -118,7 +118,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 		}
 	}
 	// Include receivers that have not reported a domain status yet, so setup
-	// always shows the complete saved Antler receiver set.
+	// always shows the complete saved Tusk receiver set.
 	if view.Service == mxdial.ServiceAntler {
 		for _, receiver := range app.AntlerReceiversFromConfig(values) {
 			found := false
@@ -168,7 +168,7 @@ func (s *Server) dialMXDNS(domainID string) []domainDNSView {
 }
 
 // dialMXExtraMX returns a domain's "extra MX" verdict: the published MX
-// hostnames that are not one of its configured Antler receivers. It reads the
+// hostnames that are not one of its configured Tusk receivers. It reads the
 // single shared verdict owned by the DNS watcher, so the dashboard light and
 // the status dialog always agree and neither runs its own DNS lookup on a render.
 // A domain the watcher has not resolved yet reads as an empty verdict.
@@ -184,8 +184,8 @@ func (s *Server) dialMXExtraMX(domainID string) []string {
 // light shown on the dashboard. It is: green when at least one connector row is
 // fully green and no unexpected MX records are published; amber when at least
 // one connector is green but the domain's MX records also name servers that are
-// not Antler receivers (mail is delivered, but routing is ambiguous and may not
-// go via Antler); red otherwise. A receiver reports "ready" only after it has
+// not Tusk receivers (mail is delivered, but routing is ambiguous and may not
+// go via Tusk); red otherwise. A receiver reports "ready" only after it has
 // proved BOTH domain authority (its _mail-proof TXT key) and routing (its own
 // SMTP hostname is published in the domain's MX records), so a ready row already
 // means mail will be delivered and the aggregate needs no separate MX check
@@ -216,7 +216,7 @@ func dialMXHealth(statuses []mxdialStatusView, unexpectedMX []string, now time.T
 		return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver authorizes and your MX points at it"
 	}
 	if len(unexpectedMX) > 0 {
-		return "amber", fmt.Sprintf("%d of %d inbound connectors ready, but extra MX records exist (%s) — mail may not be delivered via Antler", ready, len(statuses), strings.Join(unexpectedMX, ", "))
+		return "amber", fmt.Sprintf("%d of %d inbound connectors ready, but extra MX records exist (%s) — mail may not be delivered via Tusk", ready, len(statuses), strings.Join(unexpectedMX, ", "))
 	}
 	return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
 }
@@ -264,16 +264,16 @@ func statusExpiry(v mxdialStatusView) string {
 }
 
 // dialMXHasReceiverTargets reports whether a domain's Dial MX receiving
-// configuration actually names something to deliver to: at least one Antler
+// configuration actually names something to deliver to: at least one Tusk
 // receiver, or (for a custom service) at least one receiver URL. It is the gate
-// for the dashboard's aggregate inbound light. A Dial MX domain whose Antler
+// for the dashboard's aggregate inbound light. A Dial MX domain whose Tusk
 // receiver set is empty — a setup that was started and abandoned, or a manifest
 // that advertised no receivers — has nothing to deliver to and nothing to fix,
 // so it must not be painted red "mail delivery is blocked" for a setup that was
 // never finished. A missing or undecryptable configuration is likewise no target.
 //
 // A custom-service config always carries at least one receiver URL (the save path
-// rejects an empty set), so in practice this reduces to "the Antler receiver set
+// rejects an empty set), so in practice this reduces to "the Tusk receiver set
 // is not empty", but it is expressed generally so a future custom shape cannot
 // slip a phantom light through.
 func (s *Server) dialMXHasReceiverTargets(ctx context.Context, accountID, domainID string) bool {
@@ -293,7 +293,7 @@ func (s *Server) dialMXHasReceiverTargets(ctx context.Context, accountID, domain
 }
 
 // dialMXCustomService reports whether a domain's stored Dial MX receiving config
-// uses custom receiver URLs rather than the hosted Antler MX relay. A missing or
+// uses custom receiver URLs rather than the hosted Tusk MX relay. A missing or
 // undecryptable config is not custom.
 func (s *Server) dialMXCustomService(ctx context.Context, accountID, domainID string) bool {
 	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
@@ -308,7 +308,7 @@ func (s *Server) dialMXCustomService(ctx context.Context, accountID, domainID st
 }
 
 // dialMXService classifies a decrypted Dial MX receiving config as the hosted
-// Antler MX relay or a custom receiver set. The two spellings live here so the
+// Tusk MX relay or a custom receiver set. The two spellings live here so the
 // live view and the dashboard label cannot disagree about which one a domain is.
 func dialMXService(values map[string]any) string {
 	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {

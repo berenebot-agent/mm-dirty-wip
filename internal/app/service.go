@@ -82,7 +82,7 @@ type Service struct {
 	// (tests, or before startup) the HTTP layer reads an empty verdict. See
 	// DNSState.
 	DNS *DNSWatcher
-	// AntlerEndpoints resolves the Antler MX receiver manifest at setup-save
+	// AntlerEndpoints resolves the Tusk MX receiver manifest at setup-save
 	// time. cmd/server installs the live GitHub resolver; when nil (tests) the
 	// embedded manifest is used.
 	AntlerEndpoints AntlerEndpointResolver
@@ -142,7 +142,7 @@ type Service struct {
 	dialMXIngestSem       chan struct{}
 }
 
-// AntlerEndpointResolver resolves the current Antler MX receiver set, and says
+// AntlerEndpointResolver resolves the current Tusk MX receiver set, and says
 // where it came from. It is satisfied by *mxdial.AntlerResolver and stubbed in
 // tests.
 type AntlerEndpointResolver interface {
@@ -926,19 +926,19 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		}
 	}
 	// The service must be read before schema defaulting: a legacy save that
-	// supplies only receiver_urls is custom, never the Antler default.
+	// supplies only receiver_urls is custom, never the Tusk default.
 	service := dialMXService(cfg, old)
 	merged, err := validateConfig(mxdial.Transport{}.ConfigFields(), cfg, nil, false)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
 	if service == mxdial.ServiceAntler {
-		// The Antler MX receiver set is resolved from the live manifest, never
+		// The Tusk MX receiver set is resolved from the live manifest, never
 		// supplied by the caller. Reject an explicit receiver_urls rather than
 		// silently discarding it, so a client cannot believe it pointed the
 		// domain at a chosen receiver.
 		if raw, ok := merged["receiver_urls"].(string); ok && strings.TrimSpace(raw) != "" {
-			return store.DomainReceivingConfig{}, nil, invalidConfig("receiver URLs cannot be supplied for the Antler MX service")
+			return store.DomainReceivingConfig{}, nil, invalidConfig("receiver URLs cannot be supplied for the Tusk MX service")
 		}
 		if err := s.fillAntlerReceivingConfig(ctx, merged, old); err != nil {
 			return store.DomainReceivingConfig{}, nil, err
@@ -1041,8 +1041,8 @@ func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, do
 // dialMXService resolves the effective service for a Dial MX save. Precedence:
 // an explicit incoming service choice, then the stored choice, then incoming or
 // stored receiver URLs (a legacy client that knows only receiver_urls is
-// custom), and finally the Antler default. The explicit choice must win over
-// receiver URLs because an Antler form carries its receiver snapshot in the
+// custom), and finally the Tusk default. The explicit choice must win over
+// receiver URLs because a Tusk form carries its receiver snapshot in the
 // same field the custom service uses.
 func dialMXService(incoming, old map[string]any) string {
 	if v, _ := incoming["service"].(string); v == mxdial.ServiceAntler || v == mxdial.ServiceCustom {
@@ -1064,7 +1064,7 @@ func dialMXService(incoming, old map[string]any) string {
 	return mxdial.ServiceAntler
 }
 
-// fillAntlerReceivingConfig validates the contact email and settles the Antler MX
+// fillAntlerReceivingConfig validates the contact email and settles the Tusk MX
 // receiver set into the configuration.
 //
 // The receiver set is the one already snapshotted on the domain whenever there is
@@ -1082,7 +1082,7 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 		email, _ = old["contact_email"].(string)
 	}
 	if !mxwire.ValidContactEmail(email) {
-		return invalidConfig("a contact email is required for Antler MX")
+		return invalidConfig("a contact email is required for Tusk MX")
 	}
 	setupID, _ := old["setup_id"].(string)
 	if !mxwire.ValidSetupID(setupID) {
@@ -1102,7 +1102,7 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 		}
 		set, err := resolver.Receivers(ctx)
 		if err != nil {
-			return invalidConfig("Antler MX endpoints are unavailable right now; try again shortly")
+			return invalidConfig("Tusk MX endpoints are unavailable right now; try again shortly")
 		}
 		receivers = set.Receivers
 		source = string(set.Source)
@@ -1145,15 +1145,15 @@ func (s *Service) logAntlerManifest(set mxdial.AntlerEndpointSet) {
 		if set.Err != nil {
 			attrs = append(attrs, "error", set.Err)
 		}
-		s.Log.Warn("could not fetch Antler receivers from GitHub; using built-in defaults", attrs...)
+		s.Log.Warn("could not fetch Tusk receivers from GitHub; using built-in defaults", attrs...)
 		return
 	}
-	s.Log.Info("Antler receivers updated from GitHub",
+	s.Log.Info("Tusk receivers updated from GitHub",
 		"url", mxdial.AntlerManifestURL, "receivers", len(set.Receivers),
 		"fetched_at", set.FetchedAt.UTC().Format(time.RFC3339))
 }
 
-// AntlerSettings is the mutable, non-credential half of an Antler MX setup: the
+// AntlerSettings is the mutable, non-credential half of a Tusk MX setup: the
 // contact metadata and the inbound authentication-enforcement policy. An empty
 // field leaves the stored value unchanged, so a caller can update one.
 type AntlerSettings struct {
@@ -1161,7 +1161,7 @@ type AntlerSettings struct {
 	Enforcement  string
 }
 
-// UpdateAntlerSettings changes the editable Antler MX settings in place,
+// UpdateAntlerSettings changes the editable Tusk MX settings in place,
 // preserving the saved receiver snapshot, setup identity and domain credential.
 // It is the status view's "Save settings" action: the receiver set a domain's MX
 // records already point at must not change because an operator edited the contact
@@ -1176,7 +1176,7 @@ func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID 
 		return store.DomainReceivingConfig{}, err
 	}
 	if cfg.Provider != "dialmx" || values["service"] != mxdial.ServiceAntler {
-		return store.DomainReceivingConfig{}, invalidConfig("settings are only available for hosted Antler MX")
+		return store.DomainReceivingConfig{}, invalidConfig("settings are only available for hosted Tusk MX")
 	}
 	if email := strings.TrimSpace(in.ContactEmail); email != "" {
 		if !mxwire.ValidContactEmail(email) {
@@ -1206,7 +1206,7 @@ func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID 
 	return saved, err
 }
 
-// AntlerReceiversFromConfig decodes the receiver snapshot stored on an Antler
+// AntlerReceiversFromConfig decodes the receiver snapshot stored on a Tusk
 // MX domain configuration. A custom configuration returns nil.
 func AntlerReceiversFromConfig(values map[string]any) []mxdial.AntlerReceiver {
 	if v, _ := values["service"].(string); v != mxdial.ServiceAntler {

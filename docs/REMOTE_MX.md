@@ -2,7 +2,7 @@
 
 **Advanced users only. Not required for typical installations.**
 
-This guide covers separate SMTP receivers that you operate yourself. For easy SMTP receiving configuration without running another receiver or opening inbound SMTP ports, use [Antler MX](EMAIL_PROVIDERS.md#inbound-antler-mx).
+This guide covers separate SMTP receivers that you operate yourself. For easy SMTP receiving configuration without running another receiver or opening inbound SMTP ports, use [Tusk MX](EMAIL_PROVIDERS.md#inbound-tusk-mx).
 
 For the receiver included with Mammoth Mail, see [Direct MX](EMAIL_PROVIDERS.md#inbound-direct-mx).
 
@@ -13,7 +13,7 @@ For the receiver included with Mammoth Mail, see [Direct MX](EMAIL_PROVIDERS.md#
 
 Both options need an SMTP hostname reachable on **port 25**. Your Mammoth Mail core opens a connection **outbound** to the receiver; it does not need an incoming SMTP port. The receiver passes mail to the core, which stores it in `/data`.
 
-## Dial MX: shared receiver (This is the mode the Antler MX service runs in)
+## Dial MX: shared receiver (This is the mode the Tusk MX service runs in)
 
 Run a public receiver with an HTTPS session endpoint and a valid TLS certificate.
 
@@ -101,9 +101,9 @@ Send a test email. If it does not arrive, check the receiver's container logs, t
 
 If the receiver sits behind a reverse proxy, check the [proxy requirements](#reverse-proxies-in-front-of-the-receiver) first: a proxy that buffers the request body leaves the receiver unreachable, with no session attempt in the receiver's log.
 
-## Antler MX restart and troubleshooting
+## Tusk MX restart and troubleshooting
 
-[Antler MX](EMAIL_PROVIDERS.md#inbound-antler-mx) is the hosted shared receiver, so there is no receiver container on your host to restart. Mammoth Mail keeps an outbound session to the receivers in the domain's saved setup and reconnects without operator action.
+[Tusk MX](EMAIL_PROVIDERS.md#inbound-tusk-mx) is the hosted shared receiver, so there is no receiver container on your host to restart. Mammoth Mail keeps an outbound session to the receivers in the domain's saved setup and reconnects without operator action.
 
 ### Reconnecting and authentication
 
@@ -116,10 +116,10 @@ The domain's **Receiving** panel reports the receiver status:
 - **unreachable**, with a DNS or TLS reason — no session could be established. Check outbound HTTPS to the receiver, DNS resolution, and the host clock and certificate chain.
 - **unreachable**, with no session attempt in the receiver's own log — a receiver of your own behind a reverse proxy is the likely cause: the proxy buffered the request body, or the connection never became HTTP/2. See [Reverse proxies in front of the receiver](#reverse-proxies-in-front-of-the-receiver).
 - a status that names an HTTP code, e.g. **receiver refused the session (HTTP 405)** or **receiver reported a server error (HTTP 502)** — something answered at the receiver URL with that status. Read the proxy's log and the receiver's log for the detail; the core cannot tell the two apart.
-- **rejected** — the receiver answered and refused the domain. The `_mail-proof.<domain>` TXT value must be the key currently shown in the Receiving panel, and the MX records must point at the receiver. A receiver set is chosen from the Antler manifest when a setup is saved, and the domain keeps that snapshot; the manifest cache does not re-point or re-authenticate a live session, so changing it is not a repair step.
+- **rejected** — the receiver answered and refused the domain. The `_mail-proof.<domain>` TXT value must be the key currently shown in the Receiving panel, and the MX records must point at the receiver. A receiver set is chosen from the Tusk manifest when a setup is saved, and the domain keeps that snapshot; the manifest cache does not re-point or re-authenticate a live session, so changing it is not a repair step.
 
 ### Temporary SMTP failures and sender retries
 
-There is no SMTP queue in Mammoth Mail or Antler to replay a message later. If Mammoth Mail is offline, the receiver cannot hand the message over and the sending server must retry according to its own policy. A 4xx reply is a temporary failure and may be retried; a 5xx reply is permanent for that attempt. If a test message does not arrive, check the sending server's queue and retry state first.
+There is no SMTP queue in Mammoth Mail or Tusk to replay a message later. If Mammoth Mail is offline, the receiver cannot hand the message over and the sending server must retry according to its own policy. A 4xx reply is a temporary failure and may be retried; a 5xx reply is permanent for that attempt. If a test message does not arrive, check the sending server's queue and retry state first.
 
 A `250` reply to `RCPT TO` only means the receiver accepted that recipient for the current transaction. It is not proof that the message was stored. Also check the final reply to `DATA`, and then Mammoth Mail's ingestion record: the arrival in the inbox (including Spam) and the domain's **Activity log**, which names the receiver as the source. `docker compose logs mammothmail` shows ingestion errors at the core.

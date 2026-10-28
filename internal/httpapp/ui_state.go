@@ -207,7 +207,7 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		return "", ""
 	}
 	// A light only means something for a domain that actually names something to
-	// deliver to. A Dial MX domain whose Antler receiver set is empty — an Antler
+	// deliver to. A Dial MX domain whose Tusk receiver set is empty — a Tusk
 	// setup started and abandoned, or a manifest that advertised no receivers —
 	// must not be painted red "mail delivery is blocked" for a setup that was never
 	// finished.

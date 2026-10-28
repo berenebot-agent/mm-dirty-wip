@@ -71,8 +71,10 @@ var bashClient []byte
 //go:embed assets/curl-cookbook.txt
 var curlCookbook []byte
 
-// The Antler MX mail-flow diagram shown in the receiving wizard. Kept in step
-// with the docs copy at assets/antler-mx-diagram.svg (docs/EMAIL_PROVIDERS.md).
+// The Tusk MX mail-flow diagram shown in the receiving wizard. Kept in step
+// with the docs copy at assets/tusk-mx-diagram.svg (docs/EMAIL_PROVIDERS.md).
+// The embed name and the antler-mx-diagram.svg route keep the pre-rename
+// spelling so installed UIs and long-lived caches keep working.
 //
 //go:embed assets/antler-mx-diagram.svg
 var antlerMXDiagramSVG []byte
@@ -191,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
 	m.HandleFunc("GET /assets/antler-mx-diagram.svg", s.showAntlerMXDiagram)
+	m.HandleFunc("GET /assets/tusk-mx-diagram.svg", s.showAntlerMXDiagram)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
 	m.HandleFunc("GET /favicon-16x16.png", s.showFavicon16)
 	m.HandleFunc("GET /favicon-32x32.png", s.showFavicon32)

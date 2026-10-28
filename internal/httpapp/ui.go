@@ -107,7 +107,7 @@ type dialMXSetupView struct {
 	// matching the dashboard light it was opened from rather than flashing an
 	// amber "Pending" until the first status poll returns. It carries no secret.
 	StatusesJSON string
-	// InstructionsJSON is the copy-ready DNS records (Antler MX/TXT names, values
+	// InstructionsJSON is the copy-ready DNS records (Tusk MX/TXT names, values
 	// and priorities) embedded on the receiving form, so the status view can draw
 	// its fix prompts (an unauthorized TXT record, or a receiver missing from MX)
 	// the instant it opens rather than waiting for the first fetch to return. It
@@ -123,7 +123,7 @@ type dialMXSetupView struct {
 	// per check on open — even when the receiver stopped at its first failing gate
 	// and reports only one reason.
 	DNSJSON string
-	// ManifestJSON is where the domain's snapshotted Antler MX receiver set came
+	// ManifestJSON is where the domain's snapshotted Tusk MX receiver set came
 	// from (source and fetch time) embedded on the form, so the status view states
 	// it on open rather than waiting for the first fetch to land. It carries no
 	// secret.
@@ -263,7 +263,7 @@ func dialMXInstructionsJSON(instructions *dialMXDNSInstructions) string {
 	return string(b)
 }
 
-// antlerManifestJSON marshals the recorded Antler manifest source to the
+// antlerManifestJSON marshals the recorded Tusk manifest source to the
 // secret-free JSON embedded on the receiving form, so the status view states
 // whether setup used the live GitHub manifest or the built-in defaults as soon
 // as it opens. A config with no record is marshalled as null, and the view
@@ -2178,7 +2178,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 </section>{{end}}
 </form>
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
-<h3 class="section-head">{{if eq .Service "antler"}}Antler MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
+<h3 class="section-head">{{if eq .Service "antler"}}Tusk MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
 {{if .ContactEmail}}<p class="muted small">Contact email: <code>{{.ContactEmail}}</code></p>{{end}}
 {{if .ReceiverURLs}}<p class="muted small">Receiver URLs: <code>{{.ReceiverURLs}}</code></p>{{end}}
 {{if .MX}}<p><b>Publish these MX records for <code>{{$d.Name}}</code>:</b></p>
@@ -2191,7 +2191,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{if .Statuses}}<dl class="dialmx-status">{{range .Statuses}}<dt>{{.ReceiverURL}}</dt><dd>{{if dialmxReady .}}<span class="pill">ready</span>{{if .SMTPHostname}} · receiving at <code>{{.SMTPHostname}}</code>{{end}}{{if dialmxExpiry .}} · rekey in {{dialmxExpiry .}}{{end}}{{else}}<span class="pill {{dialmxStatusClass .}}">{{dialmxStatusLabel .}}</span>{{if .HTTPCode}} · HTTP {{.HTTPCode}}{{else if .Reason}} · {{.Reason}}{{end}}{{end}}</dd>{{end}}</dl>{{else}}<p class="muted small">No live receiver status yet. Save the configuration, then authorization and MX routing are confirmed automatically.</p>{{end}}
 <p class="copy-note">After regenerating the key, replace this TXT record too. Authorization is re-established within about five minutes.</p>
 </section>{{end}}
-<div class="dialog-actions">{{/* The danger block is drawn for every receiving dialog and hidden while nothing is stored, so the Dial MX wizard can reveal Remove receiving the moment it stores a configuration. */}}<div class="dialog-danger"{{if and (not $d.ReceivingProvider) (not (index $.DialMXSetup $d.ID))}} hidden{{end}}>{{if index $.DomainReceivingRegenerate $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="amber">Regenerate secret</button></form>{{end}}{{with index $.DialMXSetup $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-antler-regenerate data-confirm="Regenerate the receiving key for {{$d.Name}}? This invalidates the current key and can interrupt incoming mail until you replace the authorization TXT record in DNS and an Antler receiver reconnects. Your MX records stay the same."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Regenerate key</button></form>{{end}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/clear" data-confirm="Remove receiving configuration for this domain? It will stop accepting mail until a receive path is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove receiving</button></form></div><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="domain-receiving-form-{{$d.ID}}" data-save-provider{{if not $sel}} disabled{{end}}>Save</button></div>
+<div class="dialog-actions">{{/* The danger block is drawn for every receiving dialog and hidden while nothing is stored, so the Dial MX wizard can reveal Remove receiving the moment it stores a configuration. */}}<div class="dialog-danger"{{if and (not $d.ReceivingProvider) (not (index $.DialMXSetup $d.ID))}} hidden{{end}}>{{if index $.DomainReceivingRegenerate $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="amber">Regenerate secret</button></form>{{end}}{{with index $.DialMXSetup $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-antler-regenerate data-confirm="Regenerate the receiving key for {{$d.Name}}? This invalidates the current key and can interrupt incoming mail until you replace the authorization TXT record in DNS and a Tusk receiver reconnects. Your MX records stay the same."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Regenerate key</button></form>{{end}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/clear" data-confirm="Remove receiving configuration for this domain? It will stop accepting mail until a receive path is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove receiving</button></form></div><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="domain-receiving-form-{{$d.ID}}" data-save-provider{{if not $sel}} disabled{{end}}>Save</button></div>
 </dialog>
 {{end}}
 {{range .Domains}}{{$d := .}}<dialog id="domain-catchall-dialog-{{.ID}}" class="domain-dialog"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "catchall")}} data-open="1"{{end}}><h2>Catch-all · {{.Name}}</h2><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><p class="muted">Mail sent to an unknown address on this domain is delivered to this inbox. Only inboxes on {{.Name}} can be selected.</p><label>Catch-all inbox</label><select name="inbox"><option value="">No catch-all</option>{{range index $.DomainInboxes $d.ID}}<option value="{{.ID}}"{{if eq .ID $d.CatchAllInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Save catch-all</button></div></form></dialog>
@@ -2336,7 +2336,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		// A light means "here is how mail delivery for this domain stands", so it
 		// is only drawn for a domain that actually names something to deliver to.
-		// A Dial MX domain whose Antler receiver set is empty — an Antler setup that
+		// A Dial MX domain whose Tusk receiver set is empty — a Tusk setup that
 		// was started and abandoned, or a manifest that advertised no receivers —
 		// has nothing to deliver to and nothing to fix, so it gets no dot rather
 		// than a red "mail delivery is blocked" for a setup that was never finished.

@@ -16,7 +16,7 @@ const validManifest = `{
   "future_field": {"ignored": true},
   "receivers": [
     {"id":"antler-1","session_url":"https://antler1.example.test","smtp_hostname":"antler1.example.test","mx_priority":10},
-    {"id":"antler-2","session_url":"https://antler2.example.test","smtp_hostname":"antler2.example.test","mx_priority":20}
+    {"id":"antler-2","session_url":"https://tusk2.example.test","smtp_hostname":"tusk2.example.test","mx_priority":20}
   ]
 }`
 
