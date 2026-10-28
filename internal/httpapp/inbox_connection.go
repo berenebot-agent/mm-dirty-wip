@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // inboxConnectionState is the per-inbox provider connection health the dashboard

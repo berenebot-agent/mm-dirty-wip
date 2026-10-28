@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Tusk MX endpoint discovery.

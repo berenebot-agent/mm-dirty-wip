@@ -166,6 +166,12 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Changed
 
+- **The Go module follows the renamed upstream:** `github.com/dellarb/mammothmail`.
+  New passphrase-encrypted credentials use a repository-independent salt; existing
+  credentials remain readable with the legacy salt. Direct 32-byte keys are
+  unchanged. Back up data before upgrading: older binaries cannot decrypt new
+  passphrase-encrypted credentials after a rollback.
+
 - **The hosted relay is named Tusk MX.** Antler MX is renamed to **Tusk MX**
   everywhere it is shown: the receiving provider selector, the Dial MX setup
   wizard and status view, the dashboard and domain log labels
@@ -179,7 +185,7 @@ All notable changes to Mammoth Mail are documented here. This project follows
   identifiers keep their old spelling, because they are what the running code
   actually emits and accepts: `X-MailMoose-*`, `/.well-known/mailmoose`,
   `MAILMOOSE_BUILD`, `_mailmoose-mx` and the `github.com/dellarb/mailmoose`
-  module path.
+  module path (subsequently renamed as noted above).
 - **New Tusk MX setups enrol with the renamed Tusk receivers.** The receiver
   set now points at `tusk1.hgolabs.com` and `tusk2.hgolabs.com` (receiver ids
   `tusk-1`/`tusk-2`), so a setup saved from here publishes the new MX and TXT

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // deltaGate is an http.RoundTripper that holds the first Microsoft Graph delta

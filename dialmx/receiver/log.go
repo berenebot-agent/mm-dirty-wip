@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/logging"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/logging"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // This file is the receiver's complete structured observability contract. Every

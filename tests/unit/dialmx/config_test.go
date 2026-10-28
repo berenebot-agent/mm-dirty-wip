@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/dialmx"
+	"github.com/dellarb/mammothmail/dialmx"
 )
 
 // env applies a complete valid environment, then the caller overrides one key.
@@ -207,11 +207,11 @@ func TestSingleModeConfiguration(t *testing.T) {
 // TestLoadBrowserRedirect proves the optional browser landing redirect accepts
 // only a bounded https target and is carried onto the receiver configuration.
 func TestLoadBrowserRedirect(t *testing.T) {
-	cfg, err := loadWith(t, map[string]string{"DIALMX_BROWSER_REDIRECT_URL": "https://github.com/dellarb/mailmoose"})
+	cfg, err := loadWith(t, map[string]string{"DIALMX_BROWSER_REDIRECT_URL": "https://github.com/dellarb/mammothmail"})
 	if err != nil {
 		t.Fatalf("valid redirect rejected: %v", err)
 	}
-	if cfg.Receiver.BrowserRedirectURL != "https://github.com/dellarb/mailmoose" {
+	if cfg.Receiver.BrowserRedirectURL != "https://github.com/dellarb/mammothmail" {
 		t.Fatalf("redirect not carried: %q", cfg.Receiver.BrowserRedirectURL)
 	}
 	for _, bad := range []string{"http://example.com", "https://example.com/#frag", "not-a-url", "https://"} {

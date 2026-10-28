@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // withLoopbackResolver installs a loopback DNS resolver on net.DefaultResolver

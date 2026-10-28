@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/sendgrid"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/sendgrid"
 )
 
 var _ transport.InboundTransport = sendgrid.Transport{}

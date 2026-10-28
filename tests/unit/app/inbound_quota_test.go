@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestQuotaRefusedInboundIsRecorded pins the public-beta UAT finding D-2:

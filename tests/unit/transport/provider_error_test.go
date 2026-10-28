@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // TestProviderErrorTruncatesAndStripsBody proves a provider error keeps only a

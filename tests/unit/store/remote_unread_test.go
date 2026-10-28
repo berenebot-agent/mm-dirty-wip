@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // seedStandaloneWithFolders creates a standalone inbox whose folder set mirrors a

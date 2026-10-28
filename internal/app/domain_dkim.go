@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/mx"
 )
 
 // domainDKIMAAD binds a domain's encrypted DKIM private key to its account and

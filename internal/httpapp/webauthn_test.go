@@ -3,7 +3,7 @@ package httpapp
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestToWebAuthnCredentialsRestoresBackupFlags guards the login-path bug where

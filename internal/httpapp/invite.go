@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 const inviteBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>Set your password</h1>{{if .Error}}<div class="error">{{.Error}}</div>{{end}}<p class="muted">Finish setting up the account for <b>{{.Email}}</b>.</p><form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Password</label><input type="password" name="password" minlength="10" required autocomplete="new-password"><label>Confirm password</label><input type="password" name="confirm_password" minlength="10" required autocomplete="new-password"><button>Set password &amp; sign in</button></form></div>`

@@ -17,7 +17,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // Transport adapts the Worker webhook to the generic inbound boundary.

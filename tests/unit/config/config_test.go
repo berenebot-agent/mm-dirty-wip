@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mammothmail/internal/config"
 )
 
 const testKey = "01234567890123456789012345678901"

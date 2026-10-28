@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/launcher"
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/launcher"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // mxReconcileInterval bounds how long a settings change can take to reach the

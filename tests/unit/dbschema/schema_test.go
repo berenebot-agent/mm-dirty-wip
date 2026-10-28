@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/cryptox"
-	"github.com/dellarb/mailmoose/internal/dbschema"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/cryptox"
+	"github.com/dellarb/mammothmail/internal/dbschema"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 const stamp = "2026-10-18T00:00:00Z"

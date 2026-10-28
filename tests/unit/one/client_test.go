@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/one"
-	"github.com/dellarb/mailmoose/tests/support/onefixture"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/one"
+	"github.com/dellarb/mammothmail/tests/support/onefixture"
 )
 
 func TestDiscoveryAndSharedNativeGmailTransport(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/oneprobe"
+	"github.com/dellarb/mammothmail/internal/oneprobe"
 )
 
 const prefix = "/gmail/v1/users/{{userId}}"

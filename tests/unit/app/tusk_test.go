@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // stubAntler is a deterministic endpoint resolver for save-flow tests. A stub

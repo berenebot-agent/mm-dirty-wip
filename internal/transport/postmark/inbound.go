@@ -31,7 +31,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // Transport adapts Postmark inbound webhooks to the generic inbound boundary.

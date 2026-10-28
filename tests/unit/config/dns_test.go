@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mammothmail/internal/config"
 )
 
 func TestDNSFallbackDefaults(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // TestCoreLifecycleRecordsAreInfo asserts the operator-facing connect and

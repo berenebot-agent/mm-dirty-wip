@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/dellarb/mailmoose/dialmx"
+	"github.com/dellarb/mammothmail/dialmx"
 )
 
 // TestLevelFromEnvDefaultIsInfo pins the default: with the knob unset, and for

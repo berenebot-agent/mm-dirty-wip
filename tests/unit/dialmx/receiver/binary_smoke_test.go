@@ -21,7 +21,7 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"github.com/dellarb/mailmoose/tests/support/smoke"
+	"github.com/dellarb/mammothmail/tests/support/smoke"
 )
 
 // buildReceiverBinary compiles the real dialmx/cmd/receiver binary once. It is

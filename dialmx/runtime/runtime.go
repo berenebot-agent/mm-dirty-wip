@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // Fixed included endpoints. The session endpoint is loopback-only so only the

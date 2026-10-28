@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
 )
 
 // syncLogSink captures the rendered "remote sync" completion records so a test

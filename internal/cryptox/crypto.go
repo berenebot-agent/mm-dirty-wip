@@ -21,7 +21,8 @@ import (
 // alongside the ciphertext to be recoverable and there is no place for it in
 // the envelope; PBKDF2 with a fixed salt and a high iteration count is a large
 // improvement over a single unsalted SHA-256.
-var kdfSalt = []byte("github.com/dellarb/mailmoose/app-encryption-key/v2")
+var kdfSalt = []byte("mammothmail/app-encryption-key/v3")
+var legacyKDFSalt = []byte("github.com/dellarb/mailmoose/app-encryption-key/v2")
 
 const kdfIterations = 210_000
 
@@ -39,20 +40,32 @@ const derivedKeyCacheMax = 64
 
 var derivedKeyCount atomic.Int64
 
-func derivedCacheKey(raw string) [32]byte {
-	return sha256.Sum256([]byte(raw))
+func derivedCacheKey(raw string, salt []byte) [32]byte {
+	return sha256.Sum256(append(append([]byte(nil), salt...), []byte(raw)...))
 }
 
 // DeriveKey returns the AES key for the given APP_ENCRYPTION_KEY. A 32-byte
 // base64/hex key is used directly; a passphrase is stretched with
 // PBKDF2-HMAC-SHA256 under a fixed application salt.
 func DeriveKey(raw string) ([]byte, error) {
+	return deriveCached(raw, kdfSalt)
+}
+
+// DeriveLegacyKey returns the former passphrase-derived key, or nil for a direct key.
+func DeriveLegacyKey(raw string) ([]byte, error) {
+	if _, ok := decode32(strings.TrimSpace(raw)); ok {
+		return nil, nil
+	}
+	return deriveCached(raw, legacyKDFSalt)
+}
+
+func deriveCached(raw string, salt []byte) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
-	ck := derivedCacheKey(raw)
+	ck := derivedCacheKey(raw, salt)
 	if v, ok := derivedKeys.Load(ck); ok {
 		return v.([]byte), nil
 	}
-	key, err := deriveKey(raw)
+	key, err := deriveKey(raw, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +77,7 @@ func DeriveKey(raw string) ([]byte, error) {
 	return key, nil
 }
 
-func deriveKey(raw string) ([]byte, error) {
+func deriveKey(raw string, salt []byte) ([]byte, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("empty key")
 	}
@@ -74,7 +87,7 @@ func deriveKey(raw string) ([]byte, error) {
 	if len(raw) < 24 {
 		return nil, fmt.Errorf("APP_ENCRYPTION_KEY must be at least 24 characters or a 32-byte base64/hex key")
 	}
-	return pbkdf2.Key([]byte(raw), kdfSalt, kdfIterations, 32, sha256.New), nil
+	return pbkdf2.Key([]byte(raw), salt, kdfIterations, 32, sha256.New), nil
 }
 
 // decode32 decodes a 32-byte key from base64 (raw or std) or hex.

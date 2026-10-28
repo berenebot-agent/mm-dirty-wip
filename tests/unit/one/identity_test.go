@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/one"
-	"github.com/dellarb/mailmoose/tests/support/onefixture"
+	"github.com/dellarb/mammothmail/internal/transport/one"
+	"github.com/dellarb/mammothmail/tests/support/onefixture"
 )
 
 func TestOneSenderDisplayNameUsesVerifiedMailbox(t *testing.T) {

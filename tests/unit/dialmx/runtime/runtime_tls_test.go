@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	receiverruntime "github.com/dellarb/mammothmail/dialmx/runtime"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 	"github.com/emersion/go-smtp"
 )
 

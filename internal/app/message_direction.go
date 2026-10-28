@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // remoteView adds the same cached direction evidence to every remote surface,

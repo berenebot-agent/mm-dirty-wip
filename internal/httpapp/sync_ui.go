@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // uiInboxSync is the square reload button's target: a quick, user-triggered sync

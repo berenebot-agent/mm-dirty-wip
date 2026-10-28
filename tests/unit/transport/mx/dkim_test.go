@@ -3,9 +3,9 @@ package mx_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/mx"
 )
 
 // dkimFields returns the schema fields for the Direct MX outbound config.

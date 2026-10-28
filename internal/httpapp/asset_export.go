@@ -1,6 +1,6 @@
 package httpapp
 
-import "github.com/dellarb/mailmoose/internal/model"
+import "github.com/dellarb/mammothmail/internal/model"
 
 // AppJS returns the embedded browser bundle. It is exported so black-box tests
 // can assert on user-visible dynamic behaviour without duplicating the asset.

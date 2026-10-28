@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 func TestRelaySetupUIHistoryAndPendingCodes(t *testing.T) {

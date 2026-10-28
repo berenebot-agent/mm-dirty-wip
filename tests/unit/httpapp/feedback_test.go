@@ -49,7 +49,7 @@ func TestFeedbackButtonOnSignedInShell(t *testing.T) {
 	if !strings.Contains(body, `mailto:mammothmail@hgolabs.com`) {
 		t.Fatalf("signed-in shell has no feedback mailto link")
 	}
-	if !strings.Contains(body, `id="feedback-github"`) || !strings.Contains(body, `https://github.com/dellarb/mailmoose`) {
+	if !strings.Contains(body, `id="feedback-github"`) || !strings.Contains(body, `https://github.com/dellarb/mammothmail`) {
 		t.Fatalf("signed-in shell has no feedback repository link")
 	}
 }

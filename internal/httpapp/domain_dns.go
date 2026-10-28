@@ -1,7 +1,7 @@
 package httpapp
 
 import (
-	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mammothmail/internal/app"
 )
 
 // dnsViewsFromVerdict converts the watcher's shared DNS verdict into the API's

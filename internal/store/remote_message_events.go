@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // This file holds the durable record of a remote placement. A remote label or

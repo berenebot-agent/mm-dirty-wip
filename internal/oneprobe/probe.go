@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 const origin = "https://api.withone.ai"

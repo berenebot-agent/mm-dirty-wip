@@ -16,7 +16,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // Provider is the registered name and receiving provider identifier.

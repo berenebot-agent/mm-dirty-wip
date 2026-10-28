@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // authOnce drives a full DomainAuth / Challenge / ChallengeResponse exchange on a

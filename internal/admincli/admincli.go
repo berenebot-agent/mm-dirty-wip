@@ -13,8 +13,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // dataDirEnv matches the server's DATA_DIR so the command and a running

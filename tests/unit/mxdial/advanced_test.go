@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // TestReplacedPinnedTransactionStillIngests verifies the "last valid rule":

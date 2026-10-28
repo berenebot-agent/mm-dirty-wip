@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/cryptox"
+	"github.com/dellarb/mammothmail/internal/cryptox"
 )
 
 // TestKeyFileGeneratedWhenMissing proves a fresh deployment needs no

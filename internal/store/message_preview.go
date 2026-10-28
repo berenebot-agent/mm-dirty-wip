@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/messagepreview"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/messagepreview"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func cacheLocalPreview(ctx context.Context, tx *sql.Tx, id, text, markup string) error {

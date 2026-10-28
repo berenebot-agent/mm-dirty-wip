@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/apispec"
 )
 
 // collectRefs walks an arbitrary OpenAPI value and returns every

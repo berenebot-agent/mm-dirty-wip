@@ -3,14 +3,14 @@ package transport_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
-	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
-	_ "github.com/dellarb/mailmoose/internal/transport/mx"
-	_ "github.com/dellarb/mailmoose/internal/transport/mxdial"
-	_ "github.com/dellarb/mailmoose/internal/transport/remotemx"
-	_ "github.com/dellarb/mailmoose/internal/transport/resend"
-	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
+	"github.com/dellarb/mammothmail/internal/transport"
+	_ "github.com/dellarb/mammothmail/internal/transport/brevo"
+	_ "github.com/dellarb/mammothmail/internal/transport/mailgun"
+	_ "github.com/dellarb/mammothmail/internal/transport/mx"
+	_ "github.com/dellarb/mammothmail/internal/transport/mxdial"
+	_ "github.com/dellarb/mammothmail/internal/transport/remotemx"
+	_ "github.com/dellarb/mammothmail/internal/transport/resend"
+	_ "github.com/dellarb/mammothmail/internal/transport/smtp"
 )
 
 // TestInboundMXProviderLabel pins the human-facing label for the Direct MX
