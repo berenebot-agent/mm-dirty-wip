@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/httpapp"
 )
 
 func TestBrandAssetsServed(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestConfigSaveResolvesDomainBeforeProvider pins the ordering of the save

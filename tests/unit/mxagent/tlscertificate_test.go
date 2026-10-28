@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 	"github.com/emersion/go-smtp"
 )
 

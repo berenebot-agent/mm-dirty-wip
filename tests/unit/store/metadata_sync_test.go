@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestMetadataSyncDurableScope proves the per-inbox metadata-sync status is

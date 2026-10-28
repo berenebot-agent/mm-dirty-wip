@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mammothmail/internal/app"
 )
 
 // testTLSPair generates a self-signed certificate and its matching private key

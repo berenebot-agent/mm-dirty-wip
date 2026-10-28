@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
 )
 
 // apiPrefix is the per-user Gmail REST path prefix the client appends.

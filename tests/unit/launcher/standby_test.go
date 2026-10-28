@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/dialmx"
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/internal/launcher"
+	"github.com/dellarb/mammothmail/dialmx"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/internal/launcher"
 )
 
 func TestStandbyEnvIsMinimal(t *testing.T) {

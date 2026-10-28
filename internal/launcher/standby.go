@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/dellarb/mailmoose/dialmx"
-	"github.com/dellarb/mailmoose/dialmx/control"
+	"github.com/dellarb/mammothmail/dialmx"
+	"github.com/dellarb/mammothmail/dialmx/control"
 )
 
 // StartStandby spawns the included receiver as a child under spec.UID/GID,

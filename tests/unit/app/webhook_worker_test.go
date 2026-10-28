@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // parseWebhookSignature splits a "t=<unix>,v1=<hex>" header.

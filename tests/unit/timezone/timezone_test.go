@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/timezone"
+	"github.com/dellarb/mammothmail/internal/timezone"
 )
 
 func TestValidate(t *testing.T) {

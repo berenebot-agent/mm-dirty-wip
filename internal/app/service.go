@@ -23,35 +23,35 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/config"
-	"github.com/dellarb/mailmoose/internal/cryptox"
-	"github.com/dellarb/mailmoose/internal/events"
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport"
-	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
-	_ "github.com/dellarb/mailmoose/internal/transport/cloudflare"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
-	"github.com/dellarb/mailmoose/internal/transport/mx"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
-	_ "github.com/dellarb/mailmoose/internal/transport/postmark"
-	_ "github.com/dellarb/mailmoose/internal/transport/remotemx"
-	_ "github.com/dellarb/mailmoose/internal/transport/resend"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/config"
+	"github.com/dellarb/mammothmail/internal/cryptox"
+	"github.com/dellarb/mammothmail/internal/events"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport"
+	_ "github.com/dellarb/mammothmail/internal/transport/brevo"
+	_ "github.com/dellarb/mammothmail/internal/transport/cloudflare"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	_ "github.com/dellarb/mammothmail/internal/transport/mailgun"
+	"github.com/dellarb/mammothmail/internal/transport/mx"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
+	_ "github.com/dellarb/mammothmail/internal/transport/postmark"
+	_ "github.com/dellarb/mammothmail/internal/transport/remotemx"
+	_ "github.com/dellarb/mammothmail/internal/transport/resend"
 	// SendGrid is deliberately NOT registered: its inbound connector is complete
 	// and unit-tested, but the provider account could not be obtained for
 	// end-to-end verification (Twilio compliance refused activation), so it is
 	// hidden from the receiving provider menus until it can be tested. The
 	// adapter and its tests are untouched — re-enable by uncommenting this
 	// import and restoring "sendgrid" in the provider-order test's want list.
-	// _ "github.com/dellarb/mailmoose/internal/transport/sendgrid"
-	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
+	// _ "github.com/dellarb/mammothmail/internal/transport/sendgrid"
+	_ "github.com/dellarb/mammothmail/internal/transport/smtp"
 )
 
 // RemoteMessageResolver resolves a remote (standalone) message as a reply or
@@ -99,10 +99,11 @@ type Service struct {
 	// constructing the worker; when nil (tests, or a wiring that delivers only on
 	// the periodic poll) a send simply enqueues and delivery waits for the next
 	// tick. Wake requests an immediate delivery pass and never blocks.
-	OutboxWaker   OutboxWaker
-	ActionWaker   OutboxWaker
-	Log           *slog.Logger
-	EncryptionKey []byte
+	OutboxWaker         OutboxWaker
+	ActionWaker         OutboxWaker
+	Log                 *slog.Logger
+	EncryptionKey       []byte
+	legacyEncryptionKey []byte
 	// HandoffPublisher publishes a RemoteDraft handoff to a standalone inbox's
 	// connected remote server (append to Drafts + verify). InstallRemoteBridges
 	// installs the production publisher at startup; when nil, a handoff is created
@@ -189,6 +190,10 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if err != nil {
 		return nil, err
 	}
+	legacyKey, err := cryptox.DeriveLegacyKey(cfg.AppEncryptionKey)
+	if err != nil {
+		return nil, err
+	}
 	if err = os.MkdirAll(filepath.Join(cfg.DataDir, "messages", ".tmp"), 0o700); err != nil {
 		return nil, err
 	}
@@ -198,7 +203,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if concurrency < 1 {
 		concurrency = 32
 	}
-	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, legacyEncryptionKey: legacyKey, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
 }
 
 // providerSourceLabel returns the human source label for a webhook provider
@@ -1493,7 +1498,11 @@ func wholeFloat(v float64) (int, error) {
 // binding does not match is refused; unsupported pre-AAD ciphertext is refused
 // too. Only the current bound format is supported.
 func (s *Service) DecryptSecretAAD(aad string, encrypted string) ([]byte, error) {
-	return cryptox.DecryptWithAAD(s.EncryptionKey, encrypted, []byte(aad))
+	plaintext, err := cryptox.DecryptWithAAD(s.EncryptionKey, encrypted, []byte(aad))
+	if err != nil && s.legacyEncryptionKey != nil {
+		return cryptox.DecryptWithAAD(s.legacyEncryptionKey, encrypted, []byte(aad))
+	}
+	return plaintext, err
 }
 
 // EnsureDialMXCredential creates an exact-domain key without copying inherited

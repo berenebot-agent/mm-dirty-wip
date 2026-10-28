@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // MailboxCapabilities reports the declared mailbox surface without remote I/O.

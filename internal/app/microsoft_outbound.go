@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
 )
 
 type microsoftOutbound struct{}

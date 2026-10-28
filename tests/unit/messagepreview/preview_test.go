@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/dellarb/mailmoose/internal/messagepreview"
+	"github.com/dellarb/mammothmail/internal/messagepreview"
 )
 
 func TestPreview(t *testing.T) {

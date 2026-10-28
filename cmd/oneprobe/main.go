@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/oneprobe"
+	"github.com/dellarb/mammothmail/internal/oneprobe"
 )
 
 func main() {

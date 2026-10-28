@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 func TestCanonicalRecipientsDedupesAndCaps(t *testing.T) {

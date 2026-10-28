@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestUpdateMessageStateEmitsEvent proves an actual read-state change commits a

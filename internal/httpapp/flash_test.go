@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mammothmail/internal/app"
 )
 
 func TestFlashOwnershipAndConsumption(t *testing.T) {

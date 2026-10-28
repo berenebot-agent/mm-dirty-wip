@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Domain is one configured receiving domain the core is willing to speak for.

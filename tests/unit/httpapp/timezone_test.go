@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestAPIAccountSettingsTimezone covers the timezone field on the account

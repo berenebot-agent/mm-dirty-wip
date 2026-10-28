@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // ModifyMessageLabel applies a single additive mutation in one transaction.

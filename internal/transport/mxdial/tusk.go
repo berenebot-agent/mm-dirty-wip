@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Tusk MX endpoint discovery.
@@ -34,7 +34,7 @@ import (
 // AntlerManifestURL is the live manifest fetched when a setup is saved. The
 // embedded copy in endpoints.json is the fallback and the copy of record for
 // this repository.
-const AntlerManifestURL = "https://raw.githubusercontent.com/dellarb/mailmoose/main/internal/transport/mxdial/endpoints.json"
+const AntlerManifestURL = "https://raw.githubusercontent.com/dellarb/mammothmail/main/internal/transport/mxdial/endpoints.json"
 
 const (
 	antlerManifestTTL       = 10 * time.Minute

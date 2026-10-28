@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestOpenClawConnectorAPI covers the OpenClaw admin surface end to end: the

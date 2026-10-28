@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 func TestHTTPClientRejectsPrivateWhenPublicRequired(t *testing.T) {

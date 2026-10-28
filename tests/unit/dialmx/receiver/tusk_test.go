@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // TestAntlerRegistrationMetadataLogged proves the optional Tusk MX contact
@@ -119,7 +119,7 @@ func TestAntlerMalformedMetadataDroppedWithoutRejectingProof(t *testing.T) {
 // configured redirect never affects the session or health routes.
 func TestBrowserRootRedirect(t *testing.T) {
 	t.Parallel()
-	r := newReceiver(t, receiver.Config{BrowserRedirectURL: "https://github.com/dellarb/mailmoose"})
+	r := newReceiver(t, receiver.Config{BrowserRedirectURL: "https://github.com/dellarb/mammothmail"})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
 
@@ -131,7 +131,7 @@ func TestBrowserRootRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "https://github.com/dellarb/mailmoose" {
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "https://github.com/dellarb/mammothmail" {
 		t.Fatalf("browser root = %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 

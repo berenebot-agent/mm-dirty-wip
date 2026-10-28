@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // sgKeypair returns a fresh ECDSA key and its base64 SubjectPublicKeyInfo.

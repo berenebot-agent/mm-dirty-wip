@@ -13,7 +13,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // staticResolver serves fixed MX/TXT answers for the checker.

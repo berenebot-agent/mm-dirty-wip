@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/cloudflare"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/cloudflare"
 )
 
 var _ transport.InboundTransport = cloudflare.Transport{}

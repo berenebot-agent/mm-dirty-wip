@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 func TestDialMXCredentialAccountIsolationAndDomainCascade(t *testing.T) {

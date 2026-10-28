@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/config"
-	"github.com/dellarb/mailmoose/internal/events"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/tests/support/testdb"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/config"
+	"github.com/dellarb/mammothmail/internal/events"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/tests/support/testdb"
 )
 
 func testService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbox) {

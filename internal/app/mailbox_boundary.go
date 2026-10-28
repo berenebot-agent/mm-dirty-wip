@@ -3,8 +3,8 @@ package app
 import (
 	"errors"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // ErrRemoteNotBound is returned when a remote operation is requested for a

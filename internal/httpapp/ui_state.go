@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // uiState is the lightweight, role-scoped snapshot the browser reconciles

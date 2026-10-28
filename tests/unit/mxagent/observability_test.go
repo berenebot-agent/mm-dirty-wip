@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // TestTransactionContextRoundTrip verifies the public helper contract the

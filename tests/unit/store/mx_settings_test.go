@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestMXSettingsLifecycle covers the singleton configuration's create, CAS

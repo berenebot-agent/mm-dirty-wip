@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
 )
 
 func TestNativeCategories(t *testing.T) {

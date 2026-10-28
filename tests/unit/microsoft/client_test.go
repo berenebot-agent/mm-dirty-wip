@@ -12,9 +12,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
 )
 
 func TestCursorBoundaryAndNativeReply(t *testing.T) {

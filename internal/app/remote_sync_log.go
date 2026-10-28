@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // This file emits the operator-facing "remote sync" completion line for the

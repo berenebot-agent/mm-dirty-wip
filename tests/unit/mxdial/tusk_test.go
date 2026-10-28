@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 const validManifest = `{

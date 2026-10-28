@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport/one"
-	"github.com/dellarb/mailmoose/tests/support/onefixture"
+	"github.com/dellarb/mammothmail/internal/transport/one"
+	"github.com/dellarb/mammothmail/tests/support/onefixture"
 )
 
 // TestRetiredKeyServesInFlightRequest pins the behaviour the One import screen

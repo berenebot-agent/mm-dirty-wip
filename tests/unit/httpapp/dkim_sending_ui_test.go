@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
 )
 
 // mxSendingGroup returns the Direct MX provider group from the sending dialog.

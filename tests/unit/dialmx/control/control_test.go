@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // fakeHandler is an in-memory control.Handler that records the calls it

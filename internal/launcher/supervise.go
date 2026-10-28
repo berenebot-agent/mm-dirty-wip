@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
+	"github.com/dellarb/mammothmail/dialmx/control"
 )
 
 // Edge is a running embedded edge child spawned by StartStandby.

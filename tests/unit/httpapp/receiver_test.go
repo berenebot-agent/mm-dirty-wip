@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/httpapp"
 )
 
 func TestReceiverURLAndRoutes(t *testing.T) {

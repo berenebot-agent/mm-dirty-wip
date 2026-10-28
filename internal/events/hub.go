@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 type Hub struct {

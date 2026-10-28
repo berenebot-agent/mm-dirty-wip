@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
 	"github.com/emersion/go-msgauth/dkim"
 )
 

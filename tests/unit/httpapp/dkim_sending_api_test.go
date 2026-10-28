@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
 )
 
 // TestDomainSendingDKIMResponse is the security-relevant test for DKIM on the

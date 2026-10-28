@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
 )
 
 // Field names for the DKIM signing settings. FieldDKIMSelector and

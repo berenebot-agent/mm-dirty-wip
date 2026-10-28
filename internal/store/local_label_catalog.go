@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // ListDefinedLabels returns additive label names created independently of any

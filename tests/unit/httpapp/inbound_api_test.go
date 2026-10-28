@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/transport/cloudflare"
+	"github.com/dellarb/mammothmail/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/transport/cloudflare"
 )
 
 func TestDomainReceivingConfigREST(t *testing.T) {
