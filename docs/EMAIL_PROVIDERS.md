@@ -74,7 +74,7 @@ Mammoth Mail makes an **outbound connection** to the hosted Antler receivers. An
 1. Add your domain in Mammoth Mail and create an inbox.
 2. Open the domain's **Receiving** settings and select **Antler MX**.
 3. Enter a contact email and save. This is for service updates only, not a mailbox login.
-4. Copy the **MX** and `_mammothmail-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by Mammoth Mail.
+4. Copy the **MX** and `_mail-proof.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by Mammoth Mail.
 5. Continue to **Receivers** and wait for at least one receiver to show **Ready to receive**. Each receiver checks the TXT key and its own MX routing; DNS-step record indicators follow those proofs, not a separate local DNS cache.
 6. Continue to the spam/authentication policy, choose the enforcement level, and select **Finish** to save and close. Reopen **Receiving** any time to view status or edit settings.
 7. Send a test email to an address on your domain.

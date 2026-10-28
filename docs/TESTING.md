@@ -43,7 +43,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
 | `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash, passkey and release-config checks |
-| `smoke` | slow gated tests with `MAMMOTHMAIL_SMOKE=1` |
+| `smoke` | slow gated tests with `MAIL_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
 in the default preset:
@@ -53,10 +53,10 @@ in the default preset:
   receiver package (`./tests/unit/dialmx/receiver/`).
 
 They gate on `tests/support/smoke.Require`, which skips unless
-`MAMMOTHMAIL_SMOKE=1`. CI runs them as an explicit step so coverage is never
+`MAIL_SMOKE=1`. CI runs them as an explicit step so coverage is never
 silently lost, and that step adds one thing the local tier does not:
 `internal/auth`'s gated production-cost Argon2 tests
-(`MAMMOTHMAIL_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
+(`MAIL_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
 Run that command directly if you need the auth smoke locally.
 
 ## Run folder layout

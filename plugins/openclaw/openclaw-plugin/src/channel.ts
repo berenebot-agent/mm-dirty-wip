@@ -34,12 +34,12 @@ import {
 } from "./target.js";
 import type { CoreConfig, ResolvedMammothMailAccount } from "./types.js";
 
-export const MAMMOTHMAIL_CHANNEL_ID = "mammothmail" as const;
+export const MAIL_CHANNEL_ID = "mammothmail" as const;
 
 // External channels define their own metadata; getChatChannelMeta only knows
 // about bundled channel ids.
 export const mammothMailMeta: ChannelMeta = {
-  id: MAMMOTHMAIL_CHANNEL_ID,
+  id: MAIL_CHANNEL_ID,
   label: "Mammoth Mail",
   selectionLabel: "Mammoth Mail (email)",
   docsPath: "/channels/mammothmail",
@@ -62,7 +62,7 @@ export const mammothMailConfigAdapter = {
 
 export const mammothMailPlugin: ChannelPlugin<ResolvedMammothMailAccount> = createChatChannelPlugin({
   base: {
-    id: MAMMOTHMAIL_CHANNEL_ID,
+    id: MAIL_CHANNEL_ID,
     meta: mammothMailMeta,
     capabilities: {
       chatTypes: ["direct", "channel"],
@@ -109,7 +109,7 @@ export const mammothMailPlugin: ChannelPlugin<ResolvedMammothMailAccount> = crea
         return buildChannelOutboundSessionRoute({
           cfg,
           agentId,
-          channel: MAMMOTHMAIL_CHANNEL_ID,
+          channel: MAIL_CHANNEL_ID,
           accountId,
           recipientSessionExact: false,
           peer: { kind: "channel", id: buildMammothMailTarget(parsed) },
@@ -133,7 +133,7 @@ export const mammothMailPlugin: ChannelPlugin<ResolvedMammothMailAccount> = crea
   outbound: {
     base: { deliveryMode: "direct" },
     attachedResults: {
-      channel: MAMMOTHMAIL_CHANNEL_ID,
+      channel: MAIL_CHANNEL_ID,
       sendText: async (ctx) => {
         const messageId = await sendMammothMailText({
           cfg: ctx.cfg,

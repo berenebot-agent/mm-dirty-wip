@@ -57,7 +57,7 @@ func TestDialMXAPIKeyRotationAndTXTWizard(t *testing.T) {
 	if first["key_id"] == nil || first["public_key"] == nil || first["txt_record"] == nil || strings.Contains(rr.Body.String(), "private") {
 		t.Fatalf("missing/redacted key details: %s", rr.Body.String())
 	}
-	// The TXT value carries the MM1 fields; the _mammothmail-mx.<domain> record
+	// The TXT value carries the MM1 fields; the _mail-proof.<domain> record
 	// name is presented by the UI, not by the value.
 	if !strings.Contains(first["txt_record"].(string), "v=MM1; k=ed25519") {
 		t.Fatalf("txt record missing MM1 fields: %v", first["txt_record"])
@@ -85,7 +85,7 @@ func TestDialMXAPIKeyRotationAndTXTWizard(t *testing.T) {
 
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
-	for _, fragment := range []string{"Dial MX", "_mammothmail-mx." + domain.Name, "v=MM1; k=ed25519", "Regenerate key"} {
+	for _, fragment := range []string{"Dial MX", "_mail-proof." + domain.Name, "v=MM1; k=ed25519", "Regenerate key"} {
 		if !strings.Contains(page.Body.String(), fragment) {
 			t.Fatalf("wizard missing %q", fragment)
 		}
@@ -200,7 +200,7 @@ func TestDialMXInheritedExactKeyAndNoOwnConfig(t *testing.T) {
 	// its provider is shown as inherited.
 	page := domainGet(t, h, cookie, "/?domain="+child.ID+"&kind=receiving")
 	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+child.ID)
-	for _, want := range []string{"_mammothmail-mx." + child.Name, "Regenerate key", "Inherited (from " + parent.Name + ")"} {
+	for _, want := range []string{"_mail-proof." + child.Name, "Regenerate key", "Inherited (from " + parent.Name + ")"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("inherited setup dialog missing %q:\n%s", want, body)
 		}
@@ -273,7 +273,7 @@ func TestDialMXWizardRotationReturnsCurrentDNS(t *testing.T) {
 		t.Fatalf("key not rotated: %+v %v", after, err)
 	}
 	for _, response := range []string{rr.Body.String(), domainGet(t, h, cookie, path).Body.String()} {
-		if !strings.Contains(response, after.PublicKey) || strings.Contains(response, before.PublicKey) || !strings.Contains(response, "_mammothmail-mx."+domain.Name) {
+		if !strings.Contains(response, after.PublicKey) || strings.Contains(response, before.PublicKey) || !strings.Contains(response, "_mail-proof."+domain.Name) {
 			t.Fatalf("rotation/reopen must return current DNS instructions: %s", response)
 		}
 	}

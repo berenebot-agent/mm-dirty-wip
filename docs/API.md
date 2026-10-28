@@ -76,7 +76,7 @@ Example authorization result:
 
 ## 2. Discovery
 
-### `GET /.well-known/mailmoose`
+### `GET /.well-known/mail-api`
 
 Returns a compact discovery document. `build` identifies the running binary (the
 commit stamped at build time, otherwise the build timestamp); `/healthz` reports
@@ -1528,7 +1528,7 @@ POST /internal/ingest/postmark
 ```
 
 Each adapter authenticates the provider (Mailgun HMAC signature; Cloudflare
-bearer plus `X-MailMoose-Recipient`; Resend Svix signature headers;
+bearer plus `X-Mail-Recipient`; Resend Svix signature headers;
 Postmark HTTP Basic authentication)
 before parsing or persisting MIME, then converts delivery to the canonical
 `InboundMessage` with an explicit authenticated binding. Resend webhooks carry
@@ -1538,7 +1538,7 @@ verification. The legacy `/internal/ingest/mailgun` alias has been removed;
 
 Delivery idempotency is scoped to `(account_id, provider, canonical original
 envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated
-webhook `token`; Cloudflare uses `X-MailMoose-Delivery-ID` or a SHA-256 hash of
+webhook `token`; Cloudflare uses `X-Mail-Delivery-ID` or a SHA-256 hash of
 the raw MIME; Resend uses `data.email_id`. Unknown recipients route to the
 domain catch-all when configured; otherwise the endpoint returns `406`. Missing
 receiving configuration, unknown domains, and bad authentication return `401`.
@@ -1764,7 +1764,7 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
 - `status[]` — per-receiver state learned over the core's outbound session:
   `receiver_url`, `state` (`ready`, `rejected`, `connecting`, `unavailable`, …),
   bounded `reason`, advertised `smtp_hostname` and `expires_at`. A receiver is
-  `ready` only once it has proved both domain authority (its `_mammothmail-mx` TXT
+  `ready` only once it has proved both domain authority (its `_mail-proof` TXT
   key) and routing (its own SMTP hostname is published in the domain's MX
   records). A receiver that is authorized but not routed reports
   `rejected`/`not_mx`. For an Antler MX setup an unreachable receiver reports no
@@ -1877,18 +1877,18 @@ push destination. It has two payload modes:
 Every delivery carries the durable event headers:
 
 ```text
-X-MailMoose-Event:      message.received | message.spam_state_changed
-X-MailMoose-Delivery:   <client_id>:<cursor>
-X-MailMoose-Message-Id: <message_id>
-X-MailMoose-Cursor:     evt_<n>
+X-Mail-Event:      message.received | message.spam_state_changed
+X-Mail-Delivery:   <client_id>:<cursor>
+X-Mail-Message-Id: <message_id>
+X-Mail-Cursor:     evt_<n>
 ```
 
 A forward delivery additionally carries the original transport envelope
 metadata, read from the persisted message and therefore identical on retries:
 
 ```text
-X-MailMoose-Envelope-From: <percent-encoded original envelope sender, or empty>
-X-MailMoose-Envelope-To:   <percent-encoded canonical original envelope recipient>
+X-Mail-Envelope-From: <percent-encoded original envelope sender, or empty>
+X-Mail-Envelope-To:   <percent-encoded canonical original envelope recipient>
 ```
 
 - Values are **percent-encoded UTF-8 using RFC 3986 escaping**: a space is
@@ -1908,7 +1908,7 @@ Authentication is chosen per client:
 
 - **bearer** — `Authorization: Bearer <secret>` (the same generated token shown
   once at creation/rotation).
-- **signature** — `X-MailMoose-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over
+- **signature** — `X-Mail-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over
   `t + "." + body` with the client secret.
 
 Delivery is durable and inbox-ordered: HTTP 2xx acknowledges and advances the
@@ -1916,7 +1916,7 @@ cursor; failures retry with capped exponential backoff and a delivery not
 succeeded within the retry window is marked failed with the cursor advanced.
 Mail that is currently Spam, internal, or has since been deleted is terminally
 **skipped** (no request) with the cursor advanced, so it cannot block the queue.
-An empty `X-MailMoose-Envelope-From` means the transport supplied no envelope
+An empty `X-Mail-Envelope-From` means the transport supplied no envelope
 sender; it never reflects the MIME header.
 
 ## 13. Hermes Relay

@@ -19,7 +19,7 @@ func cfRequest(t *testing.T, secret, deliveryID, recipient, raw string) *http.Re
 	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader(raw))
 	r.Header.Set("Content-Type", "message/rfc822")
 	r.Header.Set(cloudflare.HeaderRecipient, recipient)
-	r.Header.Set(cloudflare.HeaderEnvelopeTo, "sender@outside.test")
+	r.Header.Set(cloudflare.HeaderEnvelopeFrom, "sender@outside.test")
 	if deliveryID != "" {
 		r.Header.Set(cloudflare.HeaderDeliveryID, deliveryID)
 	}
@@ -58,7 +58,7 @@ func TestInboundPersistsTransportEnvelopeSender(t *testing.T) {
 	now := time.Now().Format(time.RFC1123Z)
 	raw := "From: Header Name <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: cf env\r\nMessage-ID: <cf-env@test>\r\nDate: " + now + "\r\n\r\nbody"
 	req := cfRequest(t, testCFSecret, "cf-env-1", box.Address, raw)
-	req.Header.Set(cloudflare.HeaderEnvelopeTo, "Envelope Sender <envelope@outside.test>")
+	req.Header.Set(cloudflare.HeaderEnvelopeFrom, "Envelope Sender <envelope@outside.test>")
 	m, dup, err := svc.IngestInbound(ctx, "cloudflare", req)
 	if err != nil || dup {
 		t.Fatalf("cf ingest %v dup=%v", err, dup)
@@ -89,7 +89,7 @@ func TestInboundMissingEnvelopeSenderStaysEmpty(t *testing.T) {
 	ctx := context.Background()
 	raw := "From: Sender <sender@outside.test>\r\nTo: " + box.Address + "\r\nSubject: no env\r\nMessage-ID: <no-env@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	req := cfRequest(t, testCFSecret, "no-env-1", box.Address, raw)
-	req.Header.Del(cloudflare.HeaderEnvelopeTo)
+	req.Header.Del(cloudflare.HeaderEnvelopeFrom)
 	m, dup, err := svc.IngestInbound(ctx, "cloudflare", req)
 	if err != nil || dup {
 		t.Fatalf("ingest %v dup=%v", err, dup)

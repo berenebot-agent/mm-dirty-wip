@@ -21,10 +21,10 @@ services:
     build:
       context: .
       args:
-        # Stamp the deployed commit: MAMMOTHMAIL_BUILD=$(git rev-parse --short HEAD)
+        # Stamp the deployed commit: MAIL_BUILD=$(git rev-parse --short HEAD)
         # docker compose up -d --build. Empty records the build timestamp instead;
         # either is reported by /healthz as "build".
-        MAMMOTHMAIL_BUILD: ${MAMMOTHMAIL_BUILD:-}
+        MAIL_BUILD: ${MAIL_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # System administrator credentials: when set in .env they are authoritative

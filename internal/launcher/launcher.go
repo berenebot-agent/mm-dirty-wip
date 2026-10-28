@@ -30,7 +30,7 @@ type Spec struct {
 
 // ResolveBinary returns the edge binary path, honouring an override for tests.
 func ResolveBinary() string {
-	if v := strings.TrimSpace(os.Getenv("MAMMOTHMAIL_MX_BIN")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MAIL_MX_BIN")); v != "" {
 		return v
 	}
 	if exe, err := os.Executable(); err == nil {

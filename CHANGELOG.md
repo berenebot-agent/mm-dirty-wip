@@ -166,15 +166,25 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **Client-facing names are brand-free (API change explicitly approved).**
+  Webhook and forward headers are now `X-Mail-*` (for example
+  `X-Mail-Signature`), sent alongside the old `X-MailMoose-*` names during the
+  transition. Cloudflare Worker inbound headers are `X-Mail-*` and the old
+  names are still accepted. Agent discovery is
+  `GET /.well-known/mail-api` (the old path remains an alias) and the auth
+  realm is `mail-api`. The DNS proof record is `_mail-proof.<domain>`, and
+  environment variables and scripts use `MAIL_*`. GHCR images are
+  `mammothmail` and `mammothmail-remote-mx`. See **D161**.
+
 - **Product renamed to Mammoth Mail (API change explicitly approved).** The
   approval authoring mode `mailmoose_approval` is now **`local_approval`**
   everywhere it appears in the API, including `GET`/`PUT
   /v1/inboxes/{id}/authoring`. Clients sending or reading the old value must
   switch. Stored values are migrated (migration 004). The DNS proof record
-  moves from `_mailmoose-mx.<domain>` to **`_mammothmail-mx.<domain>`**, which
-  every domain must republish. The display name, environment variables, client
-  configuration path and script names change to Mammoth Mail / `mammothmail`.
-  See **D160**.
+  moves from `_mailmoose-mx.<domain>` to **`_mail-proof.<domain>`** (D161):
+  every domain must republish it. The display name, environment variables,
+  client configuration path and script names change to Mammoth Mail /
+  `mammothmail`. See **D160**.
 
 - **Unsupported-operation error code (API change explicitly approved).**
   Unsupported mailbox operations keep HTTP **409**, but return

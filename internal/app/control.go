@@ -423,7 +423,9 @@ func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed 
 // frozen handoff draft echoed back), never an approval control message, so the
 // remote-detection path excludes it before dispatching.
 func HasHandoffHeader(raw []byte) bool {
-	return rawHasHeader(raw, model.HandoffHeader)
+	// The pre-rename spelling is still accepted: a draft appended to a remote
+	// server before the rename keeps it.
+	return rawHasHeader(raw, model.HandoffHeader) || rawHasHeader(raw, model.LegacyHandoffHeader)
 }
 
 // rawHasHeader reports whether raw MIME begins (in its header block) with the

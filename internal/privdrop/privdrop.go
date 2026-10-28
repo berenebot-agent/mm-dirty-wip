@@ -33,11 +33,11 @@ const (
 // no-op, so callers can log the runtime identity without re-reading the
 // environment). Once dropped, privileges cannot be regained.
 func DropToRuntimeUser(dir string) (dropped bool, uid int, gid int, err error) {
-	uid, err = envID("MAMMOTHMAIL_RUN_UID", DefaultUID)
+	uid, err = envID("MAIL_RUN_UID", DefaultUID)
 	if err != nil {
 		return false, 0, 0, err
 	}
-	gid, err = envID("MAMMOTHMAIL_RUN_GID", DefaultGID)
+	gid, err = envID("MAIL_RUN_GID", DefaultGID)
 	if err != nil {
 		return false, 0, 0, err
 	}
@@ -97,14 +97,14 @@ func DropTo(uid, gid int) error {
 
 // ResolvedIdentity returns the UID and GID the running process would be
 // configured with if DropToRuntimeUser were invoked now. It honours
-// MAMMOTHMAIL_RUN_UID / MAMMOTHMAIL_RUN_GID and falls back to DefaultUID/DefaultGID.
+// MAIL_RUN_UID / MAIL_RUN_GID and falls back to DefaultUID/DefaultGID.
 // It does not perform any privilege change.
 func ResolvedIdentity() (uid, gid int, err error) {
-	uid, err = envID("MAMMOTHMAIL_RUN_UID", DefaultUID)
+	uid, err = envID("MAIL_RUN_UID", DefaultUID)
 	if err != nil {
 		return 0, 0, err
 	}
-	gid, err = envID("MAMMOTHMAIL_RUN_GID", DefaultGID)
+	gid, err = envID("MAIL_RUN_GID", DefaultGID)
 	if err != nil {
 		return 0, 0, err
 	}

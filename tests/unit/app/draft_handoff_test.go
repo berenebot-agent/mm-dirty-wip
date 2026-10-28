@@ -662,6 +662,11 @@ func TestHandleRemoteApprovalControlExcludesHandoffHeader(t *testing.T) {
 	if err := svc.HandleRemoteApprovalControl(ctx, box, parsed, raw); !errors.Is(err, transport.ErrInboundIgnored) {
 		t.Fatalf("handoff-header control err=%v", err)
 	}
+	// A draft appended before the rename keeps the old spelling.
+	legacy := []byte(model.LegacyHandoffHeader + ": hnd_x\r\nFrom: Ben <" + approverAddress + ">\r\nSubject: [GH-APPROVE:" + token + "]\r\n\r\nbody")
+	if err := svc.HandleRemoteApprovalControl(ctx, box, parsed, legacy); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("legacy handoff-header control err=%v", err)
+	}
 	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, d.ID)
 	if err != nil || sr.Status != model.SendRequestPending {
 		t.Fatalf("handoff-header message changed the request: %+v err=%v", sr, err)

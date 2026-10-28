@@ -373,6 +373,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}/live", s.withSession(s.uiInboxLive))
 
 	// Discovery.
+	m.HandleFunc("GET /.well-known/mail-api", s.discovery)
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
@@ -620,7 +621,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
-		w.Header().Set("Link", `</.well-known/mailmoose>; rel="help"; title="Agents: GET /.well-known/mailmoose for API reference"`)
+		w.Header().Set("Link", `</.well-known/mail-api>; rel="help"; title="Agents: GET /.well-known/mail-api for API reference"`)
 		// HSTS is only meaningful on a deployment that requires HTTPS; the
 		// redirect middleware runs over plaintext, so this is reached only on
 		// a TLS request (or a trusted proxy-reported HTTPS request).
@@ -825,13 +826,13 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := strings.TrimSpace(r.Header.Get("Authorization"))
 		if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mail-api"`)
 			writeError(w, 401, "bearer API key required")
 			return
 		}
 		p, err := s.Service.Store.APIKeyPrincipal(r.Context(), strings.TrimSpace(h[7:]))
 		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mail-api"`)
 			writeError(w, 401, "invalid API key")
 			return
 		}

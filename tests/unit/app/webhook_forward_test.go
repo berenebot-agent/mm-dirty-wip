@@ -65,9 +65,9 @@ func seedForwardMessage(t *testing.T, svc *app.Service, accountID, domainID, box
 	seedInbound(t, svc, accountID, domainID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	req := cfRequest(t, testCFSecret, "fwd-"+boxAddress+"-"+time.Now().Format("150405.000000000"), boxAddress, raw)
 	if envelopeFrom != "" {
-		req.Header.Set(cloudflare.HeaderEnvelopeTo, envelopeFrom)
+		req.Header.Set(cloudflare.HeaderEnvelopeFrom, envelopeFrom)
 	} else {
-		req.Header.Del(cloudflare.HeaderEnvelopeTo)
+		req.Header.Del(cloudflare.HeaderEnvelopeFrom)
 	}
 	m, dup, err := svc.IngestInbound(ctx, "cloudflare", req)
 	if err != nil || dup {
@@ -130,7 +130,7 @@ func TestWebhookForwardEnvelopeHeadersAndExactMIME(t *testing.T) {
 	if n := len(headers.Values(app.HeaderEnvelopeFrom)); n != 1 {
 		t.Fatalf("envelope-from header count %d", n)
 	}
-	if headers.Get("X-MailMoose-Event") != "message.received" || headers.Get("X-MailMoose-Cursor") == "" || headers.Get("X-MailMoose-Delivery") == "" || headers.Get("X-MailMoose-Message-Id") != messageID {
+	if headers.Get("X-Mail-Event") != "message.received" || headers.Get("X-Mail-Cursor") == "" || headers.Get("X-Mail-Delivery") == "" || headers.Get("X-Mail-Message-Id") != messageID {
 		t.Fatalf("existing headers lost: %#v", headers)
 	}
 }

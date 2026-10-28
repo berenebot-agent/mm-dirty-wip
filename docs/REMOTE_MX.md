@@ -33,7 +33,7 @@ DIALMX_TLS_KEY=/certs/privkey.pem
 docker compose -f dialmx/compose.yml up -d --build
 ```
 
-4. For each domain, choose **Receiving → Dial MX** in Mammoth Mail, enter the receiver's HTTPS URL, and publish the MX and `_mammothmail-mx.<domain>` TXT records shown.
+4. For each domain, choose **Receiving → Dial MX** in Mammoth Mail, enter the receiver's HTTPS URL, and publish the MX and `_mail-proof.<domain>` TXT records shown.
 
 Each domain, including subdomains, needs its own TXT proof. You can configure multiple receiver URLs for redundancy. Keep public SMTP traffic directly reachable on port 25; a proxy that hides the sending server's IP can interfere with sender checks. A receiver URL that reaches the receiver through a reverse proxy has to meet the [proxy requirements](#reverse-proxies-in-front-of-the-receiver).
 
@@ -88,7 +88,7 @@ The command must print `2`. A `405` reply is expected and fine — the receiver 
 | The receiver logs `client sent an HTTP request to an HTTPS server` | The proxy sent plain HTTP to the receiver's TLS port. |
 | The receiver answers `426 HTTP/2 required` | The proxy downgraded the session to HTTP/1.1. |
 | The domain's Receiving panel says **receiver speaks HTTP/1.1, not HTTP/2** | The proxy answered the session over HTTP/1.1. |
-| The domain's Receiving panel says **receiver refused the session** | The receiver answered and declined it: check the shared core key (single mode) or the `_mammothmail-mx.<domain>` TXT proof (shared mode). |
+| The domain's Receiving panel says **receiver refused the session** | The receiver answered and declined it: check the shared core key (single mode) or the `_mail-proof.<domain>` TXT proof (shared mode). |
 | The domain's Receiving panel names an HTTP status, e.g. **receiver refused the session (HTTP 405)** or **receiver reported a server error (HTTP 502)** | Something answered at the receiver URL with that status. The core cannot tell the receiver from a proxy in front of it — both answer the same request — so read the proxy's log and the receiver's log for the detail. A `405` usually means the proxy does not forward the session `POST`; a `502` or `504` the proxy produced means it could not reach the receiver at all. |
 
 The receiver's SMTP hostname and the session hostname do not have to be the same name — the receiver advertises the SMTP hostname while Mammoth Mail dials the session hostname — but using one name for both is the path that works.
@@ -116,7 +116,7 @@ The domain's **Receiving** panel reports the receiver status:
 - **unreachable**, with a DNS or TLS reason — no session could be established. Check outbound HTTPS to the receiver, DNS resolution, and the host clock and certificate chain.
 - **unreachable**, with no session attempt in the receiver's own log — a receiver of your own behind a reverse proxy is the likely cause: the proxy buffered the request body, or the connection never became HTTP/2. See [Reverse proxies in front of the receiver](#reverse-proxies-in-front-of-the-receiver).
 - a status that names an HTTP code, e.g. **receiver refused the session (HTTP 405)** or **receiver reported a server error (HTTP 502)** — something answered at the receiver URL with that status. Read the proxy's log and the receiver's log for the detail; the core cannot tell the two apart.
-- **rejected** — the receiver answered and refused the domain. The `_mammothmail-mx.<domain>` TXT value must be the key currently shown in the Receiving panel, and the MX records must point at the receiver. A receiver set is chosen from the Antler manifest when a setup is saved, and the domain keeps that snapshot; the manifest cache does not re-point or re-authenticate a live session, so changing it is not a repair step.
+- **rejected** — the receiver answered and refused the domain. The `_mail-proof.<domain>` TXT value must be the key currently shown in the Receiving panel, and the MX records must point at the receiver. A receiver set is chosen from the Antler manifest when a setup is saved, and the domain keeps that snapshot; the manifest cache does not re-point or re-authenticate a live session, so changing it is not a repair step.
 
 ### Temporary SMTP failures and sender retries
 

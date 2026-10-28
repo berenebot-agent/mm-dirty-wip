@@ -41,7 +41,7 @@ func workerRequest(t *testing.T, secret, deliveryID, raw string) *http.Request {
 	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader(raw))
 	r.Header.Set("Content-Type", "message/rfc822")
 	r.Header.Set(cloudflare.HeaderRecipient, "hermes@example.com")
-	r.Header.Set(cloudflare.HeaderEnvelopeTo, "sender@outside.test")
+	r.Header.Set(cloudflare.HeaderEnvelopeFrom, "sender@outside.test")
 	if deliveryID != "" {
 		r.Header.Set(cloudflare.HeaderDeliveryID, deliveryID)
 	}
@@ -68,6 +68,25 @@ func TestReceiveAndVerify(t *testing.T) {
 	staged, _ := os.ReadFile(msg.RawPath)
 	if !strings.Contains(string(staged), "hello") {
 		t.Fatal("raw mime missing")
+	}
+}
+
+func TestPreRenameWorkerHeadersAccepted(t *testing.T) {
+	t.Parallel()
+	var tr cloudflare.Transport
+	raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\nSubject: hi\r\n\r\nhello"
+	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader(raw))
+	r.Header.Set("Content-Type", "message/rfc822")
+	r.Header.Set("X-MailMoose-Recipient", "hermes@example.com")
+	r.Header.Set("X-MailMoose-Envelope-From", "sender@outside.test")
+	r.Header.Set("X-MailMoose-Delivery-ID", "cf-legacy-1")
+	r.Header.Set("Authorization", "Bearer s3cret")
+	msg, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Recipient != "hermes@example.com" || msg.DeliveryID != "cf-legacy-1" || msg.EnvelopeFrom != "sender@outside.test" {
+		t.Fatalf("%+v", msg)
 	}
 }
 

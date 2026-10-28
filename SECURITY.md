@@ -68,7 +68,7 @@ of sender identity:
   (`internal/transport/mailgun/inbound.go`), so the `sender` form field is not
   provider-attested.
 - **Cloudflare** — the envelope sender is read verbatim from the
-  `X-MailMoose-Envelope-From` request header
+  `X-Mail-Envelope-From` request header
   (`internal/transport/cloudflare/inbound.go`); the shared per-domain bearer
   authenticates the **caller**, not the **value** the caller asserts.
 - **Postmark** — the envelope sender is read from the JSON `From` field
@@ -107,7 +107,7 @@ decision to change approval behaviour.
 **Status:** accepted risk — decision `D066` in `docs/DECISIONS.md`.
 
 An outbound **forward** webhook carries the original transport envelope sender
-and recipient in the `X-MailMoose-Envelope-From` / `X-MailMoose-Envelope-To`
+and recipient in the `X-Mail-Envelope-From` / `X-Mail-Envelope-To`
 headers alongside the unchanged raw MIME. The values are exactly what the
 inbound transport reported, so their trustworthiness is the inbound transport's:
 Cloudflare and Mailgun envelope senders are caller-asserted, and Resend's signed

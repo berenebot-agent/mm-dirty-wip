@@ -1281,7 +1281,7 @@ func domainReceivingSteps(provider string) []string {
 			"Choose Antler MX for the zero-config free relay, or Custom receiver URLs to point at your own receiver.",
 			"For Antler MX, enter a contact email and save; the MX and TXT records to publish are then shown in this dialog.",
 			"For a custom service, add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
-			"Save to generate the domain key, then publish the shown MM1 TXT record at _mammothmail-mx.<this-domain> and the shown MX records.",
+			"Save to generate the domain key, then publish the shown MM1 TXT record at _mail-proof.<this-domain> and the shown MX records.",
 			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
 			"Choose moderate or hard receiver authentication enforcement, then save.",
 		}

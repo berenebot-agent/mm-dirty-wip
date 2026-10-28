@@ -120,7 +120,7 @@ type Config struct {
 	// DNSFallbackServers are the ordered public resolvers tried when the host's
 	// configured DNS servers fail an exchange. A nil slice means failover is
 	// disabled and the native resolver is left untouched. Populated from
-	// MAMMOTHMAIL_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
+	// MAIL_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
 	// defaults and "off" disables failover.
 	DNSFallbackServers []string
 	// Build identifies the running binary: the commit stamped at build time, or
@@ -149,9 +149,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dnsFallbackServers, err := dnsfallback.ParseServers(env("MAMMOTHMAIL_DNS_FALLBACK_SERVERS", ""))
+	dnsFallbackServers, err := dnsfallback.ParseServers(env("MAIL_DNS_FALLBACK_SERVERS", ""))
 	if err != nil {
-		return Config{}, fmt.Errorf("MAMMOTHMAIL_DNS_FALLBACK_SERVERS: %w", err)
+		return Config{}, fmt.Errorf("MAIL_DNS_FALLBACK_SERVERS: %w", err)
 	}
 	baseURL := strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/")
 	baseHost, err := parseBaseHost(baseURL)
@@ -202,7 +202,7 @@ func Load() (Config, error) {
 		InboundTLSKeyFile:       strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 		DNSFallbackServers:      dnsFallbackServers,
-		Build:                   strings.TrimSpace(os.Getenv("MAMMOTHMAIL_BUILD")),
+		Build:                   strings.TrimSpace(os.Getenv("MAIL_BUILD")),
 	}
 	if cfg.Mode != "selfhosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted")

@@ -100,11 +100,11 @@ For a more restricted container configuration, the repository provides `docker-c
 Before upgrading, back up `./data` and your external encryption key if used. Update the image and recreate the container:
 
 ```bash
-MAMMOTHMAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+MAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
 docker compose logs --tail 100 mammothmail
 ```
 
-A source build takes `MAMMOTHMAIL_BUILD` (the commit being deployed); an image
+A source build takes `MAIL_BUILD` (the commit being deployed); an image
 pull keeps whatever the image was stamped with. Either way
 `curl -s http://localhost:8081/healthz` reports the running `build`, so confirm
 the new revision is live before re-testing a fix.

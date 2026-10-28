@@ -637,7 +637,7 @@ const EventMessageStateChanged = "message.state_changed"
 const EventMXHealthChanged = "mx.health_changed"
 
 // EventMXDNSChanged is a transient, non-persisted notification that a domain's
-// published-record verdict changed: the `_mammothmail-mx` TXT check and/or the MX
+// published-record verdict changed: the `_mail-proof` TXT check and/or the MX
 // routing check (including the "extra MX" hosts). It carries the full verdict in
 // its payload. The dashboard light and an open status dialog both read it, so a
 // domain's DNS problems are surfaced per check — and stay in sync — without

@@ -6638,3 +6638,42 @@ and a separately deployed receiver until both are upgraded together.
 **Not changed:** `docs/DECISIONS.md` and `CHANGELOG.md` history, graphics and
 logo, and the untracked `tools/` deployment directory, which needs its own
 deployment step.
+
+## D161 — Brand-free client contracts (headers, discovery path, realm, images)
+
+**Context:** D160 held four client-facing names back. The brand does not belong
+in a protocol contract: these names outlive any product name, and renaming them
+later is expensive. Pre-launch is the cheapest time to make them neutral.
+
+**Decision (2026-10-28), each an explicitly approved API change:**
+
+- **Webhook and forward headers are `X-Mail-*`** (was `X-MailMoose-*`):
+  `X-Mail-Event`, `X-Mail-Delivery`, `X-Mail-Message-Id`, `X-Mail-Cursor`,
+  `X-Mail-Signature`, `X-Mail-Envelope-From`, `X-Mail-Envelope-To`. Every
+  webhook header is sent under **both** names for a transition period;
+  removing the old names is a later, separately approved change.
+- **Cloudflare Worker inbound headers are `X-Mail-*`** (was `X-MailMoose-*`):
+  `X-Mail-Recipient`, `X-Mail-Envelope-From`, `X-Mail-Delivery-ID`,
+  `X-Mail-Received-At`. The server accepts either name, so a Worker still on the
+  old names keeps delivering. `transport/cloudflare.HeaderEnvelopeTo` was
+  misnamed (it held the envelope-**from** header); it is now
+  `HeaderEnvelopeFrom`.
+- **Discovery is `GET /.well-known/mail-api`** (was `/.well-known/mailmoose`).
+  The old path stays as a permanent alias.
+- **Auth realm is `mail-api`** (was `mailmoose-api`).
+- **GHCR images are `mammothmail` and `mammothmail-remote-mx`** (was
+  `dirty-wip-mailmoose*`); the `dirty-wip-` dev prefix is dropped. The brand is
+  kept here because operators choose the image by name.
+
+**Now brand-free too (D160 revisited):** the MX wire label is `mail-mx-v1`
+(was `mailmoose-mx-v1`), the evaluator tag is `mail-mx/1`, the DNS proof record
+is `_mail-proof.<domain>`, and environment/script variables are `MAIL_*` (was
+`MAMMOTHMAIL_*` / `MAILMOOSE_*`).
+
+**The RemoteDraft handoff header** is `X-Mail-Handoff-ID` (was
+`X-MailMoose-Handoff-ID`). The header written on a draft already appended to a
+remote server cannot be rewritten, so ambiguity recovery must keep accepting
+the old spelling; new handoffs use the new one.
+
+**Not changed:** the Go module and repository path
+`github.com/dellarb/mailmoose`, which follow the repository name, not the brand.

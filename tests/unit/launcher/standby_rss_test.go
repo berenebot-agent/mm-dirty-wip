@@ -43,13 +43,13 @@ func rssKB(t *testing.T, pid int) int {
 // TestStandbyChildResidentMemory measures the real included receiver binary's
 // resident memory while it sits in standby (no listeners bound) and while
 // active, using /proc/<pid>/VmRSS. It is skipped unless the receiver binary is
-// available (MAMMOTHMAIL_MX_BIN, else tests/fixtures/mammothmail-mx) and the
+// available (MAIL_MX_BIN, else tests/fixtures/mammothmail-mx) and the
 // process is root, because the launcher requires root to spawn the child.
 func TestStandbyChildResidentMemory(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("launcher requires root to spawn the embedded edge")
 	}
-	bin := os.Getenv("MAMMOTHMAIL_MX_BIN")
+	bin := os.Getenv("MAIL_MX_BIN")
 	if bin == "" {
 		bin = filepath.Join("..", "..", "..", "tests", "fixtures", "mammothmail-mx")
 	}

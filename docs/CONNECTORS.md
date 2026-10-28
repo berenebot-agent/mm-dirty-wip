@@ -41,7 +41,7 @@ Authorization: Bearer mmm_...
 An agent can discover its permissions and the available operations from:
 
 ```text
-/.well-known/mailmoose
+/.well-known/mail-api
 /agent
 /v1/bootstrap
 /openapi.json
@@ -174,9 +174,11 @@ Choose the payload when creating the connector:
 - **Notify:** A small JSON event with the inbox, message reference, and cursor. Fetch content separately through the API.
 - **Forward:** The original MIME message as `message/rfc822`. For standalone mailboxes, the content is fetched live from the provider.
 
-Each delivery carries `X-MailMoose-Event`, `X-MailMoose-Delivery`, and `X-MailMoose-Cursor`. Forward deliveries also include the original transport envelope addresses as percent-encoded `X-MailMoose-Envelope-From` and `X-MailMoose-Envelope-To` headers. The envelope sender is relay-supplied, not proof of identity.
+Each delivery carries `X-Mail-Event`, `X-Mail-Delivery`, and `X-Mail-Cursor`. Forward deliveries also include the original transport envelope addresses as percent-encoded `X-Mail-Envelope-From` and `X-Mail-Envelope-To` headers. The envelope sender is relay-supplied, not proof of identity.
 
-Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-MailMoose-Signature`. Verify it at your endpoint.
+Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-Mail-Signature`. Verify it at your endpoint.
+
+During the transition every webhook header is also sent under its pre-rename `X-MailMoose-*` name (for example `X-MailMoose-Signature`) with the same value. Move to the `X-Mail-*` names; the old names will be removed in a later release, announced in the CHANGELOG.
 
 ### Verify the signature
 
@@ -223,12 +225,12 @@ Verify before parsing anything, because the signature covers the raw bytes, not 
 
 ```python
 # Notify: body is JSON.
-if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+if not verify(secret, request.headers.get("X-Mail-Signature", ""), request.body):
     return 401
 event = json.loads(request.body)
 
 # Forward: body is the original MIME message (message/rfc822).
-if not verify(secret, request.headers.get("X-MailMoose-Signature", ""), request.body):
+if not verify(secret, request.headers.get("X-Mail-Signature", ""), request.body):
     return 401
 ```
 
@@ -238,7 +240,7 @@ A receiver that rejects a timestamp older than its tolerance also rejects replay
 
 Deliveries are strictly ordered per connector. The oldest undelivered event is attempted first, and while it waits for a retry, later events for that connector wait behind it. It stops blocking only when it is delivered with a 2xx, terminally failed once the retry window is exhausted, or skipped because the message is Spam, internal, or deleted. Other connectors are not blocked, including another webhook on the same inbox.
 
-A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-MailMoose-Delivery`**, because a retry repeats the same event and delivery ID.
+A 2xx response acknowledges the event. Other responses are retried with capped exponential backoff for the configured window. The window starts at the first attempt and defaults to seven days; set `WEBHOOK_RETRY_WINDOW_DAYS` to change it. **Deduplicate on `X-Mail-Delivery`**, because a retry repeats the same event and delivery ID.
 
 For exact header encoding and the request contract, see the shared [contract fixture](../tests/fixtures/mammothmail-webhook-contract.json) and [API.md](API.md).
 

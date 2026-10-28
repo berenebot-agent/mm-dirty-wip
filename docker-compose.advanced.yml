@@ -10,7 +10,7 @@ services:
     build:
       context: .
       args:
-        MAMMOTHMAIL_BUILD: ${MAMMOTHMAIL_BUILD:-}
+        MAIL_BUILD: ${MAIL_BUILD:-}
     restart: unless-stopped
     env_file: .env
     # Direct MX is configured in each domain's Receiving settings and uses the
@@ -46,4 +46,4 @@ services:
     # unavailable in a strictly non-root core.
     #
     #   cap_drop: [ALL]
-    #   user: "${MAMMOTHMAIL_RUN_UID:-65532}:${MAMMOTHMAIL_RUN_GID:-65532}"
+    #   user: "${MAIL_RUN_UID:-65532}:${MAIL_RUN_GID:-65532}"

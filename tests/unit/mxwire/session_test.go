@@ -113,7 +113,7 @@ func TestSessionProofAndDNSSelection(t *testing.T) {
 	public := private.Public().(ed25519.PublicKey)
 	challenge := mxwire.Challenge{Domain: "example.com", KeyID: "key-1", ReceiverID: "rx", ConnectionID: "conn", Nonce: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
 	transcript, err := mxwire.AuthTranscript(challenge)
-	if err != nil || hex.EncodeToString(transcript) != "da24e29ac97410231a29b0ec438eaad68f7954b364502cffb21490c4c70a551a" {
+	if err != nil || hex.EncodeToString(transcript) != "4face7f697a56a9ae45ff699933dc75d9b31c9591041567d9a075b33f0291733" {
 		t.Fatalf("transcript fixture: %x %v", transcript, err)
 	}
 	sig, err := mxwire.SignChallenge(private, challenge)

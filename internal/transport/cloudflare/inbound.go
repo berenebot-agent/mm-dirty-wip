@@ -34,15 +34,23 @@ func (Transport) ConfigFields() []transport.ConfigField {
 	}
 }
 
-// Header names of the Worker webhook contract.
+// Header names of the Worker webhook contract. A Worker still sending the
+// pre-rename names is accepted through inboundHeader's fallback.
 const (
-	HeaderRecipient  = "X-MailMoose-Recipient"
-	HeaderEnvelopeTo = "X-MailMoose-Envelope-From"
-	HeaderDeliveryID = "X-MailMoose-Delivery-ID"
-	HeaderReceivedAt = "X-MailMoose-Received-At"
+	HeaderRecipient    = "X-Mail-Recipient"
+	HeaderEnvelopeFrom = "X-Mail-Envelope-From"
+	HeaderDeliveryID   = "X-Mail-Delivery-ID"
+	HeaderReceivedAt   = "X-Mail-Received-At"
 
 	maxHeaderValue = 512
 )
+
+func inboundHeader(r *http.Request, name string) string {
+	if v := r.Header.Get(name); v != "" {
+		return v
+	}
+	return r.Header.Get("X-MailMoose-" + strings.TrimPrefix(name, "X-Mail-"))
+}
 
 // Receive authenticates the Worker request before touching the MIME body. The
 // envelope recipient header selects the domain and its assigned shared secret;
@@ -55,7 +63,7 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	if ct != "" && ct != "message/rfc822" && ct != "application/octet-stream" {
 		return msg, binding, fmt.Errorf("unsupported content type %s", ct)
 	}
-	recipient := strings.TrimSpace(r.Header.Get(HeaderRecipient))
+	recipient := strings.TrimSpace(inboundHeader(r, HeaderRecipient))
 	if recipient == "" || len(recipient) > maxHeaderValue {
 		return msg, binding, transport.ErrInboundUnauthorized
 	}
@@ -67,11 +75,11 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	if !validBearer(r, secret) {
 		return msg, binding, transport.ErrInboundUnauthorized
 	}
-	delivery := strings.TrimSpace(r.Header.Get(HeaderDeliveryID))
+	delivery := strings.TrimSpace(inboundHeader(r, HeaderDeliveryID))
 	if len(delivery) > maxHeaderValue {
 		return msg, binding, fmt.Errorf("delivery id too long")
 	}
-	envelopeFrom := strings.TrimSpace(r.Header.Get(HeaderEnvelopeTo))
+	envelopeFrom := strings.TrimSpace(inboundHeader(r, HeaderEnvelopeFrom))
 	if len(envelopeFrom) > maxHeaderValue {
 		envelopeFrom = ""
 	}

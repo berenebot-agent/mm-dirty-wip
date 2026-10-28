@@ -29,14 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 # The receiver holds no /data, no app key and needs no privilege; it stages
 # messages in memory. Run it as the same non-root uid the other images use.
-ARG MAMMOTHMAIL_UID=65532
-ARG MAMMOTHMAIL_GID=65532
-RUN groupadd -g ${MAMMOTHMAIL_GID} mammothmail 2>/dev/null || true \
- && useradd -u ${MAMMOTHMAIL_UID} -g ${MAMMOTHMAIL_GID} -M -s /usr/sbin/nologin mammothmail
+ARG MAIL_UID=65532
+ARG MAIL_GID=65532
+RUN groupadd -g ${MAIL_GID} mammothmail 2>/dev/null || true \
+ && useradd -u ${MAIL_UID} -g ${MAIL_GID} -M -s /usr/sbin/nologin mammothmail
 
 COPY --from=build /out/mammothmail-remote-mx /usr/local/bin/mammothmail-remote-mx
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mammothmail/
-USER ${MAMMOTHMAIL_UID}:${MAMMOTHMAIL_GID}
+USER ${MAIL_UID}:${MAIL_GID}
 # Inside the container the SMTP edge listens on 2525 and the session listener on
 # 8443; map host 25 and 443 onto them. Both are unprivileged, so the process
 # needs no capabilities even when the host ports are privileged.

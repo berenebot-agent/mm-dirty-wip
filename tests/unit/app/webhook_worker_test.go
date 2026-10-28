@@ -71,9 +71,12 @@ func TestWebhookWorkerNotifySignsAndAcks(t *testing.T) {
 	var gotSig, gotEvent, gotCursor string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotBody, _ = io.ReadAll(r.Body)
-		gotSig = r.Header.Get("X-MailMoose-Signature")
-		gotEvent = r.Header.Get("X-MailMoose-Event")
-		gotCursor = r.Header.Get("X-MailMoose-Cursor")
+		gotSig = r.Header.Get("X-Mail-Signature")
+		gotEvent = r.Header.Get("X-Mail-Event")
+		gotCursor = r.Header.Get("X-Mail-Cursor")
+		if r.Header.Get("X-MailMoose-Signature") != gotSig || r.Header.Get("X-MailMoose-Event") != gotEvent || r.Header.Get("X-MailMoose-Cursor") != gotCursor {
+			t.Errorf("pre-rename headers not sent alongside the new names")
+		}
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()

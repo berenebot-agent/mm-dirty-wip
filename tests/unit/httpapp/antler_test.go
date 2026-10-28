@@ -180,7 +180,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	if mx[0].(map[string]any)["hostname"] != "antler1.example.test" {
 		t.Fatalf("unexpected MX instruction: %v", mx[0])
 	}
-	if instr["txt_name"] != "_mammothmail-mx."+domain.Name {
+	if instr["txt_name"] != "_mail-proof."+domain.Name {
 		t.Fatalf("unexpected TXT name: %v", instr["txt_name"])
 	}
 	// The response says where the receiver set came from, so the wizard can state
