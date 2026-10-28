@@ -170,7 +170,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 
 	instr, _ := body["instructions"].(map[string]any)
-	if instr == nil || instr["service"] != "antler" || instr["contact_email"] != "ops@example.test" {
+	if instr == nil || instr["service"] != "hosted" || instr["contact_email"] != "ops@example.test" {
 		t.Fatalf("instructions missing Tusk metadata: %v", body["instructions"])
 	}
 	mx, _ := instr["mx"].([]any)
@@ -185,12 +185,12 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 	// The response says where the receiver set came from, so the wizard can state
 	// whether setup used the live GitHub manifest or the built-in defaults.
-	manifest, _ := body["antler_manifest"].(map[string]any)
+	manifest, _ := body["receiver_manifest"].(map[string]any)
 	if manifest == nil || manifest["source"] != string(mxdial.AntlerSourceGitHub) {
-		t.Fatalf("antler_manifest = %v, want the github source", body["antler_manifest"])
+		t.Fatalf("receiver_manifest = %v, want the github source", body["receiver_manifest"])
 	}
 	if manifest["at"] != "2026-10-18T05:12:03Z" {
-		t.Fatalf("antler_manifest fetch time = %v", manifest["at"])
+		t.Fatalf("receiver_manifest fetch time = %v", manifest["at"])
 	}
 
 	lights := dnsLights(t, body)

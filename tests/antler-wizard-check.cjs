@@ -175,13 +175,13 @@ function harness(mode) {
   form.dataset.antlerConnectors = JSON.stringify(mxList);
   form.dataset.antlerStatus = JSON.stringify(seedStatus);
   form.dataset.antlerDns = JSON.stringify([{ kind: 'mx', state: 'not_found' }, { kind: 'txt', state: 'not_found' }]);
-  form.dataset.antlerInstructions = JSON.stringify({ txt_name: '_mammothmail-mx.example.com', txt_value: 'public-key', mx: mxList });
+  form.dataset.antlerInstructions = JSON.stringify({ txt_name: '_mail-proof.example.com', txt_value: 'public-key', mx: mxList });
   form.closestMap = { dialog: dlg };
   const provider = new Element('SELECT');
   provider.value = 'dialmx';
   const group = new Element('DIV');
   const service = new Element('SELECT');
-  service.value = mode === 'custom' ? 'custom' : 'antler';
+  service.value = mode === 'custom' ? 'custom' : 'hosted';
   service.previousElementSibling = new Element('LABEL');
   const email = new Element('INPUT');
   email.value = 'ops@example.com';
@@ -229,14 +229,14 @@ function harness(mode) {
     provider: mode === 'status' || mode === 'status-two' ? 'dialmx' : '',
     config: {
       enforcement: enforcement.value || 'moderate',
-      service: service.value === 'custom' ? 'custom' : 'antler',
+      service: service.value === 'custom' ? 'custom' : 'hosted',
       contact_email: 'ops@example.com'
     },
     status: world.statuses,
     dns: world.dns,
     dns_stale: !!world.stale,
     unexpected_mx: world.unexpected,
-    instructions: { txt_name: '_mammothmail-mx.example.com', txt_value: 'public-key', mx: mxList }
+    instructions: { txt_name: '_mail-proof.example.com', txt_value: 'public-key', mx: mxList }
   });
 
   const document = {
@@ -558,7 +558,7 @@ async function wizard(mode) {
   assert.equal(h.close.textContent, 'Close', 'Finish relabels the footer control from Cancel to Close');
   const expectConfig = mode === 'custom'
     ? { service: 'custom', enforcement: 'hard', receiver_urls: 'https://custom.example.com' }
-    : { service: 'antler', enforcement: 'hard', contact_email: 'ops@example.com' };
+    : { service: 'hosted', enforcement: 'hard', contact_email: 'ops@example.com' };
   assert.deepEqual(h.world.saved, { provider: 'dialmx', config: expectConfig },
     'Finish writes the config with the chosen enforcement and never rotates');
   h.dlg.open = true;

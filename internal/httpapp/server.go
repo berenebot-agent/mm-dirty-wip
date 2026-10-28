@@ -192,7 +192,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /assets/logo-horizontal.png", s.showLogo)
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
-	m.HandleFunc("GET /assets/antler-mx-diagram.svg", s.showAntlerMXDiagram)
 	m.HandleFunc("GET /assets/tusk-mx-diagram.svg", s.showAntlerMXDiagram)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
 	m.HandleFunc("GET /favicon-16x16.png", s.showFavicon16)
