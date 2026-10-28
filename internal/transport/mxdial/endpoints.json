@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy of record for the MailMoose/Tusk MX receiver set. Fetched live from this path in the project repository and compiled into the core.",
+  "_comment": "Copy of record for the Mammoth Mail/Tusk MX receiver set. Fetched live from this path in the project repository and compiled into the core.",
   "schema_version": 1,
   "receivers": [
     {
