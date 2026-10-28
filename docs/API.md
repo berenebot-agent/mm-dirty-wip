@@ -1745,7 +1745,11 @@ shared by many domains — the Dial MX option in
 for Tusk MX and Remote MX, and Direct MX's own description already names the
 bundled receiver; the name is the same in every case.
 
-For Tusk MX, the receiving configuration response includes `receiver_manifest`\nwith `source` (`github`, `cache`, or `embedded`) and optional `at` timestamp.\nThe former `antler_manifest` field is no longer emitted.\n\nA name is accepted only in its own direction — `remotemx` is a receiving
+For Tusk MX, the receiving configuration response includes `receiver_manifest`
+with `source` (`github`, `cache`, or `embedded`) and optional `at` timestamp.
+The former `antler_manifest` field is no longer emitted.
+
+A name is accepted only in its own direction — `remotemx` is a receiving
 provider and `brevo` a sending one — and a name that is not registered for the
 direction being saved is refused with a `400`.
 
