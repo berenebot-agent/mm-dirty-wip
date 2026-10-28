@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mammothmail/internal/limits"
 )
 
 // ClientDeliveryEntry is one event's delivery history for a Webhook or Hermes

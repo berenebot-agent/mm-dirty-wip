@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/apispec"
 )
 
 // TestOpenAPISurfaceIsValidAndComplete asserts the served document is valid

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestDomainSendingConfigREST exercises the canonical per-domain sending config

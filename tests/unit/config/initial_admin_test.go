@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mammothmail/internal/config"
 )
 
 func clearAdminEnv(t *testing.T) {

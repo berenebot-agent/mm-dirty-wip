@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 func TestLoadStagingDefaultsAndValidation(t *testing.T) {

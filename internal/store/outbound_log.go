@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mammothmail/internal/limits"
 )
 
 // DeliveryAttempt is one immutable provider send (success or failure) for an

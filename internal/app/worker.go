@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // workflowRetention is how long a terminal workflow job (and its retained raw

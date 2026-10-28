@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/dellarb/mailmoose/internal/sqlite3driver"
+	_ "github.com/dellarb/mammothmail/internal/sqlite3driver"
 )
 
 func testDB(t *testing.T) (*sql.DB, *sql.Conn) {

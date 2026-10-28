@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // uiInboxLive returns one live fragment of a mailbox page — the message list or

@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 const oneProviderTile = `<button type="button" class="provider-choice" data-standalone-provider="one"><span class="provider-logo" aria-hidden="true">One</span><span class="provider-text"><span class="provider-title">One (Easy Gmail Setup)</span><span class="provider-desc">Connect Gmail with your own One account. No Google Cloud app required. Email data passes through One.</span></span><svg class="provider-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>`

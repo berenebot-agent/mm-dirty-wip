@@ -3,7 +3,7 @@ package mxwire_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func TestClassify(t *testing.T) {

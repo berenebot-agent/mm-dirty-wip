@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // ManageDefinedLabel renames or deletes an additive native label in this inbox.

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // mxwire.Provider is the registered receiving provider name for the MX edge.

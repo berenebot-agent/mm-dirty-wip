@@ -13,7 +13,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 var (

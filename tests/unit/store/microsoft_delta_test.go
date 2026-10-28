@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestMicrosoftDeltaGenerationGuard proves the delta cursor's save is

@@ -11,7 +11,7 @@ import (
 	"github.com/emersion/go-msgauth/dmarc"
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // Verifier computes SPF/DKIM/DMARC evidence for one message. It never trusts

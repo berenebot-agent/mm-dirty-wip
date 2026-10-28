@@ -3,7 +3,7 @@ package imap_test
 import (
 	"testing"
 
-	imapadapter "github.com/dellarb/mailmoose/internal/transport/imap"
+	imapadapter "github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 // TestRootScopeExcludesSharedNamespaces proves a personal scope never admits a

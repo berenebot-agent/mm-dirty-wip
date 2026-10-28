@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Mock DNS uses local UDP and TCP sockets, including real wire framing. No

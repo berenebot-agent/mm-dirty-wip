@@ -114,7 +114,7 @@ with open(path) as fh:
 
 def short(name):
     # Trim the module prefix so lines stay readable.
-    return name.replace("github.com/dellarb/mailmoose/", "")
+    return name.replace("github.com/dellarb/mammothmail/", "")
 
 sorted_pkgs = sorted(pkgs.items(), key=lambda kv: kv[1], reverse=True)
 sorted_tests = sorted(tests.items(), key=lambda kv: kv[1], reverse=True)

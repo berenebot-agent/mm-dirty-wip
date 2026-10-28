@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestAPIMessageTrashLifecycle exercises the message trash/restore/purge API:

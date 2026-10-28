@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
 )
 
 func TestIdentity(t *testing.T) {

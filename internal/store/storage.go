@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // adjustStorageTx applies a storage delta to an account and, when the owning

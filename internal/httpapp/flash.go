@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mammothmail/internal/auth"
 )
 
 // flashStoreMaxBytes bounds the total bytes held by the flash store. Compose

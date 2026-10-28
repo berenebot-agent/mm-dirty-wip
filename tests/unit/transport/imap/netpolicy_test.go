@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	imapadapter "github.com/dellarb/mailmoose/internal/transport/imap"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	imapadapter "github.com/dellarb/mammothmail/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 func TestDialRejectsNonPublicDestination(t *testing.T) {

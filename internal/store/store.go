@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/dbschema"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	_ "github.com/dellarb/mailmoose/internal/sqlite3driver"
+	"github.com/dellarb/mammothmail/internal/dbschema"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	_ "github.com/dellarb/mammothmail/internal/sqlite3driver"
 )
 
 type Store struct {

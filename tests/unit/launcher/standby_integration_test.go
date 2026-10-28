@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/internal/launcher"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/internal/launcher"
 )
 
 // standbyHelperEnv marks the re-executed test binary as the standby child.

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/mailparse"
 )
 
 func TestAttachmentBase64LinesAndRoundTrip(t *testing.T) {

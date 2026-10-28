@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
-	"github.com/dellarb/mailmoose/tests/support/onefixture"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/tests/support/onefixture"
 )
 
 // oneReconnectFixture builds a server whose remote mailbox service has a live

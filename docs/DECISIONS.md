@@ -6651,4 +6651,13 @@ remote server cannot be rewritten, so ambiguity recovery must keep accepting
 the old spelling; new handoffs use the new one.
 
 **Not changed:** the Go module and repository path
-`github.com/dellarb/mailmoose`, which follow the repository name, not the brand.
+`github.com/dellarb/mailmoose`, which at the time followed the repository name,
+not the brand. The repository and module were subsequently renamed to
+`github.com/dellarb/mammothmail`.
+
+The module rename also decouples the passphrase key-derivation salt from the
+repository path. New credentials use `mammothmail/app-encryption-key/v3`;
+existing AAD-bound credentials remain readable using the old salt as a fallback.
+Direct 32-byte keys are unaffected. Older binaries cannot decrypt credentials
+newly written with the new passphrase-derived key, so retain a pre-upgrade backup
+for rollback. Legacy ciphertext is not rewritten just by reading it.

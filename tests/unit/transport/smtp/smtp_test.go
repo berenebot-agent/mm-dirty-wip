@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/smtp"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/smtp"
 )
 
 func fakeSMTP(t *testing.T) (host string, port int, got <-chan string, closeFn func()) {

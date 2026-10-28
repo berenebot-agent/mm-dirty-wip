@@ -9,11 +9,11 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // ErrAccountMXInvalidInput is returned when an account Remote MX save cannot be

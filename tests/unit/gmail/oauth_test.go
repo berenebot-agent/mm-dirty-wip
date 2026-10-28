@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
 )
 
 func TestExchange(t *testing.T) {

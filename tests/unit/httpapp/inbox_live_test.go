@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestInboxLiveListFragment proves the live list fragment re-renders the same

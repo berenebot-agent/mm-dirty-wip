@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // TestDialMXStatusObserverPublishesHealthEvent proves a receiver status change

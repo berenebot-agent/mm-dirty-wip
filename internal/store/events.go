@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/limits"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/limits"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func ParseCursor(v string) int64 {

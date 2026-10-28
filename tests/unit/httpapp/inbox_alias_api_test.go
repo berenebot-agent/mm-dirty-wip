@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestInboxAliasREST exercises the inbox alias replace-set on PATCH

@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	"github.com/dellarb/mailmoose/internal/transport/imap"
-	"github.com/dellarb/mailmoose/internal/transport/microsoft"
-	"github.com/dellarb/mailmoose/internal/transport/one"
-	"github.com/dellarb/mailmoose/internal/transport/smtp"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/transport/microsoft"
+	"github.com/dellarb/mammothmail/internal/transport/one"
+	"github.com/dellarb/mammothmail/internal/transport/smtp"
 )
 
 // This file implements the real remote (standalone IMAP/SMTP) backend behind the

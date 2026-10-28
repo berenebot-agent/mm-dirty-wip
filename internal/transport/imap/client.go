@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 	"github.com/emersion/go-imap/v2/imapclient"
 )
 

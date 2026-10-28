@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/mailparse"
 )
 
 func TestBoundedMIMEPreview(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func TestAPIInboxApproverAndExternalRequest(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/idgen"
 )
 
 type WebhookClient struct {

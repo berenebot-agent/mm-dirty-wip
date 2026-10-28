@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func (s *Store) GetAccount(ctx context.Context, accountID string) (model.Account, error) {

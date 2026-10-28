@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // labelFilter keeps additive names separate from folder placement.

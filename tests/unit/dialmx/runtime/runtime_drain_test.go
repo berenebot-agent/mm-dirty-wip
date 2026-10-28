@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	receiverruntime "github.com/dellarb/mammothmail/dialmx/runtime"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 	"github.com/emersion/go-smtp"
 )
 

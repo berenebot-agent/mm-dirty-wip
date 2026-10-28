@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // labelCatalogue is the Beta3 label catalogue: additive tags only, plus the

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // This file holds the one-time conversion of a domain inbox's custom folders

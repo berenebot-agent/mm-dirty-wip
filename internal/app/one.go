@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	"github.com/dellarb/mailmoose/internal/transport/one"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/one"
 )
 
 type oneCachedClient struct {

@@ -9,7 +9,7 @@ package app
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func TestMXAuthenticated(t *testing.T) {

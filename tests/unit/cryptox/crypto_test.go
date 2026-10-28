@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/cryptox"
+	"github.com/dellarb/mammothmail/internal/cryptox"
 )
 
 // TestDeriveKeyPassphraseUsesPBKDF2 proves a passphrase gets the stretched key

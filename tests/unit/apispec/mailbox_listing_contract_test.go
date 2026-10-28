@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/apispec"
 )
 
 func TestMailboxListingQueryParity(t *testing.T) {

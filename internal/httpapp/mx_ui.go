@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // mxFormView is the rendered shape of the domain MX receiver form. It holds the

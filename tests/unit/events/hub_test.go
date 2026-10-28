@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mammothmail/internal/events"
 )
 
 func TestRegisterScopeCancelsOnRevoke(t *testing.T) {

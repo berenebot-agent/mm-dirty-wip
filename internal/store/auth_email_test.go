@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mammothmail/internal/auth"
 )
 
 func TestUpdateUserEmailVerifiesOutsideWriter(t *testing.T) {

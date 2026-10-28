@@ -16,14 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/htmlsanitize"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/timezone"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/htmlsanitize"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/timezone"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{{if noindex}}<meta name="robots" content="noindex,nofollow">{{end}}<title>{{.Title}} · Mammoth Mail</title><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/favicon-16x16.png" type="image/png" sizes="16x16"><link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style>
@@ -1317,7 +1317,7 @@ const setupBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.au
 // renders the button, so changing one is a one-line edit.
 const feedbackEmail = "mammothmail@hgolabs.com"
 
-const feedbackRepo = "https://github.com/dellarb/mailmoose"
+const feedbackRepo = "https://github.com/dellarb/mammothmail"
 
 type authFlash struct {
 	Title, Error, Email string
@@ -2154,7 +2154,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 {{end}}{{end}}
 {{if $.MXSetup}}{{$m := $.MXSetup}}{{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>{{template "mx-editor" .}}</section>{{end}}{{end}}{{end}}
 {{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
-<p class="muted small">Set up a receiver you run separately. Mammoth Mail connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mailmoose/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
+<p class="muted small">Set up a receiver you run separately. Mammoth Mail connects outbound to it over HTTP/2. Follow the <a href="https://github.com/dellarb/mammothmail/blob/main/docs/REMOTE_MX.md#remote-mx-one-receiver-for-an-account" target="_blank" rel="noopener noreferrer">Remote SMTP receiving guide</a>, then enter the receiver URL and bearer key below.</p>
 <p class="muted small">The receiver's SMTP hostname, limits, verification and TLS are configured on the receiver itself, not here. Point the MX records for <code>{{$d.Name}}</code> at that hostname; no per-domain DNS proof or key is needed.</p>
 <p class="muted small" data-remote-mx-status>Receiver status: {{if $r.Configured}}{{if $r.State}}{{$r.State}}{{else}}unknown{{end}}{{if $r.Detail}} — {{$r.Detail}}{{end}}{{else}}Not configured{{end}}</p>
 {{if $.Principal.Admin}}<div class="remote-mx-editor">

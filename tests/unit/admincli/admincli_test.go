@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/admincli"
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/tests/support/testdb"
+	"github.com/dellarb/mammothmail/internal/admincli"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/tests/support/testdb"
 )
 
 func TestMain(m *testing.M) {

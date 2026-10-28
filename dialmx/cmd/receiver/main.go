@@ -32,13 +32,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx"
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
-	"github.com/dellarb/mailmoose/internal/dnsfallback"
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/dialmx"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	receiverruntime "github.com/dellarb/mammothmail/dialmx/runtime"
+	"github.com/dellarb/mammothmail/internal/dnsfallback"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // buildVersion is stamped at build time with -ldflags. It defaults to "dev".

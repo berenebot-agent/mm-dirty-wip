@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/config"
-	"github.com/dellarb/mailmoose/internal/events"
-	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
-	"github.com/dellarb/mailmoose/tests/support/testdb"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/config"
+	"github.com/dellarb/mammothmail/internal/events"
+	"github.com/dellarb/mammothmail/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/tests/support/testdb"
 )
 
 // TestProviderLabelAllowsHierarchicalNames proves a provider-owned label name

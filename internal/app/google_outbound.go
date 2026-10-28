@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/dellarb/mailmoose/internal/transport/gmail"
+	"github.com/dellarb/mammothmail/internal/transport/gmail"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // Google outbound uses the process-owned mailbox service so token refresh is

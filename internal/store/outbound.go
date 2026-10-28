@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/limits"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/limits"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // ErrClaimTaken reports that the claim under which an outcome is being recorded

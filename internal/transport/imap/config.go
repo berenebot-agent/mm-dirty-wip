@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // SecurityMode names the transport security of an IMAP connection. It mirrors

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestAccountMXReceiverStoreLifecycle covers the per-account receiver row's

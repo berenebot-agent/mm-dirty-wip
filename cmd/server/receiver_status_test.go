@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // TestReceiverDetailNamesSettledFailures pins the operator-facing phrase for each

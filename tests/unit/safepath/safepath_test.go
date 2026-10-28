@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/safepath"
 )
 
 func TestJoinAllowsContainedPaths(t *testing.T) {

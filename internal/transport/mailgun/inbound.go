@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // InboundForm holds the Mailgun webhook fields the adapter consumes. Auth

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/logging"
+	"github.com/dellarb/mammothmail/internal/logging"
 )
 
 // logLine renders one record through the production handler and returns the

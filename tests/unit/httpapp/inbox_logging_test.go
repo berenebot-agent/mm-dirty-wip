@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func lifecycleRecords(t *testing.T, logs *bytes.Buffer) []map[string]any {

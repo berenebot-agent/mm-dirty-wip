@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/logging"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/tests/support/testdb"
+	"github.com/dellarb/mammothmail/internal/logging"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/tests/support/testdb"
 )
 
 func inboxLogRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {

@@ -25,8 +25,8 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // captureHandler is a slog.Handler that records every record's message and

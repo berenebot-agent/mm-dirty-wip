@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/privdrop"
+	"github.com/dellarb/mammothmail/internal/privdrop"
 )
 
 func TestDropToRuntimeUserNoopWhenNonRoot(t *testing.T) {

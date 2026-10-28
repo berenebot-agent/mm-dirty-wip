@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestOutboundSentLogsProviderLabel pins the "outbound sent" log attribute to

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/tests/support/smoke"
+	"github.com/dellarb/mammothmail/tests/support/smoke"
 )
 
 func TestArgonAdmissionAllPathsBounded(t *testing.T) {

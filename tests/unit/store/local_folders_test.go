@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // localFolderStore builds a domain inbox owned by an admin principal and returns

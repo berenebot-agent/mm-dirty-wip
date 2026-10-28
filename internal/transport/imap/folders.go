@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 	"github.com/emersion/go-imap/v2"
 )
 

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TrashTarget is a frozen purge locator. It does not require a metadata cache

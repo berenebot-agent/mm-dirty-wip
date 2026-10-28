@@ -24,15 +24,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/config"
-	"github.com/dellarb/mailmoose/internal/hermesrelay"
-	"github.com/dellarb/mailmoose/internal/limits"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/timezone"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/config"
+	"github.com/dellarb/mammothmail/internal/hermesrelay"
+	"github.com/dellarb/mammothmail/internal/limits"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/timezone"
 )
 
 //go:embed assets/app.js

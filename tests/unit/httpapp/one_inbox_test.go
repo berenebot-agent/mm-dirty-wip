@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/tests/support/onefixture"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/tests/support/onefixture"
 )
 
 func TestOneMultiImportIndependentKeysAndSingleDeletion(t *testing.T) {

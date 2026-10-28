@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // CreateMicrosoftCategory persists a definition only after Graph accepts it.
