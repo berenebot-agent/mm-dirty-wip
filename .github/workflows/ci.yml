@@ -53,8 +53,8 @@ jobs:
       # invisible to the Go suite. ubuntu-latest ships Node.
       - name: generated API reference
         run: |
-          go run ./cmd/docsgen > /tmp/mailmoose-api.md
-          diff -u docs/API.md /tmp/mailmoose-api.md
+          go run ./cmd/docsgen > /tmp/mail-api.md
+          diff -u docs/API.md /tmp/mail-api.md
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -85,7 +85,7 @@ jobs:
       - name: smoke
         run: |
           set -o pipefail
-          MAMMOTHMAIL_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
+          MAIL_SMOKE=1 go test -mod=readonly -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/ 2>&1 | tee ci-logs/smoke.log
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@v4

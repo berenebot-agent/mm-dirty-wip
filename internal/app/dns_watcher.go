@@ -23,7 +23,7 @@ import (
 const dnsDemandFloor = 10 * time.Second
 
 // DNSWatcher is the single owner of every domain's published-record verdict:
-// the receiving checks for a Dial MX domain (the `_mammothmail-mx` TXT check and
+// the receiving checks for a Dial MX domain (the `_mail-proof` TXT check and
 // the MX routing check, including the "extra MX" hosts that are not one of the
 // domain's Antler receivers) and the sending check for a Direct MX domain that
 // signs outbound mail (its `_domainkey` public-key record). It diffs each

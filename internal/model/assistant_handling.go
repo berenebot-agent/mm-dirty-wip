@@ -60,7 +60,11 @@ func NormalizeAuthoringMode(kind, stored string) string {
 // RemoteDraft handoff. It is set on the appended draft and searched back on the
 // remote server to confirm an append whose outcome is uncertain. It is never an
 // approval token.
-const HandoffHeader = "X-MailMoose-Handoff-ID"
+const HandoffHeader = "X-Mail-Handoff-ID"
+
+// LegacyHandoffHeader is the pre-rename spelling, still written on drafts
+// appended before the rename; readers accept both.
+const LegacyHandoffHeader = "X-MailMoose-Handoff-ID"
 
 // Remote handoff publication states. They record whether the frozen draft was
 // actually appended to the remote Drafts folder. Because a provider may not

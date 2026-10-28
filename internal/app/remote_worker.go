@@ -1067,7 +1067,7 @@ func (w *RemoteWorker) settle(ctx context.Context, inbox model.Inbox, arrival st
 // isHandoffEcho reports whether an arrival is a RemoteDraft handoff's own frozen
 // draft echoed back, which is never forwarded proactively. The frozen handoff
 // draft's Message-ID is recorded, so a cheap durable lookup catches it: the
-// correlation header (X-MailMoose-Handoff-ID) also travels with the mail, so the
+// correlation header (X-Mail-Handoff-ID) also travels with the mail, so the
 // raw body is fetched once and the header checked when the Message-ID lookup
 // misses. A handoff no longer sends a notification email, so there is no
 // notification copy to exclude.

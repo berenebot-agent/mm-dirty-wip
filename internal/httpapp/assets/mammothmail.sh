@@ -12,8 +12,8 @@
 # -----------
 #
 # # 1. Point the client at an instance and an API key.
-# export MAMMOTHMAIL_BASE_URL="https://your-instance"
-# export MAMMOTHMAIL_API_KEY="mmm_..."
+# export MAIL_BASE_URL="https://your-instance"
+# export MAIL_API_KEY="mmm_..."
 #
 #     # 2. Discover who you are and which inboxes you can reach.
 #     ./mammothmail.sh bootstrap
@@ -82,7 +82,7 @@
 # Resolution order (first non-empty wins):
 #
 #   1. --base / --key command-line flags
-#   2. MAMMOTHMAIL_BASE_URL / MAMMOTHMAIL_API_KEY environment variables
+#   2. MAIL_BASE_URL / MAIL_API_KEY environment variables
 #   3. ~/.mammothmail/client.json (create it mode 0600):
 #
 #          {
@@ -117,12 +117,12 @@ set -euo pipefail
 
 VERSION="1.0"
 DEFAULT_BASE_URL="http://localhost:8081"
-CONFIG_PATH="${MAMMOTHMAIL_CONFIG:-${HOME:-}/.mammothmail/client.json}"
+CONFIG_PATH="${MAIL_CONFIG:-${HOME:-}/.mammothmail/client.json}"
 
 # Global state (set by the option parser).
-BASE="${MAMMOTHMAIL_BASE_URL:-}"
-KEY="${MAMMOTHMAIL_API_KEY:-}"
-INBOX="${MAMMOTHMAIL_INBOX:-}"
+BASE="${MAIL_BASE_URL:-}"
+KEY="${MAIL_API_KEY:-}"
+INBOX="${MAIL_INBOX:-}"
 TABLE=0
 COMMAND=""
 
@@ -261,10 +261,10 @@ usage:
   mammothmail.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
 
 global options:
---base URL API base URL (default: $MAMMOTHMAIL_BASE_URL, then
+--base URL API base URL (default: $MAIL_BASE_URL, then
                  ~/.mammothmail/client.json, then http://localhost:8081
                  with a warning)
-  --key KEY      API key (default: $MAMMOTHMAIL_API_KEY, then client.json)
+  --key KEY      API key (default: $MAIL_API_KEY, then client.json)
   --inbox ID     default inbox id for commands that use one
   --table        print a simple columnar view instead of JSON
   --version      print the client version
@@ -331,7 +331,7 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then MAMMOTHMAIL_BASE_URL/MAMMOTHMAIL_API_KEY, then
+  --base/--key, then MAIL_BASE_URL/MAIL_API_KEY, then
   ~/.mammothmail/client.json (chmod 600). Never ~/.hermes/.env.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
@@ -1560,11 +1560,11 @@ main() {
 	load_config
 	if [ -z "$BASE" ]; then
 		BASE="$DEFAULT_BASE_URL"
-		printf 'mammothmail.sh: MAMMOTHMAIL_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
+		printf 'mammothmail.sh: MAIL_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
 	fi
 	BASE="${BASE%/}"
 	if [ -z "$KEY" ]; then
-		die "no API key: pass --key, set MAMMOTHMAIL_API_KEY, or write $CONFIG_PATH"
+		die "no API key: pass --key, set MAIL_API_KEY, or write $CONFIG_PATH"
 	fi
 
 	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mammothmail.XXXXXX")"

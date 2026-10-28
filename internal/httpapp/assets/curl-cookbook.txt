@@ -29,7 +29,7 @@
 # 0. Discovery (no auth required)
 # ---------------------------------------------------------------------------
 
-curl -sS "$BASE/.well-known/mailmoose" | jq .
+curl -sS "$BASE/.well-known/mail-api" | jq .
 curl -sS "$BASE/agent"                      # Markdown usage guide
 curl -sS "$BASE/openapi.json" | jq .        # OpenAPI document
 curl -sS "$BASE/examples/bash"              # served Bash client (mammothmail.sh)

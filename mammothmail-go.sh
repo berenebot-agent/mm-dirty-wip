@@ -17,7 +17,7 @@
 #   Base is pinned to match the Dockerfile build stage (golang:1.27-bookworm).
 #   The wrapper builds a local cached image (mammothmail-go:1.27) with
 #   libsqlite3-dev preinstalled on first use, then reuses it. Override with
-#   MAMMOTHMAIL_GO_IMAGE to point at another image (e.g. the bare base).
+#   MAIL_GO_IMAGE to point at another image (e.g. the bare base).
 #
 # RAM safety:
 #   --memory/-m limits the container's hard memory ceiling (OOM inside, not host OOM)
@@ -25,8 +25,8 @@
 #   GOFLAGS=-p=<cores> sets build parallelism and test-binary package concurrency
 #   to the host's logical CPU count (nproc), which is also Go's own default for
 #   -p/GOMAXPROCS. The heavy packages (httpapp/app/store) overlap enough to keep
-#   the tier under the 60s per-binary -timeout. Overrides: MAMMOTHMAIL_GO_PARALLEL
-#   sets -p explicitly; MAMMOTHMAIL_GO_MEM sets the RAM cap. By default the cap is
+#   the tier under the 60s per-binary -timeout. Overrides: MAIL_GO_PARALLEL
+#   sets -p explicitly; MAIL_GO_MEM sets the RAM cap. By default the cap is
 #   half the host's physical RAM (a ceiling, not a reservation).
 #
 # Scratch disk:
@@ -36,14 +36,14 @@
 #   is therefore a tmpfs so those files live in RAM where fsync is free. Its size
 #   is a ceiling only (tmpfs allocates lazily), so it can be generous; it is
 #   capped so a runaway test cannot exhaust the container. Override with
-#   MAMMOTHMAIL_GO_TMPFS (e.g. 8g); set MAMMOTHMAIL_GO_TMPFS=0 to disable and use
+#   MAIL_GO_TMPFS (e.g. 8g); set MAIL_GO_TMPFS=0 to disable and use
 #   the container's normal /tmp.
 
 set -eu
 
 GO_BASE="golang:1.27-bookworm"
-GO_IMAGE="${MAMMOTHMAIL_GO_IMAGE:-mammothmail-go:1.27}"
-CACHE_DIR="${MAMMOTHMAIL_GO_CACHE:-$HOME/.cache/mammothmail-go}"
+GO_IMAGE="${MAIL_GO_IMAGE:-mammothmail-go:1.27}"
+CACHE_DIR="${MAIL_GO_CACHE:-$HOME/.cache/mammothmail-go}"
 MOD_CACHE="$CACHE_DIR/mod"
 BUILD_CACHE="$CACHE_DIR/build"
 
@@ -53,15 +53,15 @@ case "$CORES" in
     ''|*[!0-9]*) CORES=2 ;;
 esac
 [ "$CORES" -lt 1 ] && CORES=1
-GO_PARALLEL="${MAMMOTHMAIL_GO_PARALLEL:-$CORES}"
+GO_PARALLEL="${MAIL_GO_PARALLEL:-$CORES}"
 case "$GO_PARALLEL" in
     ''|*[!0-9]*) GO_PARALLEL=$CORES ;;
 esac
 
 # Hard RAM cap for the container: half the host's physical RAM by default (a
 # ceiling, not a reservation), floored at 2g so a small box still builds -race.
-if [ -n "${MAMMOTHMAIL_GO_MEM:-}" ]; then
-    MEM_LIMIT="$MAMMOTHMAIL_GO_MEM"
+if [ -n "${MAIL_GO_MEM:-}" ]; then
+    MEM_LIMIT="$MAIL_GO_MEM"
 else
     MEM_TOTAL_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
     case "$MEM_TOTAL_KB" in
@@ -86,12 +86,12 @@ esac
 # Scratch tmpfs: a ceiling, not a reservation (tmpfs allocates lazily), so it can
 # be generous. Default is the whole RAM cap: the suite's temp data is small in
 # practice, and if it ever did grow, the cgroup would reclaim before the host
-# felt it. MAMMOTHMAIL_GO_TMPFS=0 disables the tmpfs (container uses its own /tmp);
-# MAMMOTHMAIL_GO_TMPFS=<n>g sets the size explicitly.
-if [ "${MAMMOTHMAIL_GO_TMPFS:-auto}" = "0" ]; then
+# felt it. MAIL_GO_TMPFS=0 disables the tmpfs (container uses its own /tmp);
+# MAIL_GO_TMPFS=<n>g sets the size explicitly.
+if [ "${MAIL_GO_TMPFS:-auto}" = "0" ]; then
     SCRATCH_FLAGS=""
 else
-    TMPFS_G="${MAMMOTHMAIL_GO_TMPFS:-auto}"
+    TMPFS_G="${MAIL_GO_TMPFS:-auto}"
     if [ "$TMPFS_G" = "auto" ]; then
         TMPFS_G=$MEM_LIMIT_G
     fi
@@ -126,7 +126,7 @@ fi
 TTY_FLAG=""
 if [ -t 1 ]; then TTY_FLAG="-it"; fi
 
-# Build/test parallelism follows the host core count (or MAMMOTHMAIL_GO_PARALLEL).
+# Build/test parallelism follows the host core count (or MAIL_GO_PARALLEL).
 #
 # -trimpath lives in GOFLAGS, NOT on a command line: this wrapper is a
 # pass-through (`go "$@"`), so a build flag added at the call site would be
@@ -153,11 +153,11 @@ if [ -n "${BILLBOT_CONTRACT_FIXTURE:-}" ]; then
     FIXTURE_FLAGS="-e BILLBOT_CONTRACT_FIXTURE=$BILLBOT_CONTRACT_FIXTURE -v $fixture_dir:$fixture_dir"
 fi
 
-# Optional smoke-tier passthrough: when MAMMOTHMAIL_SMOKE is set (tests/run.sh
+# Optional smoke-tier passthrough: when MAIL_SMOKE is set (tests/run.sh
 # --smoke), forward it so the gated slow tests run instead of skipping.
 SMOKE_FLAGS=""
-if [ -n "${MAMMOTHMAIL_SMOKE:-}" ]; then
-    SMOKE_FLAGS="-e MAMMOTHMAIL_SMOKE=$MAMMOTHMAIL_SMOKE"
+if [ -n "${MAIL_SMOKE:-}" ]; then
+    SMOKE_FLAGS="-e MAIL_SMOKE=$MAIL_SMOKE"
 fi
 
 # Manual One compatibility probe only: forward variable names, never embed
@@ -171,16 +171,16 @@ fi
 # tests/logs/ (gitignored, persistent across runs). The summary printed at
 # the end shows the path; on failure the first FAIL line is also inlined.
 #
-# When wrapped by tests/run.sh, MAMMOTHMAIL_TEST_DIR is set: write straight to
+# When wrapped by tests/run.sh, MAIL_TEST_DIR is set: write straight to
 # <dir>/out.log so the unified runner owns the run folder. When unset, use
 # the dated per-invocation file (direct-invocation behavior is unchanged).
-if [ -n "${MAMMOTHMAIL_TEST_DIR:-}" ]; then
-    LOG_DIR="$MAMMOTHMAIL_TEST_DIR"
+if [ -n "${MAIL_TEST_DIR:-}" ]; then
+    LOG_DIR="$MAIL_TEST_DIR"
 else
     LOG_DIR="tests/logs/mammothmail-go"
 fi
 mkdir -p "$LOG_DIR"
-if [ -n "${MAMMOTHMAIL_TEST_DIR:-}" ]; then
+if [ -n "${MAIL_TEST_DIR:-}" ]; then
     LOG_FILE="$LOG_DIR/out.log"
 else
     LOG_SLUG=$(echo "$*" | tr ' /' '__')

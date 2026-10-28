@@ -102,11 +102,11 @@ Set your administrator credentials and change `BASE_URL` to the address you'll u
 **2. Start Mammoth Mail:**
 
 ```bash
-MAMMOTHMAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+MAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
-`MAMMOTHMAIL_BUILD` stamps the deployed commit into the binary; `GET /healthz` and
-`/.well-known/mailmoose` report it as `build`. When it is omitted the image
+`MAIL_BUILD` stamps the deployed commit into the binary; `GET /healthz` and
+`/.well-known/mail-api` report it as `build`. When it is omitted the image
 records its build time instead.
 
 Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
@@ -127,7 +127,7 @@ Mammoth Mail works with AI agents, automations, and applications through multipl
 Give your agent a Mammoth Mail URL and API key. Mammoth Mail provides built-in discovery, setup instructions, permission information, and a machine-readable API.
 
 ```text
-/.well-known/mailmoose   Agent discovery
+/.well-known/mail-api   Agent discovery
 /agent                   Agent setup guide
 /v1/bootstrap            API key permissions
 /openapi.json            OpenAPI specification

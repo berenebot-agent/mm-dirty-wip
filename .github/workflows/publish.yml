@@ -7,9 +7,9 @@ name: publish
 # for testing" path: run it by hand and the image lands in GHCR with a `dev` tag
 # so it can never be mistaken for a release.
 #
-# Image names (the `dirty-wip-` prefix is the dev channel):
-#   ghcr.io/<owner>/dirty-wip-mailmoose-remote-mx   the MX edge (shared or single)
-#   ghcr.io/<owner>/dirty-wip-mailmoose             the core
+# Image names:
+#   ghcr.io/<owner>/mammothmail-remote-mx   the MX edge (shared or single)
+#   ghcr.io/<owner>/mammothmail             the core
 #
 # Tags applied to each:
 #   dev                     always, a moving pointer at the newest build
@@ -128,7 +128,7 @@ jobs:
         id: mx_meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose-remote-mx
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mammothmail-remote-mx
           tags: |
             type=raw,value=dev
             type=raw,value=dev-${{ steps.meta.outputs.short }}
@@ -150,7 +150,7 @@ jobs:
         id: core_meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/dirty-wip-mailmoose
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mammothmail
           tags: |
             type=raw,value=dev
             type=raw,value=dev-${{ steps.meta.outputs.short }}
@@ -180,6 +180,6 @@ jobs:
             echo "Pull on the test host:"
             echo
             echo '```bash'
-            echo "docker pull ${REGISTRY}/${OWNER}/dirty-wip-mailmoose:dev-\$${{ steps.meta.outputs.short }}"
+            echo "docker pull ${REGISTRY}/${OWNER}/mammothmail:dev-\$${{ steps.meta.outputs.short }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

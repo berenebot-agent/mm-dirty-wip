@@ -11,8 +11,8 @@ Quick start
 ::
 
     # 1. Point the client at an instance and an API key.
-    export MAMMOTHMAIL_BASE_URL="https://your-instance"
-    export MAMMOTHMAIL_API_KEY="mmm_..."
+    export MAIL_BASE_URL="https://your-instance"
+    export MAIL_API_KEY="mmm_..."
 
     # 2. Discover who you are and which inboxes you can reach.
     python3 mammothmail.py bootstrap
@@ -54,7 +54,7 @@ Credentials
 Resolution order (first non-empty wins):
 
 1. ``--base`` / ``--key`` command-line flags
-2. ``MAMMOTHMAIL_BASE_URL`` / ``MAMMOTHMAIL_API_KEY`` environment variables
+2. ``MAIL_BASE_URL`` / ``MAIL_API_KEY`` environment variables
 3. ``~/.mammothmail/client.json`` (create it mode 0600)::
 
        {
@@ -147,7 +147,7 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then MAMMOTHMAIL_BASE_URL/MAMMOTHMAIL_API_KEY, then
+  --base/--key, then MAIL_BASE_URL/MAIL_API_KEY, then
   ~/.mammothmail/client.json (chmod 600). Never ~/.hermes/.env.
   With none set, the base defaults to http://localhost:8081 with a warning.
 
@@ -227,26 +227,26 @@ def resolve_client(args):
     config = load_config_file()
     base = (
         args.base
-        or os.environ.get("MAMMOTHMAIL_BASE_URL")
+        or os.environ.get("MAIL_BASE_URL")
         or config.get("base_url")
         or config.get("base")
     )
     if not base:
         base = DEFAULT_BASE_URL
         print(
-            "mammothmail.py: MAMMOTHMAIL_BASE_URL not set; defaulting to %s" % base,
+            "mammothmail.py: MAIL_BASE_URL not set; defaulting to %s" % base,
             file=sys.stderr,
         )
     key = (
         args.key
-        or os.environ.get("MAMMOTHMAIL_API_KEY")
+        or os.environ.get("MAIL_API_KEY")
         or config.get("api_key")
         or config.get("key")
         or ""
     )
     inbox = (
         resolve_inbox(getattr(args, "inbox", None))
-        or resolve_inbox(os.environ.get("MAMMOTHMAIL_INBOX"))
+        or resolve_inbox(os.environ.get("MAIL_INBOX"))
         or resolve_inbox(config.get("inbox"))
     )
     return Client(base, key, inbox)
@@ -1260,7 +1260,7 @@ def build_parser():
         metavar="URL",
         default=None,
         help=(
-            "API base URL (default: $MAMMOTHMAIL_BASE_URL, then "
+            "API base URL (default: $MAIL_BASE_URL, then "
             "~/.mammothmail/client.json, then %s)" % DEFAULT_BASE_URL
         ),
     )
@@ -1268,7 +1268,7 @@ def build_parser():
         "--key",
         metavar="KEY",
         default=None,
-        help="API key (default: $MAMMOTHMAIL_API_KEY, then ~/.mammothmail/client.json)",
+        help="API key (default: $MAIL_API_KEY, then ~/.mammothmail/client.json)",
     )
     parser.add_argument(
         "--inbox",
@@ -1761,7 +1761,7 @@ def main(argv=None):
         return EXIT_ERROR
     if not client.key:
         err(
-            "no API key: pass --key, set MAMMOTHMAIL_API_KEY, or write "
+            "no API key: pass --key, set MAIL_API_KEY, or write "
             "~/.mammothmail/client.json"
         )
         return EXIT_ERROR

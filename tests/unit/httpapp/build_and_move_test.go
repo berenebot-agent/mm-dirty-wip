@@ -19,7 +19,7 @@ func TestHealthAndDiscoveryReportBuild(t *testing.T) {
 	svc, _, _, _, _ := httpFixture(t)
 	svc.Config.Build = "9d7d1ce"
 	h := httpapp.New(svc, nil).Handler()
-	for _, path := range []string{"/healthz", "/health", "/v1/health", "/.well-known/mailmoose", "/"} {
+	for _, path := range []string{"/healthz", "/health", "/v1/health", "/.well-known/mail-api", "/"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Accept", "application/json")
 		rr := httptest.NewRecorder()

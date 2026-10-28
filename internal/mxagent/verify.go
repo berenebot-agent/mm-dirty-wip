@@ -45,7 +45,7 @@ func NewVerifier(cfg Config) *Verifier {
 func (v *Verifier) Verify(ctx context.Context, raw io.ReadSeeker, peerIP net.IP, helo, mailFrom, fromDomain string) mxwire.AuthResults {
 	var out mxwire.AuthResults
 	out.Source = "edge"
-	out.Evaluator = "mailmoose-mx/1"
+	out.Evaluator = "mail-mx/1"
 	lookupTXT := v.txtLookup
 
 	if v.cfg.VerifySPF {

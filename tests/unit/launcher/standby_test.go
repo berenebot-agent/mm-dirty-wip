@@ -58,14 +58,14 @@ func TestStandbyEnvForwardsLogLevel(t *testing.T) {
 // list reaches the embedded child only when the operator set it, so the edge's
 // SPF/DKIM/DMARC and TXT proof lookups fail over like the core.
 func TestStandbyEnvForwardsDNSFallback(t *testing.T) {
-	t.Setenv("MAMMOTHMAIL_DNS_FALLBACK_SERVERS", "")
-	if env := launcher.StandbyEnv(3, 4); strings.Contains(strings.Join(env, "\n"), "MAMMOTHMAIL_DNS_FALLBACK_SERVERS") {
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "")
+	if env := launcher.StandbyEnv(3, 4); strings.Contains(strings.Join(env, "\n"), "MAIL_DNS_FALLBACK_SERVERS") {
 		t.Fatalf("standby env carried DNS fallback when unset: %v", env)
 	}
 
-	t.Setenv("MAMMOTHMAIL_DNS_FALLBACK_SERVERS", "1.1.1.1,8.8.8.8")
+	t.Setenv("MAIL_DNS_FALLBACK_SERVERS", "1.1.1.1,8.8.8.8")
 	env := launcher.StandbyEnv(3, 4)
-	if !slices.Contains(env, "MAMMOTHMAIL_DNS_FALLBACK_SERVERS=1.1.1.1,8.8.8.8") {
+	if !slices.Contains(env, "MAIL_DNS_FALLBACK_SERVERS=1.1.1.1,8.8.8.8") {
 		t.Fatalf("standby env did not forward DNS fallback: %v", env)
 	}
 }

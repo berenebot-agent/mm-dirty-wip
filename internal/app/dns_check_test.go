@@ -147,13 +147,13 @@ func TestCheckMXQueriesAbsoluteName(t *testing.T) {
 }
 
 // TestCheckTXTQueriesAbsoluteName proves the same for the TXT check: the
-// _mammothmail-mx name must be qualified or a search-suffix failure can mask its
+// _mail-proof name must be qualified or a search-suffix failure can mask its
 // absent answer as dns_error.
 func TestCheckTXTQueriesAbsoluteName(t *testing.T) {
 	var got string
 	res := recordingResolver{txt: func(name string) { got = name }}
 	CheckTXT(context.Background(), res, "example.test", "id", []byte("x"), "v=MM1")
-	if want := "_mammothmail-mx.example.test."; got != want {
+	if want := "_mail-proof.example.test."; got != want {
 		t.Fatalf("TXT lookup queried %q, want %q", got, want)
 	}
 }

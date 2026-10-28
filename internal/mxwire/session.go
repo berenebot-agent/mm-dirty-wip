@@ -386,7 +386,7 @@ func AuthTranscript(c Challenge) ([]byte, error) {
 		return nil, fmt.Errorf("mxwire: invalid nonce")
 	}
 	h := sha256.New()
-	for _, field := range [][]byte{[]byte("mailmoose-mx-v1"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
+	for _, field := range [][]byte{[]byte("mail-mx-v1"), []byte(c.ReceiverID), []byte(c.ConnectionID), []byte(domain), []byte(c.KeyID), nonce} {
 		var length [4]byte
 		binary.BigEndian.PutUint32(length[:], uint32(len(field)))
 		h.Write(length[:])

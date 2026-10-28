@@ -129,10 +129,10 @@ func TestDiscoverySurfacesServeRealContent(t *testing.T) {
 		t.Errorf("/agent unexpectedly short (%d bytes)", len(guide))
 	}
 
-	discovery := get("/.well-known/mailmoose")
+	discovery := get("/.well-known/mail-api")
 	for _, want := range []string{"/agent", "/openapi.json", "/examples/python", "/examples/bash", "/examples/curl", "/v1/bootstrap"} {
 		if !strings.Contains(discovery, want) {
-			t.Errorf("/.well-known/mailmoose does not advertise %q", want)
+			t.Errorf("/.well-known/mail-api does not advertise %q", want)
 		}
 	}
 
@@ -215,7 +215,7 @@ func TestDiscoveryAdvertisesLimits(t *testing.T) {
 	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/mailmoose", nil))
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/mail-api", nil))
 	var doc struct {
 		Limits map[string]any `json:"limits"`
 	}
@@ -238,7 +238,7 @@ func TestDiscoveryAdvertisesLimits(t *testing.T) {
 func TestDiscoveryAdvertisesAuth(t *testing.T) {
 	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
-	for _, path := range []string{"/.well-known/mailmoose", "/"} {
+	for _, path := range []string{"/.well-known/mail-api", "/"} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Accept", "application/json")
@@ -328,7 +328,7 @@ func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
 			if rr.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rr.Code)
 			}
-			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer realm="mailmoose-api"` {
+			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer realm="mail-api"` {
 				t.Fatalf("WWW-Authenticate = %q", got)
 			}
 			var body map[string]string

@@ -22,7 +22,7 @@
 #   fmt      gofmt gate (gofmt -l cmd internal tests dialmx, fail on output)
 #   lint     dead-code gate (staticcheck -checks U1000 ./...)
 #   js       Antler dialog interaction checks (node tests/antler-wizard-check.cjs)
-#   smoke    slow gated tests (MAMMOTHMAIL_SMOKE=1): the process-level receiver
+#   smoke    slow gated tests (MAIL_SMOKE=1): the process-level receiver
 #            binary smoke. Deliberately NOT part of the default preset.
 #
 # Output levels (all written to the run folder every time):
@@ -204,16 +204,16 @@ for t in "${SELECTED[@]}"; do
             # -mod=readonly fails loudly instead of silently rewriting go.mod
             # when a gitignored scratch package (e.g. under tests/logs) imports
             # something the module does not require.
-            MAMMOTHMAIL_TEST_DIR="$RUN_DIR/unit" \
+            MAIL_TEST_DIR="$RUN_DIR/unit" \
                 ./mammothmail-go.sh test -mod=readonly -race -count=1 -timeout=60s -v ./... >/dev/null 2>&1 || rc=$?
             ;;
         vet)
-            MAMMOTHMAIL_TEST_DIR="$RUN_DIR/vet" \
+            MAIL_TEST_DIR="$RUN_DIR/vet" \
                 ./mammothmail-go.sh vet -mod=readonly ./... >/dev/null 2>&1 || rc=$?
             ;;
         fmt)
             # CI gate: gofmt -l prints unformatted files; empty output = pass.
-            MAMMOTHMAIL_TEST_DIR="$RUN_DIR/fmt" \
+            MAIL_TEST_DIR="$RUN_DIR/fmt" \
                 ./mammothmail-go.sh gofmt -l cmd internal tests dialmx >/dev/null 2>&1 || rc=$?
             if [ "$rc" -eq 0 ] && [ -s "$RUN_DIR/fmt/out.log" ]; then
                 rc=1
@@ -227,7 +227,7 @@ for t in "${SELECTED[@]}"; do
             # exported methods of reflectively-reachable types as live, so it
             # has both false positives and false negatives. Run it by hand (or
             # read the ci-logs/deadcode.log artifact) when the gate is green.
-            MAMMOTHMAIL_TEST_DIR="$RUN_DIR/lint" \
+            MAIL_TEST_DIR="$RUN_DIR/lint" \
                 ./mammothmail-go.sh run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... >/dev/null 2>&1 || rc=$?
             ;;
         js)
@@ -263,10 +263,10 @@ for t in "${SELECTED[@]}"; do
             ;;
         smoke)
             # Slow gated tests: the process-level receiver binary smoke.
-            # MAMMOTHMAIL_SMOKE=1 makes tests/support/smoke.Require run them
+            # MAIL_SMOKE=1 makes tests/support/smoke.Require run them
             # instead of skipping; it is passed through to the container by
             # mammothmail-go.sh.
-            MAMMOTHMAIL_SMOKE=1 MAMMOTHMAIL_TEST_DIR="$RUN_DIR/smoke" \
+            MAIL_SMOKE=1 MAIL_TEST_DIR="$RUN_DIR/smoke" \
                 ./mammothmail-go.sh test -mod=readonly -race -count=1 -timeout=60s -v \
                 ./tests/unit/dialmx/receiver/ >/dev/null 2>&1 || rc=$?
             ;;
