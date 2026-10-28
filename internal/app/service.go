@@ -937,7 +937,7 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
-	if service == mxdial.ServiceAntler {
+	if service == mxdial.ServiceHosted {
 		// The Tusk MX receiver set is resolved from the live manifest, never
 		// supplied by the caller. Reject an explicit receiver_urls rather than
 		// silently discarding it, so a client cannot believe it pointed the
@@ -958,7 +958,7 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		merged["receiver_urls"] = strings.Join(urls, ",")
 		delete(merged, "contact_email")
 		delete(merged, "setup_id")
-		delete(merged, "antler_receivers")
+		delete(merged, "receiver_snapshot")
 	}
 	enc, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
@@ -1050,11 +1050,11 @@ func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, do
 // receiver URLs because a Tusk form carries its receiver snapshot in the
 // same field the custom service uses.
 func dialMXService(incoming, old map[string]any) string {
-	if v, _ := incoming["service"].(string); v == mxdial.ServiceAntler || v == mxdial.ServiceCustom {
+	if v, _ := incoming["service"].(string); v == mxdial.ServiceHosted || v == mxdial.ServiceCustom {
 		return v
 	}
 	if old != nil {
-		if v, _ := old["service"].(string); v == mxdial.ServiceAntler || v == mxdial.ServiceCustom {
+		if v, _ := old["service"].(string); v == mxdial.ServiceHosted || v == mxdial.ServiceCustom {
 			return v
 		}
 	}
@@ -1066,7 +1066,7 @@ func dialMXService(incoming, old map[string]any) string {
 			return mxdial.ServiceCustom
 		}
 	}
-	return mxdial.ServiceAntler
+	return mxdial.ServiceHosted
 }
 
 // fillAntlerReceivingConfig validates the contact email and settles the Tusk MX
@@ -1098,8 +1098,8 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	// can say whether it used the live GitHub manifest or the built-in defaults. A
 	// reused snapshot keeps its original record: it describes the receiver set the
 	// domain's published MX records already point at, not today's manifest.
-	source, _ := old["antler_manifest_source"].(string)
-	fetchedAt, _ := old["antler_manifest_at"].(string)
+	source, _ := old["receiver_manifest_source"].(string)
+	fetchedAt, _ := old["receiver_manifest_at"].(string)
 	if len(receivers) == 0 {
 		resolver := s.AntlerEndpoints
 		if resolver == nil {
@@ -1125,14 +1125,14 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	for _, r := range receivers {
 		urls = append(urls, r.SessionURL)
 	}
-	merged["service"] = mxdial.ServiceAntler
+	merged["service"] = mxdial.ServiceHosted
 	merged["contact_email"] = email
 	merged["setup_id"] = setupID
 	merged["receiver_urls"] = strings.Join(urls, ",")
-	merged["antler_receivers"] = string(snapshot)
-	merged["antler_manifest_source"] = source
+	merged["receiver_snapshot"] = string(snapshot)
+	merged["receiver_manifest_source"] = source
 	if fetchedAt != "" {
-		merged["antler_manifest_at"] = fetchedAt
+		merged["receiver_manifest_at"] = fetchedAt
 	}
 	return nil
 }
@@ -1180,7 +1180,7 @@ func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID 
 	if err != nil {
 		return store.DomainReceivingConfig{}, err
 	}
-	if cfg.Provider != "dialmx" || values["service"] != mxdial.ServiceAntler {
+	if cfg.Provider != "dialmx" || values["service"] != mxdial.ServiceHosted {
 		return store.DomainReceivingConfig{}, invalidConfig("settings are only available for hosted Tusk MX")
 	}
 	if email := strings.TrimSpace(in.ContactEmail); email != "" {
@@ -1214,10 +1214,10 @@ func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID 
 // AntlerReceiversFromConfig decodes the receiver snapshot stored on a Tusk
 // MX domain configuration. A custom configuration returns nil.
 func AntlerReceiversFromConfig(values map[string]any) []mxdial.AntlerReceiver {
-	if v, _ := values["service"].(string); v != mxdial.ServiceAntler {
+	if v, _ := values["service"].(string); v != mxdial.ServiceHosted {
 		return nil
 	}
-	raw, _ := values["antler_receivers"].(string)
+	raw, _ := values["receiver_snapshot"].(string)
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
@@ -1262,7 +1262,39 @@ func (s *Service) DecryptDomainSendingConfig(c store.DomainSendingConfig) (map[s
 }
 
 func (s *Service) DecryptDomainReceivingConfig(c store.DomainReceivingConfig) (map[string]any, error) {
-	return s.decryptConfig(configAAD(c.AccountID, c.DomainID), c.EncryptedConfig)
+	values, err := s.decryptConfig(configAAD(c.AccountID, c.DomainID), c.EncryptedConfig)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(c.Provider, mxdial.Provider) {
+		normalizeDialMXReceivingConfig(values)
+	}
+	return values, nil
+}
+
+// normalizeDialMXReceivingConfig upgrades brand-specific keys in memory.
+// Receiving config is encrypted, so it cannot be rewritten by a SQL migration.
+// All reads see the new contract; the next normal save writes the new keys
+// without moving receiver snapshots, credentials, or changing DNS records.
+func normalizeDialMXReceivingConfig(values map[string]any) {
+	if values == nil {
+		return
+	}
+	if service, _ := values["service"].(string); service == mxdial.LegacyServiceAntler {
+		values["service"] = mxdial.ServiceHosted
+	}
+	for legacy, current := range map[string]string{
+		"antler_receivers":       "receiver_snapshot",
+		"antler_manifest_source": "receiver_manifest_source",
+		"antler_manifest_at":     "receiver_manifest_at",
+	} {
+		if _, present := values[current]; !present {
+			if old, exists := values[legacy]; exists {
+				values[current] = old
+			}
+		}
+		delete(values, legacy)
+	}
 }
 
 // getSendingConfig distinguishes "domain has no sending config" (ErrNoProvider)
