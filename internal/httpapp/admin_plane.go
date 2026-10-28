@@ -785,12 +785,12 @@ func (s *Server) sendInviteEmail(w http.ResponseWriter, r *http.Request, p model
 		return
 	}
 	link := s.inviteLink(token)
-	subject := "Set up your MailMoose account"
-	text := "You have been invited to MailMoose.\r\n\r\n" +
+	subject := "Set up your Mammoth Mail account"
+	text := "You have been invited to Mammoth Mail.\r\n\r\n" +
 		"Choose your password using this single-use link:\r\n\r\n" + link + "\r\n\r\n" +
 		"This link expires on " + inv.ExpiresAt.UTC().Format(time.RFC1123) + ".\r\n" +
 		"If you were not expecting this invitation you can ignore it.\r\n"
-	html := "<p>You have been invited to MailMoose.</p>" +
+	html := "<p>You have been invited to Mammoth Mail.</p>" +
 		"<p><a href=\"" + htmlEscape(link) + "\">Choose your password</a></p>" +
 		"<p>This single-use link expires on " + htmlEscape(inv.ExpiresAt.UTC().Format(time.RFC1123)) + ".</p>"
 	if _, err := s.Service.SendSystemMail(r.Context(), p.AccountID, mailer, app.SendInput{To: []string{inv.Email}, Subject: subject, Text: text, HTML: html}); err != nil {

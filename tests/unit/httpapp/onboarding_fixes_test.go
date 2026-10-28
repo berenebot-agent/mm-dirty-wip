@@ -177,7 +177,7 @@ func TestExamplesDefaultToRequestOrigin(t *testing.T) {
 	if body := get("/examples/bash", "mail.example.org:8081"); !strings.Contains(body, `DEFAULT_BASE_URL="http://mail.example.org:8081"`) {
 		t.Fatalf("bash client did not preserve a valid port")
 	}
-	if body := get("/examples/bash", "mail.example.org;$(touch${IFS}/tmp/mailmoose-shell-injection)"); !strings.Contains(body, `DEFAULT_BASE_URL="http://localhost:8081"`) {
+	if body := get("/examples/bash", "mail.example.org;$(touch${IFS}/tmp/mammothmail-shell-injection)"); !strings.Contains(body, `DEFAULT_BASE_URL="http://localhost:8081"`) {
 		t.Fatalf("bash client interpolated an unsafe Host header")
 	}
 }

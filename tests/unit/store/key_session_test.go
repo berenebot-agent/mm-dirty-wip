@@ -16,7 +16,7 @@ func TestKeySessionResolvesToKeyScope(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestKeySessionRefusedAfterRevoke(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestDeleteKeySessionsForClient(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, _ := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	u, _, _ := s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20)
 	d, _ := s.CreateDomain(ctx, u.AccountID, "example.com")
 	box, _ := s.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops")
 	k, _, _ := s.CreateAPIKey(ctx, u.AccountID, "agent", false, map[string]string{box.ID: "owner"})
@@ -115,7 +115,7 @@ func TestKeySessionRejectsAdminKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, _ := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	u, _, _ := s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20)
 	k, _, err := s.CreateAPIKey(ctx, u.AccountID, "full", true, nil)
 	if err != nil {
 		t.Fatal(err)

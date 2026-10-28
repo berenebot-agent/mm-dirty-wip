@@ -52,7 +52,7 @@ function run(withNode) {
     document: { querySelector(selector) { return withNode && selector === '[data-conn-status]' ? node : null; } }
   };
   vm.runInNewContext(moduleSource, context);
-  return { status: window.mailmooseStatus, node, label: node.label, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); }, timers };
+  return { status: window.mammothmailStatus, node, label: node.label, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); }, timers };
 }
 
 // Initial state: connecting, server-rendered into the same shape.
@@ -158,7 +158,7 @@ function runNav(withFlag) {
   vm.runInNewContext(moduleSource, context);
   vm.runInNewContext(navSource, context);
   return {
-    status: window.mailmooseStatus,
+    status: window.mammothmailStatus,
     node,
     document,
     documentListeners,

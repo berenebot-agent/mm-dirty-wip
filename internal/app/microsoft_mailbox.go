@@ -649,7 +649,7 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	for _, r := range rows {
 		v := m.remoteView(ctx, r)
 		// The row's folder is its provider membership, projected as the stable
-		// MailMoose folder id by the response layer. The cached folder_path is
+		// Mammoth Mail folder id by the response layer. The cached folder_path is
 		// not the Microsoft location once a read spans folders.
 		if path, me := m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inbox, r.ID); me == nil {
 			v.FolderPath = path

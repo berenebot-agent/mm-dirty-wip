@@ -1,7 +1,7 @@
 {
-  "name": "@mailmoose/openclaw",
+  "name": "@mammothmail/openclaw",
   "version": "0.1.0",
-  "description": "MailMoose email connector for OpenClaw",
+  "description": "Mammoth Mail email connector for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
@@ -49,12 +49,12 @@
       "pluginSdkVersion": "2026.9.7"
     },
     "channel": {
-      "id": "mailmoose",
-      "label": "MailMoose",
-      "selectionLabel": "MailMoose (email)",
-      "detailLabel": "MailMoose inbox",
-      "docsPath": "/channels/mailmoose",
-      "blurb": "Give your agent its own email inbox through MailMoose.",
+      "id": "mammothmail",
+      "label": "Mammoth Mail",
+      "selectionLabel": "Mammoth Mail (email)",
+      "detailLabel": "Mammoth Mail inbox",
+      "docsPath": "/channels/mammothmail",
+      "blurb": "Give your agent its own email inbox through Mammoth Mail.",
       "markdownCapable": false,
       "order": 60,
       "setup": {
@@ -65,7 +65,7 @@
             "sensitive": true,
             "cli": {
               "flags": "--code <url-or-code>",
-              "description": "MailMoose one-time setup URL or code"
+              "description": "Mammoth Mail one-time setup URL or code"
             }
           },
           {
@@ -73,7 +73,7 @@
             "kind": "string",
             "cli": {
               "flags": "--base-url <url>",
-              "description": "MailMoose base URL"
+              "description": "Mammoth Mail base URL"
             }
           },
           {
@@ -81,7 +81,7 @@
             "kind": "string",
             "cli": {
               "flags": "--gateway-id <id>",
-              "description": "MailMoose connector gateway id (manual setup)"
+              "description": "Mammoth Mail connector gateway id (manual setup)"
             }
           },
           {
@@ -90,7 +90,7 @@
             "sensitive": true,
             "cli": {
               "flags": "--secret <secret>",
-              "description": "MailMoose relay secret (manual setup)"
+              "description": "Mammoth Mail relay secret (manual setup)"
             }
           }
         ]

@@ -180,7 +180,7 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 	}
 	if target == nil {
 		// A name from the catalogue is accepted verbatim: a provider may allow a
-		// hierarchical name that the MailMoose-native rule rejects.
+		// hierarchical name that the MammothMail-native rule rejects.
 		provider := s.providerLabelInbox(ctx, p, box)
 		for i := range catalog {
 			if strings.EqualFold(catalog[i].Name, name) {
@@ -217,7 +217,7 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 
 // providerLabelInbox reports whether an inbox's additive labels are owned by the
 // provider (Gmail user labels, Outlook categories), where names may be
-// hierarchical, rather than local MailMoose metadata.
+// hierarchical, rather than local Mammoth Mail metadata.
 func (s *Server) providerLabelInbox(ctx context.Context, p model.Principal, box model.Inbox) bool {
 	if box.Kind != model.InboxKindStandalone {
 		return false

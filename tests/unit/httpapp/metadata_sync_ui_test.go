@@ -191,7 +191,7 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		// control, so the strip must not repeat the line and a verdict recorded
 		// while the page is open must be actionable without a reload.
 		"connections",
-		"mailmooseReconnectBanner",
+		"mammothmailReconnectBanner",
 		"syncReconnectBanner",
 		"data-inbox-reconnect",
 	} {

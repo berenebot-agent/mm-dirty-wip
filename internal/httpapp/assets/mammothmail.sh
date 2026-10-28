@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# mailmoose.sh -- MailMoose agent client (Bash; curl + jq only).
+# mammothmail.sh -- Mammoth Mail agent client (Bash; curl + jq only).
 #
 # This is the canonical example client served at `GET /examples/bash` and is
 # the Bash sibling of the Python example at `GET /examples/python`. It wraps the
-# whole agent-facing REST surface of MailMoose and is meant to be read as
+# whole agent-facing REST surface of Mammoth Mail and is meant to be read as
 # much as run: every command maps one-to-one onto an HTTP route, and a comment
 # above each handler names the route it calls.
 #
@@ -12,43 +12,43 @@
 # -----------
 #
 # # 1. Point the client at an instance and an API key.
-# export MAILMOOSE_BASE_URL="https://your-instance"
-# export MAILMOOSE_API_KEY="mmm_..."
+# export MAMMOTHMAIL_BASE_URL="https://your-instance"
+# export MAMMOTHMAIL_API_KEY="mmm_..."
 #
 #     # 2. Discover who you are and which inboxes you can reach.
-#     ./mailmoose.sh bootstrap
-#     ./mailmoose.sh inboxes --table
+#     ./mammothmail.sh bootstrap
+#     ./mammothmail.sh inboxes --table
 #
 #     # 3. Read mail.
-#     ./mailmoose.sh list --inbox inb_123 --unread --limit 20 --table
-#     ./mailmoose.sh get msg_123
-#     ./mailmoose.sh search invoice --inbox inb_123
-#     ./mailmoose.sh threads --inbox inb_123
-#     ./mailmoose.sh thread thr_123
-#     ./mailmoose.sh labels
+#     ./mammothmail.sh list --inbox inb_123 --unread --limit 20 --table
+#     ./mammothmail.sh get msg_123
+#     ./mammothmail.sh search invoice --inbox inb_123
+#     ./mammothmail.sh threads --inbox inb_123
+#     ./mammothmail.sh thread thr_123
+#     ./mammothmail.sh labels
 #
 #     # 4. Send and reply.
-#     ./mailmoose.sh send --to alice@example.com --subject "Hi" --text "Hello"
-#     ./mailmoose.sh send --to a@x,b@y --subject "Report" --text "See attached" \
+#     ./mammothmail.sh send --to alice@example.com --subject "Hi" --text "Hello"
+#     ./mammothmail.sh send --to a@x,b@y --subject "Report" --text "See attached" \
 #         --attach report.pdf --wait
-#     ./mailmoose.sh reply msg_123 --text "Thanks!"
+#     ./mammothmail.sh reply msg_123 --text "Thanks!"
 #
 #     # 5. Triage.
-#     ./mailmoose.sh mark-read msg_123
-#     ./mailmoose.sh label msg_123 --labels "Invoices,Unpaid"
-#     ./mailmoose.sh delete msg_123
+#     ./mammothmail.sh mark-read msg_123
+#     ./mammothmail.sh label msg_123 --labels "Invoices,Unpaid"
+#     ./mammothmail.sh delete msg_123
 #
 #     # 6. Drafts and human-in-the-loop approval.
-#     ./mailmoose.sh drafts --inbox inb_123
-#     ./mailmoose.sh drafts --inbox inb_123 --to alice@example.com \
+#     ./mammothmail.sh drafts --inbox inb_123
+#     ./mammothmail.sh drafts --inbox inb_123 --to alice@example.com \
 #         --subject "Quote" --text "..." --action request-send
-#     ./mailmoose.sh send-requests --active
-#     ./mailmoose.sh approve drf_123 --feedback "Looks good"
+#     ./mammothmail.sh send-requests --active
+#     ./mammothmail.sh approve drf_123 --feedback "Looks good"
 #
 #     # 7. Realtime and long-poll.
-#     ./mailmoose.sh events --after evt_100
-#     ./mailmoose.sh watch --after evt_100      # streams until Ctrl-C
-#     ./mailmoose.sh wait --inbox inb_123 --timeout 120
+#     ./mammothmail.sh events --after evt_100
+#     ./mammothmail.sh watch --after evt_100      # streams until Ctrl-C
+#     ./mammothmail.sh wait --inbox inb_123 --timeout 120
 #
 # Scenario: bootstrap -> list -> send -> reply -> events
 # -----------------------------------------------------
@@ -57,33 +57,33 @@
 # KEY=mmm_...
 #
 #     # Who am I and which inboxes can I reach?
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" bootstrap --table
-#     INBOX=$(./mailmoose.sh --base "$BASE_URL" --key "$KEY" inboxes \
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" bootstrap --table
+#     INBOX=$(./mammothmail.sh --base "$BASE_URL" --key "$KEY" inboxes \
 #         | jq -r '.[0].id')
 #
 #     # Read the newest unread message in that inbox.
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" list \
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" list \
 #         --inbox "$INBOX" --unread --limit 5 --table
-#     MSG=$(./mailmoose.sh --base "$BASE_URL" --key "$KEY" list \
+#     MSG=$(./mammothmail.sh --base "$BASE_URL" --key "$KEY" list \
 #         --inbox "$INBOX" --limit 1 | jq -r '.[0].id')
 #
 #     # Send, then reply to the message we just read.
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" send \
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" send \
 #         --to alice@example.org --subject "Hello" --text "Hi there"
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" reply "$MSG" \
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" reply "$MSG" \
 #         --text "Thanks for the note"
 #
 #     # Follow durable events from the cursor returned by bootstrap/list.
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" events --inbox "$INBOX"
-#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" watch --inbox "$INBOX"
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" events --inbox "$INBOX"
+#     ./mammothmail.sh --base "$BASE_URL" --key "$KEY" watch --inbox "$INBOX"
 #
 # Credentials
 # -----------
 # Resolution order (first non-empty wins):
 #
 #   1. --base / --key command-line flags
-#   2. MAILMOOSE_BASE_URL / MAILMOOSE_API_KEY environment variables
-#   3. ~/.mailmoose/client.json (create it mode 0600):
+#   2. MAMMOTHMAIL_BASE_URL / MAMMOTHMAIL_API_KEY environment variables
+#   3. ~/.mammothmail/client.json (create it mode 0600):
 #
 #          {
 # "base_url": "https://your-instance",
@@ -111,18 +111,18 @@
 # run them on a dedicated worker rather than in the middle of a request/response
 # cycle.
 #
-# Run `mailmoose.sh <command> --help` for per-command usage.
+# Run `mammothmail.sh <command> --help` for per-command usage.
 
 set -euo pipefail
 
 VERSION="1.0"
 DEFAULT_BASE_URL="http://localhost:8081"
-CONFIG_PATH="${MAILMOOSE_CONFIG:-${HOME:-}/.mailmoose/client.json}"
+CONFIG_PATH="${MAMMOTHMAIL_CONFIG:-${HOME:-}/.mammothmail/client.json}"
 
 # Global state (set by the option parser).
-BASE="${MAILMOOSE_BASE_URL:-}"
-KEY="${MAILMOOSE_API_KEY:-}"
-INBOX="${MAILMOOSE_INBOX:-}"
+BASE="${MAMMOTHMAIL_BASE_URL:-}"
+KEY="${MAMMOTHMAIL_API_KEY:-}"
+INBOX="${MAMMOTHMAIL_INBOX:-}"
 TABLE=0
 COMMAND=""
 
@@ -255,16 +255,16 @@ if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
 
 usage() {
 	cat <<'EOF'
-mailmoose.sh -- MailMoose agent client (Bash; curl + jq only).
+mammothmail.sh -- Mammoth Mail agent client (Bash; curl + jq only).
 
 usage:
-  mailmoose.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
+  mammothmail.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
 
 global options:
---base URL API base URL (default: $MAILMOOSE_BASE_URL, then
-                 ~/.mailmoose/client.json, then http://localhost:8081
+--base URL API base URL (default: $MAMMOTHMAIL_BASE_URL, then
+                 ~/.mammothmail/client.json, then http://localhost:8081
                  with a warning)
-  --key KEY      API key (default: $MAILMOOSE_API_KEY, then client.json)
+  --key KEY      API key (default: $MAMMOTHMAIL_API_KEY, then client.json)
   --inbox ID     default inbox id for commands that use one
   --table        print a simple columnar view instead of JSON
   --version      print the client version
@@ -331,8 +331,8 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then MAILMOOSE_BASE_URL/MAILMOOSE_API_KEY, then
-  ~/.mailmoose/client.json (chmod 600). Never ~/.hermes/.env.
+  --base/--key, then MAMMOTHMAIL_BASE_URL/MAMMOTHMAIL_API_KEY, then
+  ~/.mammothmail/client.json (chmod 600). Never ~/.hermes/.env.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
 EOF
@@ -343,7 +343,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 err() {
-	printf 'mailmoose: %s\n' "$*" >&2
+	printf 'mammothmail: %s\n' "$*" >&2
 }
 
 die() {
@@ -359,7 +359,7 @@ die_usage() {
 }
 
 warn() {
-	printf 'mailmoose: warning: %s\n' "$*" >&2
+	printf 'mammothmail: warning: %s\n' "$*" >&2
 }
 
 require_tools() {
@@ -530,7 +530,7 @@ build_attachments() {
 api_fetch() {
 	local method="$1" path="$2" body="${3:-}" idem="${4:-}" maxtime="${5:-60}"
 	require_tools
-	local -a cargs=(-sS --max-time "$maxtime" -X "$method" -A "mailmoose.sh/$VERSION"
+	local -a cargs=(-sS --max-time "$maxtime" -X "$method" -A "mammothmail.sh/$VERSION"
 		-H "Authorization: Bearer $KEY" -H "Accept: application/json")
 	if [ -n "$body" ]; then
 		cargs+=(-H "Content-Type: application/json" --data-binary "$body")
@@ -604,7 +604,7 @@ upload_attachments() {
 		fargs+=(-F "attachments=@${f};type=${ct}")
 	done
 	local tmp status
-	local -a cargs=(-sS --max-time 120 -X POST -A "mailmoose.sh/$VERSION"
+	local -a cargs=(-sS --max-time 120 -X POST -A "mammothmail.sh/$VERSION"
 		-H "Authorization: Bearer $KEY")
 	cargs+=("${fargs[@]}")
 	tmp="$(mktemp "$WORKDIR/resp.XXXXXX")"
@@ -1104,7 +1104,7 @@ $value"
 			\{*) raw="$line" ;;
 			esac
 		fi
-	done < <(set +e; curl -N -sS -D "$hdr" -A "mailmoose.sh/$VERSION" \
+	done < <(set +e; curl -N -sS -D "$hdr" -A "mammothmail.sh/$VERSION" \
 		-H "Authorization: Bearer $KEY" -H "Accept: text/event-stream" "$BASE$path"
 		printf '%s' "$?" >"$status_file")
 	if [ -n "$data" ]; then
@@ -1463,7 +1463,7 @@ parse_flags() {
 			shift
 			;;
 		--version)
-			printf 'mailmoose.sh %s\n' "$VERSION"
+			printf 'mammothmail.sh %s\n' "$VERSION"
 			exit 0
 			;;
 		--help | -h)
@@ -1521,7 +1521,7 @@ main() {
 			shift
 			;;
 		--version)
-			printf 'mailmoose.sh %s\n' "$VERSION"
+			printf 'mammothmail.sh %s\n' "$VERSION"
 			exit 0
 			;;
 		--help | -h)
@@ -1560,14 +1560,14 @@ main() {
 	load_config
 	if [ -z "$BASE" ]; then
 		BASE="$DEFAULT_BASE_URL"
-		printf 'mailmoose.sh: MAILMOOSE_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
+		printf 'mammothmail.sh: MAMMOTHMAIL_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
 	fi
 	BASE="${BASE%/}"
 	if [ -z "$KEY" ]; then
-		die "no API key: pass --key, set MAILMOOSE_API_KEY, or write $CONFIG_PATH"
+		die "no API key: pass --key, set MAMMOTHMAIL_API_KEY, or write $CONFIG_PATH"
 	fi
 
-	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mailmoose.XXXXXX")"
+	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mammothmail.XXXXXX")"
 	trap 'rm -rf "$WORKDIR"' EXIT
 
 	case "$COMMAND" in

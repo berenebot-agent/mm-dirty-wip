@@ -7,7 +7,7 @@ package main
 //
 // Regenerate with:
 //
-//	./mailmoose-go.sh generate ./internal/timezone
+//	./mammothmail-go.sh generate ./internal/timezone
 //
 // or, from inside a container:
 //

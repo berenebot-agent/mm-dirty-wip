@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""MailMoose agent client (Python 3 standard library only).
+"""Mammoth Mail agent client (Python 3 standard library only).
 
 This is the canonical example client served at ``GET /examples/python``. It
-wraps the whole agent-facing REST surface of MailMoose and is meant to be
+wraps the whole agent-facing REST surface of Mammoth Mail and is meant to be
 read as much as run: every command maps one-to-one onto an HTTP route, and the
 ``--help`` text for each command lists every option.
 
@@ -11,51 +11,51 @@ Quick start
 ::
 
     # 1. Point the client at an instance and an API key.
-    export MAILMOOSE_BASE_URL="https://your-instance"
-    export MAILMOOSE_API_KEY="mmm_..."
+    export MAMMOTHMAIL_BASE_URL="https://your-instance"
+    export MAMMOTHMAIL_API_KEY="mmm_..."
 
     # 2. Discover who you are and which inboxes you can reach.
-    python3 mailmoose.py bootstrap
-    python3 mailmoose.py inboxes --table
+    python3 mammothmail.py bootstrap
+    python3 mammothmail.py inboxes --table
 
     # 3. Read mail.
-    python3 mailmoose.py list --inbox inb_123 --unread --limit 20 --table
-    python3 mailmoose.py get msg_123
-    python3 mailmoose.py search "invoice" --inbox inb_123
-    python3 mailmoose.py threads --inbox inb_123
-    python3 mailmoose.py thread thr_123
-    python3 mailmoose.py labels
+    python3 mammothmail.py list --inbox inb_123 --unread --limit 20 --table
+    python3 mammothmail.py get msg_123
+    python3 mammothmail.py search "invoice" --inbox inb_123
+    python3 mammothmail.py threads --inbox inb_123
+    python3 mammothmail.py thread thr_123
+    python3 mammothmail.py labels
 
     # 4. Send and reply.
-    python3 mailmoose.py send --to alice@example.com --subject "Hi" --text "Hello"
-    python3 mailmoose.py send --to a@x,b@y --subject "Report" --text "See attached" \
+    python3 mammothmail.py send --to alice@example.com --subject "Hi" --text "Hello"
+    python3 mammothmail.py send --to a@x,b@y --subject "Report" --text "See attached" \
         --attach report.pdf --wait
-    python3 mailmoose.py reply msg_123 --text "Thanks!"
+    python3 mammothmail.py reply msg_123 --text "Thanks!"
 
     # 5. Triage.
-    python3 mailmoose.py mark-read msg_123
-    python3 mailmoose.py label msg_123 --labels "Invoices,Unpaid"
-    python3 mailmoose.py delete msg_123
+    python3 mammothmail.py mark-read msg_123
+    python3 mammothmail.py label msg_123 --labels "Invoices,Unpaid"
+    python3 mammothmail.py delete msg_123
 
     # 6. Drafts and human-in-the-loop approval.
-    python3 mailmoose.py drafts --inbox inb_123
-    python3 mailmoose.py drafts --inbox inb_123 --to alice@example.com \
+    python3 mammothmail.py drafts --inbox inb_123
+    python3 mammothmail.py drafts --inbox inb_123 --to alice@example.com \
         --subject "Quote" --text "..." --action request-send
-    python3 mailmoose.py send-requests --active
-    python3 mailmoose.py approve drf_123 --feedback "Looks good"
+    python3 mammothmail.py send-requests --active
+    python3 mammothmail.py approve drf_123 --feedback "Looks good"
 
     # 7. Realtime and long-poll.
-    python3 mailmoose.py events --after evt_100
-    python3 mailmoose.py watch --after evt_100      # streams until Ctrl-C
-    python3 mailmoose.py wait --inbox inb_123 --timeout 120
+    python3 mammothmail.py events --after evt_100
+    python3 mammothmail.py watch --after evt_100      # streams until Ctrl-C
+    python3 mammothmail.py wait --inbox inb_123 --timeout 120
 
 Credentials
 -----------
 Resolution order (first non-empty wins):
 
 1. ``--base`` / ``--key`` command-line flags
-2. ``MAILMOOSE_BASE_URL`` / ``MAILMOOSE_API_KEY`` environment variables
-3. ``~/.mailmoose/client.json`` (create it mode 0600)::
+2. ``MAMMOTHMAIL_BASE_URL`` / ``MAMMOTHMAIL_API_KEY`` environment variables
+3. ``~/.mammothmail/client.json`` (create it mode 0600)::
 
        {
          "base_url": "https://your-instance",
@@ -95,7 +95,7 @@ import urllib.request
 import uuid
 
 DEFAULT_BASE_URL = "http://localhost:8081"
-CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mailmoose", "client.json")
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mammothmail", "client.json")
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -147,8 +147,8 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then MAILMOOSE_BASE_URL/MAILMOOSE_API_KEY, then
-  ~/.mailmoose/client.json (chmod 600). Never ~/.hermes/.env.
+  --base/--key, then MAMMOTHMAIL_BASE_URL/MAMMOTHMAIL_API_KEY, then
+  ~/.mammothmail/client.json (chmod 600). Never ~/.hermes/.env.
   With none set, the base defaults to http://localhost:8081 with a warning.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
@@ -184,7 +184,7 @@ class Response(object):
 
 
 def err(message):
-    sys.stderr.write("mailmoose: %s\n" % message)
+    sys.stderr.write("mammothmail: %s\n" % message)
 
 
 def resolve_inbox(value):
@@ -227,26 +227,26 @@ def resolve_client(args):
     config = load_config_file()
     base = (
         args.base
-        or os.environ.get("MAILMOOSE_BASE_URL")
+        or os.environ.get("MAMMOTHMAIL_BASE_URL")
         or config.get("base_url")
         or config.get("base")
     )
     if not base:
         base = DEFAULT_BASE_URL
         print(
-            "mailmoose.py: MAILMOOSE_BASE_URL not set; defaulting to %s" % base,
+            "mammothmail.py: MAMMOTHMAIL_BASE_URL not set; defaulting to %s" % base,
             file=sys.stderr,
         )
     key = (
         args.key
-        or os.environ.get("MAILMOOSE_API_KEY")
+        or os.environ.get("MAMMOTHMAIL_API_KEY")
         or config.get("api_key")
         or config.get("key")
         or ""
     )
     inbox = (
         resolve_inbox(getattr(args, "inbox", None))
-        or resolve_inbox(os.environ.get("MAILMOOSE_INBOX"))
+        or resolve_inbox(os.environ.get("MAMMOTHMAIL_INBOX"))
         or resolve_inbox(config.get("inbox"))
     )
     return Client(base, key, inbox)
@@ -707,7 +707,7 @@ def load_attachment_files(paths):
 
 
 def encode_multipart(files, field="attachments"):
-    boundary = "----mailmoose" + uuid.uuid4().hex
+    boundary = "----mammothmail" + uuid.uuid4().hex
     parts = []
     for filename, content_type, content in files:
         safe_name = filename.replace('"', "%22")
@@ -1248,9 +1248,9 @@ def cmd_wait(client, args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="mailmoose",
+        prog="mammothmail",
         description=(
-            "MailMoose agent client. JSON to stdout, diagnostics to stderr."
+            "Mammoth Mail agent client. JSON to stdout, diagnostics to stderr."
         ),
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1260,15 +1260,15 @@ def build_parser():
         metavar="URL",
         default=None,
         help=(
-            "API base URL (default: $MAILMOOSE_BASE_URL, then "
-            "~/.mailmoose/client.json, then %s)" % DEFAULT_BASE_URL
+            "API base URL (default: $MAMMOTHMAIL_BASE_URL, then "
+            "~/.mammothmail/client.json, then %s)" % DEFAULT_BASE_URL
         ),
     )
     parser.add_argument(
         "--key",
         metavar="KEY",
         default=None,
-        help="API key (default: $MAILMOOSE_API_KEY, then ~/.mailmoose/client.json)",
+        help="API key (default: $MAMMOTHMAIL_API_KEY, then ~/.mammothmail/client.json)",
     )
     parser.add_argument(
         "--inbox",
@@ -1284,7 +1284,7 @@ def build_parser():
     parser.add_argument(
         "--version",
         action="version",
-        version="mailmoose.py 1.0",
+        version="mammothmail.py 1.0",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     subparsers.required = True
@@ -1452,7 +1452,7 @@ def build_parser():
         cmd_authoring,
     )
     add_inbox(p)
-    p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft (standalone inboxes only)")
+    p.add_argument("--mode", metavar="MODE", help="local_approval or remote_draft (standalone inboxes only)")
     p.add_argument("--notify", metavar="ADDR", help="notification address override")
 
     p = command(
@@ -1761,8 +1761,8 @@ def main(argv=None):
         return EXIT_ERROR
     if not client.key:
         err(
-            "no API key: pass --key, set MAILMOOSE_API_KEY, or write "
-            "~/.mailmoose/client.json"
+            "no API key: pass --key, set MAMMOTHMAIL_API_KEY, or write "
+            "~/.mammothmail/client.json"
         )
         return EXIT_ERROR
     try:

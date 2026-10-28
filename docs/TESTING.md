@@ -43,7 +43,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
 | `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
 | `js` | Antler dialog, DKIM toggle, copy-controls, empty-trash, passkey and release-config checks |
-| `smoke` | slow gated tests with `MAILMOOSE_SMOKE=1` |
+| `smoke` | slow gated tests with `MAMMOTHMAIL_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
 in the default preset:
@@ -53,10 +53,10 @@ in the default preset:
   receiver package (`./tests/unit/dialmx/receiver/`).
 
 They gate on `tests/support/smoke.Require`, which skips unless
-`MAILMOOSE_SMOKE=1`. CI runs them as an explicit step so coverage is never
+`MAMMOTHMAIL_SMOKE=1`. CI runs them as an explicit step so coverage is never
 silently lost, and that step adds one thing the local tier does not:
 `internal/auth`'s gated production-cost Argon2 tests
-(`MAILMOOSE_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
+(`MAMMOTHMAIL_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
 Run that command directly if you need the auth smoke locally.
 
 ## Run folder layout
@@ -129,7 +129,7 @@ column -t tests/logs/history.tsv | tail -20
 ```
 
 The prune script never removes the ledger, the `latest` symlink, or the
-`tests/fixtures/mailmoose-mx` test fixture.
+`tests/fixtures/mammothmail-mx` test fixture.
 
 ## CI
 
@@ -154,9 +154,9 @@ an explicit opt-in in the default Compose file.
 
 ## Fixtures
 
-- `tests/fixtures/mailmoose-webhook-contract.json` — the MailMoose/Billbot
+- `tests/fixtures/mammothmail-webhook-contract.json` — the Mammoth Mail/Billbot
   webhook wire contract.
-- `tests/fixtures/mailmoose-mx` — the receiver binary measured by the launcher
+- `tests/fixtures/mammothmail-mx` — the receiver binary measured by the launcher
   RSS test. Gitignored and built on demand with `make mx-fixture`; the test
   skips when it is absent.
 

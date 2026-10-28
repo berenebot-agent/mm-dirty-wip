@@ -132,7 +132,7 @@ func TestResetPasswordRefusesSystemAdmin(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
 	st := testdb.OpenAt(t, dir)
-	if _, _, err := st.SyncSystemAdmin(context.Background(), "MailMoose", "root@example.com", "correct horse battery staple", 50<<20); err != nil {
+	if _, _, err := st.SyncSystemAdmin(context.Background(), "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20); err != nil {
 		st.Close()
 		t.Fatal(err)
 	}

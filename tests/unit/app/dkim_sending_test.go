@@ -48,7 +48,7 @@ func sendOne(t *testing.T, svc *app.Service, accountID, inboxID string) model.Me
 
 // TestDirectMXSignsStoredMessage is the end-to-end proof for DKIM signing: an
 // enabled Direct MX config produces a stored message carrying exactly one
-// signature that verifies against the public key MailMoose reports for DNS.
+// signature that verifies against the public key Mammoth Mail reports for DNS.
 func TestDirectMXSignsStoredMessage(t *testing.T) {
 	t.Parallel()
 	svc, u, d, box := testService(t)
@@ -243,7 +243,7 @@ func TestDisablingDKIMKeepsStoredKey(t *testing.T) {
 	}
 }
 
-// TestOperatorSuppliedKeyIsIgnored proves the signing key is MailMoose-generated
+// TestOperatorSuppliedKeyIsIgnored proves the signing key is MammothMail-generated
 // and not operator-controlled: a submitted key is not used, so the key shown for
 // DNS is always the one that signs.
 func TestOperatorSuppliedKeyIsIgnored(t *testing.T) {

@@ -100,7 +100,7 @@ func partialFanoutFixture(t *testing.T) (*app.Service, http.Handler, model.Princ
 
 // TestResendPartialFanOutIsRetryable is the regression guard for the
 // fan-out acknowledgement bug: a single provider event addressing several
-// MailMoose inboxes must not be acknowledged with 200 once any recipient
+// Mammoth Mail inboxes must not be acknowledged with 200 once any recipient
 // failed transiently. Previously a delivery to inbox A succeeding while inbox B
 // failed (for example on quota) returned 200, so the provider considered the
 // event delivered and inbox B never received a copy.

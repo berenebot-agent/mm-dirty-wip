@@ -82,7 +82,7 @@ type Config struct {
 	CoreKey string
 	SMTP    mxagent.Config
 
-	// LookupTXT resolves the _mailmoose-mx.<domain> TXT records proving domain
+	// LookupTXT resolves the _mammothmail-mx.<domain> TXT records proving domain
 	// authority. It is separate from mxagent's resolver because the proof is a
 	// receiver concern, not an email-verification one.
 	LookupTXT func(context.Context, string) ([]string, error)
@@ -1042,7 +1042,7 @@ func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason 
 		if resolver == "" {
 			resolver = "system"
 		}
-		args = append(args, "query_name", "_mailmoose-mx."+domain, "resolver", resolver)
+		args = append(args, "query_name", "_mammothmail-mx."+domain, "resolver", resolver)
 	}
 	if d > 0 {
 		args = append(args, "duration_ms", d.Milliseconds())
@@ -1951,7 +1951,7 @@ func (r *Receiver) lookupTXT(ctx context.Context, d string) ([]string, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return r.cfg.LookupTXT(ctx, absoluteName("_mailmoose-mx."+d))
+	return r.cfg.LookupTXT(ctx, absoluteName("_mammothmail-mx."+d))
 }
 
 // lookupMX resolves the domain's published MX records with the same bounded

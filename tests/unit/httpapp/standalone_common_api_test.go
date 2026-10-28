@@ -1365,7 +1365,7 @@ func TestRemoteReplyForwardSubmit(t *testing.T) {
 }
 
 // TestAuthoringSelectorPerKind proves the authoring endpoint reports the kind
-// default (remote_draft for standalone, mailmoose_approval for domain), enables
+// default (remote_draft for standalone, local_approval for domain), enables
 // the approver only for a local inbox, defaults the notify address to the
 // connected address, and lets Owner switch the mode and override the notify.
 func TestAuthoringSelectorPerKind(t *testing.T) {
@@ -1395,12 +1395,12 @@ func TestAuthoringSelectorPerKind(t *testing.T) {
 		t.Fatalf("standalone notify default %+v", sd)
 	}
 	dm := get(domainBox.ID)
-	if dm["mode"] != model.AuthoringMailMooseApproval || dm["approver_enabled"] != true {
+	if dm["mode"] != model.AuthoringLocalApproval || dm["approver_enabled"] != true {
 		t.Fatalf("domain authoring %+v", dm)
 	}
 
 	// Switch the standalone inbox to approval-like mode and set a notify override.
-	req := httptest.NewRequest("PUT", "/v1/inboxes/"+standalone.ID+"/authoring", strings.NewReader(`{"mode":"mailmoose_approval","notify_address":"ops@remote.test"}`))
+	req := httptest.NewRequest("PUT", "/v1/inboxes/"+standalone.ID+"/authoring", strings.NewReader(`{"mode":"local_approval","notify_address":"ops@remote.test"}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -1409,7 +1409,7 @@ func TestAuthoringSelectorPerKind(t *testing.T) {
 		t.Fatalf("authoring put %d: %s", rr.Code, rr.Body.String())
 	}
 	after := get(standalone.ID)
-	if after["mode"] != model.AuthoringMailMooseApproval || after["notify_address"] != "ops@remote.test" || after["notify_overridden"] != true {
+	if after["mode"] != model.AuthoringLocalApproval || after["notify_address"] != "ops@remote.test" || after["notify_overridden"] != true {
 		t.Fatalf("authoring after put %+v", after)
 	}
 }
@@ -1670,7 +1670,7 @@ func TestAuthoringUISavePersists(t *testing.T) {
 	}
 	cookie, csrf := uiSession(t, svc, u.ID)
 	// Save the mode via the edit form.
-	form := "display=Agent&authoring_mode=mailmoose_approval&_csrf=" + csrf
+	form := "display=Agent&authoring_mode=local_approval&_csrf=" + csrf
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+standalone.ID+"/edit", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -1683,7 +1683,7 @@ func TestAuthoringUISavePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Mode != model.AuthoringMailMooseApproval {
+	if settings.Mode != model.AuthoringLocalApproval {
 		t.Fatalf("authoring not persisted: %+v", settings)
 	}
 	// Save again in remote-draft mode: the approver is cleared.
@@ -2048,7 +2048,7 @@ func TestRemoteErrorIs503Not404(t *testing.T) {
 func TestAuthoringModeFlipPreservesSnapshot(t *testing.T) {
 	t.Parallel()
 	svc, _, u, _, _, _, _, _ := mergeFixture(t)
-	// Use the domain inbox: mailmoose_approval with an approver.
+	// Use the domain inbox: local_approval with an approver.
 	ctx := context.Background()
 	boxes, _ := svc.Store.ListInboxes(ctx, model.Principal{AccountID: u.AccountID, Admin: true})
 	var domainBox model.Inbox
@@ -2074,7 +2074,7 @@ func TestAuthoringModeFlipPreservesSnapshot(t *testing.T) {
 	}
 	// Pin the mode explicitly (a domain inbox cannot be flipped to remote_draft)
 	// and clear the notify override.
-	if err := svc.Store.SetInboxAuthoringMode(ctx, p, domainBox.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(ctx, p, domainBox.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Store.SetInboxNotifyAddress(ctx, p, domainBox.ID, ""); err != nil {
@@ -2691,9 +2691,9 @@ func TestRemoteSearchAttachmentFilteredPaginationNoGap(t *testing.T) {
 }
 
 // TestAuthoringApproverEnabledByEffectiveMode proves approver_enabled tracks the
-// effective mode: a standalone inbox switched to mailmoose_approval reports it
+// effective mode: a standalone inbox switched to local_approval reports it
 // enabled (with standalone true), and a domain inbox cannot be set to
-// remote_draft at all (the mode is preset to mailmoose_approval).
+// remote_draft at all (the mode is preset to local_approval).
 func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
@@ -2717,7 +2717,7 @@ func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 		t.Fatalf("standalone default %+v", sd)
 	}
 	// Switch standalone to approval: approver enabled.
-	if err := svc.Store.SetInboxAuthoringMode(context.Background(), p, standalone.ID, model.AuthoringMailMooseApproval); err != nil {
+	if err := svc.Store.SetInboxAuthoringMode(context.Background(), p, standalone.ID, model.AuthoringLocalApproval); err != nil {
 		t.Fatal(err)
 	}
 	sd = get(standalone.ID)
@@ -2744,13 +2744,13 @@ func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 		t.Fatalf("domain remote_draft put = %d, want 400", code)
 	}
 	dm = get(domainBox.ID)
-	if dm["mode"] != model.AuthoringMailMooseApproval || dm["approver_enabled"] != true {
+	if dm["mode"] != model.AuthoringLocalApproval || dm["approver_enabled"] != true {
 		t.Fatalf("domain after rejected put %+v", dm)
 	}
 }
 
 // TestApproverToggleScriptPresent proves app.js disables the approver input when
-// the effective mode is remote_draft and enables it for mailmoose_approval, and
+// the effective mode is remote_draft and enables it for local_approval, and
 // labels the tab "Approvals" for a standalone inbox.
 func TestApproverToggleScriptPresent(t *testing.T) {
 	t.Parallel()
@@ -2761,8 +2761,8 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 		"tab.textContent = 'Assistant Approver'",
 		"approverFields.hidden = !approval",
 		"When a client with Assistant permission requests to send, the draft will be placed in the connected mailbox",
-		"effective === 'mailmoose_approval'",
-		// A domain inbox is preset to MailMoose approval: the mode selector is
+		"effective === 'local_approval'",
+		// A domain inbox is preset to Mammoth Mail approval: the mode selector is
 		// hidden, never offered.
 		"authStandalone = !!data.standalone",
 		"controls.hidden = !authStandalone",
@@ -2847,7 +2847,7 @@ func TestInboxReadinessStandaloneDistinct(t *testing.T) {
 
 // TestDomainAuthoringSaveKeepsApprovalControls proves saving the authoring form on
 // a domain inbox (approval mode, keeping the approver) does not disturb the
-// approval controls: the mode stays mailmoose_approval and the approver is kept.
+// approval controls: the mode stays local_approval and the approver is kept.
 func TestDomainAuthoringSaveKeepsApprovalControls(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domainBox, _, _ := standaloneFixture(t)
@@ -2858,7 +2858,7 @@ func TestDomainAuthoringSaveKeepsApprovalControls(t *testing.T) {
 	}
 	cookie, csrf := uiSession(t, svc, u.ID)
 	// Save with the domain's default (approval) mode and the approver field.
-	form := "display=Hermes&approver_email=approver@example.com&authoring_mode=mailmoose_approval&authoring_notify=&_csrf=" + csrf
+	form := "display=Hermes&approver_email=approver@example.com&authoring_mode=local_approval&authoring_notify=&_csrf=" + csrf
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+domainBox.ID+"/edit", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -2871,7 +2871,7 @@ func TestDomainAuthoringSaveKeepsApprovalControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Mode != model.AuthoringMailMooseApproval {
+	if settings.Mode != model.AuthoringLocalApproval {
 		t.Fatalf("domain mode changed on save: %q", settings.Mode)
 	}
 	got, _ := svc.Store.GetInboxInternal(ctx, u.AccountID, domainBox.ID)

@@ -187,7 +187,7 @@ func deliveryFailureBody(f deliveryFailure, fromAddress string) (string, string)
 
 	var b strings.Builder
 	b.WriteString("This is an automatic delivery-failure notice.\r\n\r\n")
-	b.WriteString("MailMoose could not deliver the following message and will not retry it.\r\n\r\n")
+	b.WriteString("Mammoth Mail could not deliver the following message and will not retry it.\r\n\r\n")
 	fmt.Fprintf(&b, "  To:       %s\r\n", recipients)
 	fmt.Fprintf(&b, "  Subject:  %s\r\n", subject)
 	fmt.Fprintf(&b, "  Sender:   %s\r\n", f.FromAddress)
@@ -197,10 +197,10 @@ func deliveryFailureBody(f deliveryFailure, fromAddress string) (string, string)
 	b.WriteString("Diagnostic:\r\n")
 	fmt.Fprintf(&b, "  %s\r\n\r\n", diagnostic)
 	b.WriteString("The original message has been moved out of the outbox and is retained in Trash.\r\n")
-	fmt.Fprintf(&b, "This notice was generated locally by MailMoose; do not reply to %s.\r\n", fromAddress)
+	fmt.Fprintf(&b, "This notice was generated locally by Mammoth Mail; do not reply to %s.\r\n", fromAddress)
 
 	html := "<p>This is an automatic delivery-failure notice.</p>" +
-		"<p>MailMoose could not deliver the following message and will not retry it.</p>" +
+		"<p>Mammoth Mail could not deliver the following message and will not retry it.</p>" +
 		"<table>" +
 		"<tr><td><strong>To</strong></td><td>" + htmlEscape(recipients) + "</td></tr>" +
 		"<tr><td><strong>Subject</strong></td><td>" + htmlEscape(subject) + "</td></tr>" +

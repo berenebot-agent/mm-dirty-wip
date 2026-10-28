@@ -362,7 +362,7 @@ func (s *Server) domainSendingResponse(ctx context.Context, domainID string, cfg
 	if strings.EqualFold(cfg.Provider, mx.Provider) {
 		// The DKIM record an operator must publish. The public key is derived
 		// from the stored private key, so a stored key can never be presented
-		// alongside a public key that does not match what MailMoose signs with.
+		// alongside a public key that does not match what Mammoth Mail signs with.
 		if keyPEM, _ := dec[mx.FieldDKIMPrivateKey].(string); strings.TrimSpace(keyPEM) != "" {
 			if key, kerr := dkimsign.ParsePrivateKey(keyPEM); kerr == nil {
 				if pubPEM, perr := dkimsign.PublicKeyPEM(key); perr == nil {

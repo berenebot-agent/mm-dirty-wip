@@ -12,7 +12,7 @@ docker compose -f dialmx/compose.yml up -d --build
 ```
 
 Choose the mode and required settings in the guide before starting it. The
-receiver does not store mailbox data; messages are retained by the MailMoose
+receiver does not store mailbox data; messages are retained by the Mammoth Mail
 core.
 
 Shared-mode authentication uses separate deadlines: up to 30 seconds for the

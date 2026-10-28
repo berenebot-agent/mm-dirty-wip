@@ -1,6 +1,6 @@
 # Email providers
 
-MailMoose supports a wide range of options for receiving and sending email, or connecting an existing mailbox. Select a provider to jump to its setup.
+Mammoth Mail supports a wide range of options for receiving and sending email, or connecting an existing mailbox. Select a provider to jump to its setup.
 
 | | Providers |
 | --- | --- |
@@ -13,7 +13,7 @@ configure a domain over the API — are `mx` (Direct MX), `dialmx` (Antler MX),
 `remotemx` (Remote MX), `mailgun`, `cloudflare`, `resend`, `postmark`,
 `sendgrid`, `brevo` and `smtp`. Each provider's section below names its own.
 The label the interface shows and the API name are different strings — the
-picker says "Remote MailMoose MX" where the API says `remotemx` — so copy the
+picker says "Remote Mammoth Mail MX" where the API says `remotemx` — so copy the
 name from the provider's section rather than from the dropdown.
 
 Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
@@ -26,17 +26,17 @@ For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](RE
 
 **API provider name:** `mx`
 
-**Direct MX (SMTP delivery)** receives email directly from other mail servers using the SMTP receiver bundled with MailMoose.
+**Direct MX (SMTP delivery)** receives email directly from other mail servers using the SMTP receiver bundled with Mammoth Mail.
 
 **You must expose TCP port 25 to the public internet** for incoming SMTP delivery. Publish the Docker port mapping `25:2525` and allow incoming TCP 25 through your host firewall and router (including port forwarding if hosted on your LAN). Check that your hosting provider or ISP permits inbound SMTP on port 25.
 
 You also need the correct **public DNS records**:
 
 1. Create an **A** record (and **AAAA**, if using IPv6) for your mail server hostname pointing to its public address.
-2. Set your domain's **MX** record to that hostname, not an IP address. Use the hostname shown in the MailMoose receiving setup.
+2. Set your domain's **MX** record to that hostname, not an IP address. Use the hostname shown in the Mammoth Mail receiving setup.
 3. Configure **SPF** and other sender-authentication records separately if you also send mail from this domain.
 
-In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. The system administrator can adjust the receiver's shared SMTP settings in that Direct MX panel; all Direct MX domains use the same receiver. Opening the port or publishing DNS records alone does not enable the receiver for a domain. For a receiver you run separately, use [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
+In Mammoth Mail, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. The system administrator can adjust the receiver's shared SMTP settings in that Direct MX panel; all Direct MX domains use the same receiver. Opening the port or publishing DNS records alone does not enable the receiver for a domain. For a receiver you run separately, use [Remote MX](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
 
 The provider list offers Direct MX before the receiver exists, and saving a domain does not configure the receiver. **A Direct MX domain receives no mail at all until the installation's receiver is configured**, which a system administrator does in that same Direct MX panel. A domain that reads as set up for Direct MX is therefore not necessarily receiving yet.
 
@@ -47,7 +47,7 @@ Direct MX is not needed for Antler MX or provider-webhook receiving. For a separ
 **API provider name:** `remotemx`
 
 **Remote MX** receives email through a separate SMTP receiver that you run
-yourself. MailMoose opens an outbound connection to that receiver and never
+yourself. Mammoth Mail opens an outbound connection to that receiver and never
 needs an inbound port of its own. Choose it when the receiver is dedicated to
 this account; for one public receiver shared by many domains, choose **Dial
 MX** instead.
@@ -61,27 +61,27 @@ signatures and the `curl --http2` check are in the
 
 **API provider name:** `dialmx`
 
-**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
+**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in Mammoth Mail. You do not need to run another container, open inbound SMTP ports, or expose Mammoth Mail's web interface to the internet. Antler MX is a community service, provided on a best-efforts basis — there is no uptime guarantee.
 
 ### How it works
 
-![Antler MX mail flow: public senders deliver through the hosted relay over an outbound connection initiated by your self-hosted MailMoose instance. No inbound port forwarding is needed.](../assets/antler-mx-diagram.svg)
+![Antler MX mail flow: public senders deliver through the hosted relay over an outbound connection initiated by your self-hosted Mammoth Mail instance. No inbound port forwarding is needed.](../assets/antler-mx-diagram.svg)
 
-MailMoose makes an **outbound connection** to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to MailMoose over that connection. MailMoose handles the inbox and stores the messages locally. Antler is a receiving relay, not a hosted mailbox or an outbound sending service.
+Mammoth Mail makes an **outbound connection** to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to Mammoth Mail over that connection. Mammoth Mail handles the inbox and stores the messages locally. Antler is a receiving relay, not a hosted mailbox or an outbound sending service.
 
 ### Set it up
 
-1. Add your domain in MailMoose and create an inbox.
+1. Add your domain in Mammoth Mail and create an inbox.
 2. Open the domain's **Receiving** settings and select **Antler MX**.
 3. Enter a contact email and save. This is for service updates only, not a mailbox login.
-4. Copy the **MX** and `_mailmoose-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by MailMoose.
+4. Copy the **MX** and `_mammothmail-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by Mammoth Mail.
 5. Continue to **Receivers** and wait for at least one receiver to show **Ready to receive**. Each receiver checks the TXT key and its own MX routing; DNS-step record indicators follow those proofs, not a separate local DNS cache.
 6. Continue to the spam/authentication policy, choose the enforcement level, and select **Finish** to save and close. Reopen **Receiving** any time to view status or edit settings.
 7. Send a test email to an address on your domain.
 
-The TXT record proves that you authorized this MailMoose installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel shows repair instructions when a receiver reports a key or routing problem. A local cached negative DNS answer does not override a ready receiver; additional MX servers still produce a separate routing warning.
+The TXT record proves that you authorized this Mammoth Mail installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel shows repair instructions when a receiver reports a key or routing problem. A local cached negative DNS answer does not override a ready receiver; additional MX servers still produce a separate routing warning.
 
-**No inbound ports are needed on your MailMoose host for Antler MX.** The host does need outbound HTTPS access to Antler. If your instance is offline, Antler cannot deliver into it and the sending mail server must retry; Antler is not a mailbox or a durable mail queue.
+**No inbound ports are needed on your Mammoth Mail host for Antler MX.** The host does need outbound HTTPS access to Antler. If your instance is offline, Antler cannot deliver into it and the sending mail server must retry; Antler is not a mailbox or a durable mail queue.
 
 To send outbound mail, configure a separate provider under the domain's **Sending** settings.
 
@@ -96,7 +96,7 @@ To send outbound mail, configure a separate provider under the domain's **Sendin
 3. In Mailgun, open **Send → Receiving**, select the domain's region, and click
    **Create route**. Choose **Match Recipient**, matching every address at this
    domain only. Enable **Forward** and paste the URL shown at that step in
-   MailMoose (with its adjacent copy button), for example:
+   Mammoth Mail (with its adjacent copy button), for example:
 
 ```text
 https://your-host.example/internal/ingest/mailgun/raw-mime
@@ -104,11 +104,11 @@ https://your-host.example/internal/ingest/mailgun/raw-mime
 
 4. Click **Create Route**. This is an inbound Route, not an event webhook.
 5. Open **API Security** from Mailgun's profile menu and copy the **HTTP webhook
-   signing key**, not an API key or domain sending key. Paste it into MailMoose
+   signing key**, not an API key or domain sending key. Paste it into Mammoth Mail
    and save. The secret is stored encrypted on the domain, not read from the
    environment. Send a test email to confirm delivery.
 
-MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
+Mammoth Mail resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Inbound: Cloudflare Email Routing
 
@@ -116,22 +116,22 @@ MailMoose resolves the recipient to its logical inbox. A configured domain catch
 
 **Website:** [developers.cloudflare.com](https://developers.cloudflare.com/email-routing/)
 
-1. In MailMoose, open the domain's **Receiving** panel, choose **Cloudflare
-   Worker**, and save. MailMoose displays a ready-to-deploy Worker and its
+1. In Mammoth Mail, open the domain's **Receiving** panel, choose **Cloudflare
+   Worker**, and save. Mammoth Mail displays a ready-to-deploy Worker and its
    one-time secret. Copy the code before closing the setup page; regenerate the
    secret if needed.
 2. In Cloudflare, create a Worker from the Hello World template, replace its
-   code with the MailMoose-generated code, and deploy it.
+   code with the MammothMail-generated code, and deploy it.
 3. Enable Email Routing for the domain and apply the DNS records Cloudflare
    provides.
 4. In **Email Routing → Routing rules**, configure the catch-all rule to send
    mail to the Worker and enable it.
-5. Send a test message and verify it appears in the intended MailMoose inbox.
+5. Send a test message and verify it appears in the intended Mammoth Mail inbox.
 
 A single Worker can serve an apex domain and its onboarded subdomains. Add each
-subdomain to Cloudflare Email Routing and to MailMoose; when offered, choose to
+subdomain to Cloudflare Email Routing and to Mammoth Mail; when offered, choose to
 inherit the parent provider configuration. The subdomain still has its own
-MailMoose inboxes and routing. For a private MailMoose instance, the Worker must
+Mammoth Mail inboxes and routing. For a private Mammoth Mail instance, the Worker must
 be able to reach its public webhook URL; Cloudflare Workers cannot call private
 network addresses. See [Cloudflare's Email Routing guide](https://developers.cloudflare.com/email-routing/).
 
@@ -141,16 +141,16 @@ network addresses. See [Cloudflare's Email Routing guide](https://developers.clo
 
 **Website:** [resend.com](https://resend.com/)
 
-Resend sends a signed notification to MailMoose, which fetches the original
+Resend sends a signed notification to Mammoth Mail, which fetches the original
 message from Resend. Use an API key with **Full access**; a sending-only key
 cannot read received mail.
 
 1. Verify the domain in Resend and apply its inbound MX records.
-2. In MailMoose, open the domain's **Receiving** panel and choose **Resend**.
+2. In Mammoth Mail, open the domain's **Receiving** panel and choose **Resend**.
    Copy the webhook URL shown there.
 3. In Resend, create a webhook for that URL and subscribe to **`email.received`**.
    Copy the webhook signing secret.
-4. Return to MailMoose, enter the full-access API key and signing secret, then
+4. Return to Mammoth Mail, enter the full-access API key and signing secret, then
    save.
 5. Send a test message and confirm it appears in the intended inbox.
 
@@ -166,11 +166,11 @@ If several domains use the same Resend webhook, configure its signing secret and
    recommended) to `inbound.postmarkapp.com` with priority 10.
 2. Open the Server's **Inbound Message Stream → Settings** and enable **Include
    raw email content in JSON payload**.
-3. In MailMoose, open the domain's **Receiving** panel, choose **Postmark**, and
-   save. MailMoose generates a webhook username and password and displays the
+3. In Mammoth Mail, open the domain's **Receiving** panel, choose **Postmark**, and
+   save. Mammoth Mail generates a webhook username and password and displays the
    complete webhook URL once.
 4. Copy that URL into the Postmark Inbound Message Stream's webhook field and
-   save. Regenerate the credentials in MailMoose if the URL is lost or exposed,
+   save. Regenerate the credentials in Mammoth Mail if the URL is lost or exposed,
    then update Postmark with the replacement.
 5. Send a test message and confirm it appears in the intended inbox.
 
@@ -188,12 +188,12 @@ sending provider.
 1. In SendGrid, open **Settings → Inbound Parse** and click **Add Host & URL**.
 2. Point the receiving domain's **MX** record at `mx.sendgrid.net` with
    priority 10.
-3. In MailMoose, open the domain's **Receiving** panel, choose **SendGrid**, and
-   save. MailMoose displays the webhook URL to paste into SendGrid.
+3. In Mammoth Mail, open the domain's **Receiving** panel, choose **SendGrid**, and
+   save. Mammoth Mail displays the webhook URL to paste into SendGrid.
 4. Set the receiving domain in SendGrid and paste that webhook URL.
 5. Tick **POST the raw, full MIME message**, then create a webhook security
    policy with signature verification and attach it to the parse setting.
-6. Copy the public key the policy returns, paste it into the MailMoose panel and
+6. Copy the public key the policy returns, paste it into the Mammoth Mail panel and
    save.
 7. Send a test message and confirm it appears in the intended inbox.
 
@@ -249,13 +249,13 @@ No relay credentials are used. The operator must be able to send directly to rec
 
 For Direct MX, open the domain's **Sending → Direct MX** panel and enable DKIM
 signing. Publish the TXT record shown there at
-`mailmoose._domainkey.<domain>`. Receivers cannot validate the signature until
+`mammothmail._domainkey.<domain>`. Receivers cannot validate the signature until
 DNS contains that record. Turning signing off removes the key; messages already
 queued are not changed.
 
 ## Standalone mailbox providers
 
-These options connect an existing mailbox to a MailMoose standalone inbox. The
+These options connect an existing mailbox to a Mammoth Mail standalone inbox. The
 provider remains the source of truth for its mail. The setup steps below explain
 how each supported provider connects.
 
@@ -265,7 +265,7 @@ how each supported provider connects.
 
 Use **Add inbox → Standalone inbox → Google / Gmail**. Each connected inbox
 uses your own Google Cloud OAuth client. The Google mailbox remains the source
-of truth; MailMoose keeps a metadata index and fetches message bodies and
+of truth; Mammoth Mail keeps a metadata index and fetches message bodies and
 attachments when opened.
 
 > [!WARNING]
@@ -283,18 +283,18 @@ attachments when opened.
 4. Under **Data Access**, add the Gmail `gmail.modify` scope and the `openid`
    and `userinfo.profile` scopes, then save.
 5. Create a **Web application** OAuth client. Add the exact redirect URL shown
-   by the MailMoose setup wizard, for example:
+   by the Mammoth Mail setup wizard, for example:
 
    ```text
    https://mail.example.com/ui/oauth/google/callback
    ```
 
-6. Enter the client ID and secret in the MailMoose wizard, connect the account,
+6. Enter the client ID and secret in the Mammoth Mail wizard, connect the account,
    and approve access. If Google shows an unverified-app warning, choose
    **Advanced → Go to <app name>** while the app remains in Testing.
 
 The callback is based on `BASE_URL`; use a hostname and scheme accepted by Google.
-Your browser must be able to reach the MailMoose callback. A raw LAN IP or
+Your browser must be able to reach the Mammoth Mail callback. A raw LAN IP or
 `.local` hostname is not suitable for a registered production callback.
 
 ### Personal Gmail and troubleshooting
@@ -304,7 +304,7 @@ Google's verification process is complete. Google expires Testing authorizations
 after seven days, so reconnect from the inbox settings when prompted. Publishing
 an unverified app does not remove that limit and can block access instead.
 
-- For `redirect_uri_mismatch`, copy the exact URL shown in the MailMoose wizard
+- For `redirect_uri_mismatch`, copy the exact URL shown in the Mammoth Mail wizard
   into the OAuth client's authorised redirect URIs.
 - For an access/verification block, return the app to **Testing** and check that
   the mailbox address is listed as a test user.
@@ -317,7 +317,7 @@ an unverified app does not remove that limit and can block access instead.
 
 Gmail system labels supply the Trash, Spam, Drafts, Inbox and Sent folders —
 the five system destinations a Gmail inbox exposes, and no virtual folder. A
-message can sit under several Gmail labels at once, so MailMoose reports one
+message can sit under several Gmail labels at once, so Mammoth Mail reports one
 canonical folder per message — the first of Trash, Spam, Drafts, Inbox, Sent
 that it carries — and lists the rest as additive labels. A message that
 carries none of them is archived and reports no canonical folder. Archive
@@ -337,24 +337,24 @@ and [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes
 **Website:** [www.microsoft.com](https://www.microsoft.com/microsoft-365/outlook/email-and-calendar-software-microsoft-outlook)
 
 Connect a personal or shared Microsoft mailbox with **Add inbox → Standalone
-inbox → Microsoft / Outlook**. MailMoose connects through Microsoft Graph; the
+inbox → Microsoft / Outlook**. Mammoth Mail connects through Microsoft Graph; the
 mailbox remains the source of truth.
 
 ### Set up Microsoft sign-in
 
 Self-hosters can register a Microsoft Entra public-client application and set
-`MICROSOFT_CLIENT_ID` and `MICROSOFT_TENANT_ID` on the MailMoose deployment. Use
+`MICROSOFT_CLIENT_ID` and `MICROSOFT_TENANT_ID` on the Mammoth Mail deployment. Use
 `common` for work/school and personal accounts, or a tenant ID/domain to restrict
 the app to one organisation. Add the `http://localhost` mobile/desktop redirect
 URI; no client secret is used. Required delegated permissions are
 `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `MailboxSettings.ReadWrite`, and
 `offline_access`.
 
-`MailboxSettings.ReadWrite` is what lets MailMoose manage Outlook **master
+`MailboxSettings.ReadWrite` is what lets Mammoth Mail manage Outlook **master
 categories** — the native equivalent of a label — through
 `/users/{mailbox}/outlook/masterCategories`: `POST` creates one, `PATCH` renames
 it, and `DELETE` removes it (which also clears it from every message carrying
-it). Without it MailMoose cannot change a category in the mailbox, and the
+it). Without it Mammoth Mail cannot change a category in the mailbox, and the
 categories it already knows about stay readable and usable on messages.
 
 > **Existing connections must be reconnected once.** A mailbox connected
@@ -377,7 +377,7 @@ sending requires Send As or Send on Behalf permission.
 3. Sign in and approve access. Microsoft redirects to `http://localhost`; this
    is expected even though no local web server is running.
 4. Copy the complete final URL from the sign-in window and paste it into the
-   MailMoose wizard. The URL is sensitive; do not share it.
+   Mammoth Mail wizard. The URL is sensitive; do not share it.
 5. For a shared connection, choose the mailbox from the picker or enter its
    address if it is not listed.
 
@@ -386,7 +386,7 @@ that inbox's settings if Microsoft access expires or is revoked.
 
 ### Mailbox behaviour and new-mail delivery
 
-MailMoose presents Outlook folders and categories in the standalone inbox. Normal
+Mammoth Mail presents Outlook folders and categories in the standalone inbox. Normal
 Inbox and Archive folders are supported; Microsoft's separate Online Archive
 mailbox is not. Outlook keeps its Sent Items copy. A message's location is its
 Outlook folder; its categories are additive labels that can be created, renamed
@@ -395,10 +395,10 @@ need the `MailboxSettings.ReadWrite` permission described above. Some send or re
 can be uncertain; do not repeat a send unless the inbox confirms it failed.
 
 Personal Outlook.com and Microsoft 365 inboxes can receive near-real-time change
-notifications after initial setup. The MailMoose callback path
+notifications after initial setup. The Mammoth Mail callback path
 `/internal/ingest/microsoft/notifications` must be reachable over HTTPS at the
 configured receiving URL (`DEDICATED_RECEIVER_URL`, or `BASE_URL` when unset).
-If notifications are unavailable, MailMoose polls instead. Shared mailboxes use
+If notifications are unavailable, Mammoth Mail polls instead. Shared mailboxes use
 polling; their sync schedule in inbox settings determines how quickly new mail is
 noticed.
 
@@ -413,10 +413,10 @@ REST API key, and select the Gmail mailbox or mailboxes to import. Choose the
 history window that suits each inbox; importing a large history uses One's
 account-wide request allowance. The key is not shown again after setup.
 
-MailMoose accesses Gmail through One's cloud service. Existing and new mail are
+Mammoth Mail accesses Gmail through One's cloud service. Existing and new mail are
 synced on a schedule (One does not provide push notifications); the default poll
 interval is five minutes and can be changed in the inbox's own sync schedule.
-The mailbox remains in Gmail, while MailMoose keeps a local metadata index and
+The mailbox remains in Gmail, while Mammoth Mail keeps a local metadata index and
 fetches message content when needed.
 
 The setup screen only creates inboxes. Each imported inbox owns its own encrypted
@@ -438,12 +438,12 @@ you understand the network-security implications. The sync root is optional and
 defaults to `INBOX`.
 
 Outbound SMTP is optional. Add its hostname, port, username, password, and
-security mode if MailMoose should send mail through that mailbox. Without an
+security mode if Mammoth Mail should send mail through that mailbox. Without an
 outbound server, the inbox can still receive and read mail but cannot send from
 the connected account. Use the provider's documented server names and ports;
-MailMoose does not guess them. Connection credentials are encrypted with
+Mammoth Mail does not guess them. Connection credentials are encrypted with
 `APP_ENCRYPTION_KEY`.
 
 An IMAP mailbox has folders, not labels: a message's location is its IMAP
-folder, and MailMoose does not expose IMAP mail with canonical labels. Tag a
+folder, and Mammoth Mail does not expose IMAP mail with canonical labels. Tag a
 message by moving it into a folder.

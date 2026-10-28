@@ -1,5 +1,5 @@
 // Package admincli implements the operator-facing `admin` subcommands of the
-// MailMoose binary. They open the store directly, so recovery does not depend
+// Mammoth Mail binary. They open the store directly, so recovery does not depend
 // on the HTTP server or a working application configuration (in particular,
 // APP_ENCRYPTION_KEY is not required).
 package admincli
@@ -23,7 +23,7 @@ const dataDirEnv = "DATA_DIR"
 
 const defaultDataDir = "/data"
 
-// Run executes one `mailmoose admin` command and returns a process exit code.
+// Run executes one `mammothmail admin` command and returns a process exit code.
 // stdin/stdout/stderr are injected so tests can drive it without a terminal.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -46,7 +46,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `usage: mailmoose admin <command> [options]
+	fmt.Fprintln(w, `usage: mammothmail admin <command> [options]
 
 Commands:
   reset-password <email> [--password-file PATH]
@@ -95,7 +95,7 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		}
 	}
 	if len(positional) != 1 {
-		fmt.Fprintln(stderr, "usage: mailmoose admin reset-password <email> [--password-file PATH]")
+		fmt.Fprintln(stderr, "usage: mammothmail admin reset-password <email> [--password-file PATH]")
 		return 2
 	}
 	if passwordFileSet && strings.TrimSpace(passwordFile) == "" {
@@ -136,7 +136,7 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 			// The configured deployment secret would overwrite this on the next
 			// restart, so send the operator to the source of truth.
 			fmt.Fprintln(stderr, "reset-password: the system administrator's login is managed by the deployment configuration")
-			fmt.Fprintln(stderr, "update ADMIN_PASSWORD or ADMIN_PASSWORD_FILE and restart MailMoose")
+			fmt.Fprintln(stderr, "update ADMIN_PASSWORD or ADMIN_PASSWORD_FILE and restart Mammoth Mail")
 			return 1
 		}
 		fmt.Fprintf(stderr, "reset-password: %v\n", err)
@@ -154,7 +154,7 @@ func runRevokeAPIKeys(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: mailmoose admin revoke-api-keys <email>")
+		fmt.Fprintln(stderr, "usage: mammothmail admin revoke-api-keys <email>")
 		return 2
 	}
 	email := strings.TrimSpace(fs.Arg(0))

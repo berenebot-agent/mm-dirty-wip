@@ -1,6 +1,6 @@
 # Mailbox behavior
 
-This guide describes how MailMoose presents a consistent API for domain inboxes and connected Gmail, Microsoft, One and IMAP mailboxes. It covers which operations are supported, which data is stored locally and which is retrieved from the provider.
+This guide describes how Mammoth Mail presents a consistent API for domain inboxes and connected Gmail, Microsoft, One and IMAP mailboxes. It covers which operations are supported, which data is stored locally and which is retrieved from the provider.
 
 It is a **maintainer reference**, not a setup guide. For configuration, see [Email providers](EMAIL_PROVIDERS.md). The public database baseline (`internal/dbschema/baseline.sql`) defines the schema; the current code defines the implementation.
 
@@ -353,18 +353,18 @@ transient scope/`LIST` shortfall or a generation flip.
 
 ### Assistant handling modes, drafts, notify (`internal/app/draft_workflow.go`,
 `draft_handoff.go`, `remote_worker.go`, `control.go`)
-- **`MailMooseApproval`** (a domain inbox's preset and default): the in-product
+- **`LocalApproval`** (a domain inbox's preset and default): the in-product
   approval workflow; the approval email carries the one-time token and the frozen
   `From`.
 - **`RemoteDraft`** (a standalone inbox's default): a one-way handoff that
-  appends the frozen draft to the connected remote Drafts folder. MailMoose
+  appends the frozen draft to the connected remote Drafts folder. Mammoth Mail
   never sends it and sends no notification email. The frozen draft carries the
   correlation header used to verify publication. Once publication is confirmed
   the Drafts folder is pulled immediately (see "Immediate folder pull after a
   confirmed write").
 - The mode is snapshotted onto each request at creation, so an inbox setting
   change never affects an in-flight request. A standalone inbox can be switched
-  to `MailMooseApproval` (its approver identity is matched against the message
+  to `LocalApproval` (its approver identity is matched against the message
   `From`; see the accepted risk below). `RemoteDraft` is a standalone-only mode:
   a domain inbox cannot be set to it (the write is rejected, and a legacy domain
   row stored as `remote_draft` normalizes back to the kind default on read), and
@@ -407,10 +407,10 @@ transient scope/`LIST` shortfall or a generation flip.
 - **Effective-mode controls.** `GET /v1/inboxes/{id}/authoring` reports the
   effective `mode`, the kind `default_mode`, whether the inbox `standalone`, and
   `approver_enabled` — which is true exactly when the effective mode is
-  `mailmoose_approval` (a `remote_draft` inbox has no approver, regardless of
+  `local_approval` (a `remote_draft` inbox has no approver, regardless of
   kind). Setting a standalone inbox to `remote_draft` (via `PUT /authoring`, the
   inbox edit form, or `PATCH /v1/inboxes/{id}`) clears any stored approver. A
-  domain inbox is preset to `mailmoose_approval`: `PUT /authoring` rejects
+  domain inbox is preset to `local_approval`: `PUT /authoring` rejects
   `remote_draft` for a domain inbox with `400`, and the UI hides the mode
   selector for a domain inbox rather than offering it. The legacy notify fields
   are retained but have no effect.
@@ -470,7 +470,7 @@ transient scope/`LIST` shortfall or a generation flip.
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
 - **One location, one additive label set (D151).**
   `internal/httpapp/message_response.go` projects a message's location as
-  `folder_id` (one stable MailMoose folder id, `null` when there is none) and
+  `folder_id` (one stable Mammoth Mail folder id, `null` when there is none) and
   its labels as the additive `label_ids` (`tag:Name` only, empty for IMAP).
   A folder is never a label: the `folder:<id>` catalogue identity and the
   exclusive/system label classification are gone. Gmail's overlapping native
@@ -491,7 +491,7 @@ transient scope/`LIST` shortfall or a generation flip.
   keyset or provider continuation, carried inside an opaque `commonCursor`.
   Message/search pages select the newest available source head without
   reordering an individual provider's results: provider tie-breaking need not
-  match MailMoose IDs, and sorting a provider window then resuming its native
+  match Mammoth Mail IDs, and sorting a provider window then resuming its native
   cursor could skip unreturned messages. Local message/search ordering uses
   received time (creation time if unavailable), then ID. Thread merging also
   carries a global stable key. A source failure is recorded per-inbox and never

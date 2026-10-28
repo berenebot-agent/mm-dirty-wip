@@ -133,7 +133,7 @@ func TestSyncSystemAdminPreservesPasskeys(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestSyncSystemAdminPreservesPasskeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Rotate the config password.
-	if _, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "another correct horse battery staple", 50<<20); err != nil || !changed {
+	if _, changed, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", "another correct horse battery staple", 50<<20); err != nil || !changed {
 		t.Fatalf("rotate changed=%v err=%v", changed, err)
 	}
 	creds, err := s.WebAuthnCredentialsForUser(ctx, u.ID)
@@ -244,7 +244,7 @@ func TestSetPasswordAuthRefusesForSystemAdmin(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestSetPasswordAuthRefusesForSystemAdmin(t *testing.T) {
 		t.Fatalf("disable sysadmin password err = %v, want ErrLastAuthMethod", err)
 	}
 	// Even a config rotation must leave the password usable.
-	if _, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "another correct horse battery staple", 50<<20); err != nil || !changed {
+	if _, changed, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", "another correct horse battery staple", 50<<20); err != nil || !changed {
 		t.Fatalf("rotate changed=%v err=%v", changed, err)
 	}
 	if _, err := s.AuthenticateUser(ctx, "admin@example.com", "another correct horse battery staple"); err != nil {

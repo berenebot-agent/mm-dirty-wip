@@ -48,7 +48,7 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 			return model.NewMailboxError(model.ErrKindInvalid, "invalid label name", false, nil)
 		}
 	}
-	// An Outlook category is a provider object, not a MailMoose folder or a local
+	// An Outlook category is a provider object, not a Mammoth Mail folder or a local
 	// tag: rename and delete have to happen on Graph first, and the local
 	// catalogue follows.
 	if label.FolderID == "" && s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, mb.inbox.ID) {

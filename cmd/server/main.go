@@ -375,7 +375,7 @@ func ensureSystemAdmin(svc *app.Service, log *slog.Logger) {
 		os.Exit(1)
 	}
 	if !has {
-		log.Info("MailMoose has not been configured; complete the first-run setup page, or set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
+		log.Info("Mammoth Mail has not been configured; complete the first-run setup page, or set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
 	}
 }
 
@@ -398,7 +398,7 @@ func edgeExit(edge *launcher.Edge) <-chan struct{} {
 func startStandbyEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
 	if os.Getuid() != 0 {
 		return nil, fmt.Errorf("the container must start as root so the embedded edge can run under a separate uid; " +
-			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or use remote mode with the mailmoose-remote-mx container (see README.md)")
+			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or use remote mode with the mammothmail-remote-mx container (see README.md)")
 	}
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)

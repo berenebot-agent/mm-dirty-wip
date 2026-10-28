@@ -1,17 +1,17 @@
 /**
- * MailMoose OpenClaw channel entry.
+ * Mammoth Mail OpenClaw channel entry.
  *
  * Installed externally (npm/ClawHub); the OpenClaw host loads the built entry.
- * Setup is claimed through a MailMoose one-time code; see setup-entry.ts.
+ * Setup is claimed through a Mammoth Mail one-time code; see setup-entry.ts.
  */
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { MAILMOOSE_CHANNEL_ID, mailMoosePlugin } from "./src/channel.js";
-import { setMailMooseRuntime } from "./src/runtime.js";
+import { MAMMOTHMAIL_CHANNEL_ID, mammothMailPlugin } from "./src/channel.js";
+import { setMammothMailRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: MAILMOOSE_CHANNEL_ID,
-  name: "MailMoose",
-  description: "Email inbox connector for OpenClaw through a MailMoose relay.",
-  plugin: mailMoosePlugin,
-  setRuntime: (runtime) => setMailMooseRuntime(runtime),
+  id: MAMMOTHMAIL_CHANNEL_ID,
+  name: "Mammoth Mail",
+  description: "Email inbox connector for OpenClaw through a Mammoth Mail relay.",
+  plugin: mammothMailPlugin,
+  setRuntime: (runtime) => setMammothMailRuntime(runtime),
 });

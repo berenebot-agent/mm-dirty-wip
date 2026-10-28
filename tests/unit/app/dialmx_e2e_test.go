@@ -112,7 +112,7 @@ func dialMXReceiver(t *testing.T, records *dialMXRecords) (*receiver.Receiver, *
 	lookup := func(_ context.Context, q string) ([]string, error) {
 		// Proofs query absolute names (trailing dot); the map is keyed on the
 		// bare domain, so normalise the root label away before looking up.
-		name := strings.TrimSuffix(strings.TrimPrefix(q, "_mailmoose-mx."), ".")
+		name := strings.TrimSuffix(strings.TrimPrefix(q, "_mammothmail-mx."), ".")
 		return records.lookup(name), nil
 	}
 	r := receiver.New(receiver.Config{

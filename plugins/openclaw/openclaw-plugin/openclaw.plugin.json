@@ -1,15 +1,15 @@
 {
-  "id": "mailmoose",
-  "name": "MailMoose",
-  "description": "Email inbox connector for OpenClaw through a MailMoose relay.",
-  "channels": ["mailmoose"],
+  "id": "mammothmail",
+  "name": "Mammoth Mail",
+  "description": "Email inbox connector for OpenClaw through a Mammoth Mail relay.",
+  "channels": ["mammothmail"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
   },
   "channelConfigs": {
-    "mailmoose": {
+    "mammothmail": {
       "schema": {
         "type": "object",
         "additionalProperties": false,
@@ -24,7 +24,7 @@
           },
           "baseUrl": {
             "type": "string",
-            "description": "MailMoose base URL"
+            "description": "Mammoth Mail base URL"
           },
           "gatewayId": {
             "type": "string",
@@ -39,7 +39,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Optional OpenClaw-side sender allowlist. MailMoose inbox allowlists are the primary gate."
+            "description": "Optional OpenClaw-side sender allowlist. Mammoth Mail inbox allowlists are the primary gate."
           },
           "dmPolicy": {
             "type": "string",
@@ -54,7 +54,7 @@
       },
       "uiHints": {
         "baseUrl": {
-          "label": "MailMoose URL"
+          "label": "Mammoth Mail URL"
         },
         "gatewayId": {
           "label": "Gateway ID"

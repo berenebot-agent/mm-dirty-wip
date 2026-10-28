@@ -69,7 +69,7 @@ const handoffFolderRole = model.FolderRoleDrafts
 // requestRemoteDraft creates a one-way handoff of a frozen draft to the inbox's
 // connected remote Drafts folder. It requires Assistant or Owner on the inbox.
 // The frozen raw MIME (with the handoff correlation header) is written once and
-// is immutable; the worker appends it. The draft is never sent by MailMoose, and
+// is immutable; the worker appends it. The draft is never sent by Mammoth Mail, and
 // no notification email is sent.
 func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {
 	to, err := cleanAddresses(d.To)
@@ -403,7 +403,7 @@ func (s *Service) handoffPath() string {
 // buildHandoffMIME renders the frozen raw MIME for a handoff, with the handoff
 // correlation header as the first header line. Attachments are embedded so the
 // frozen copy is self-contained. It uses the draft builder so Bcc recipients and
-// reply headers travel with the stored draft (a draft has no MailMoose envelope).
+// reply headers travel with the stored draft (a draft has no Mammoth Mail envelope).
 func (s *Service) buildHandoffMIME(ctx context.Context, inbox model.Inbox, d model.Draft, atts []model.DraftAttachment, messageID, handoffID string) ([]byte, error) {
 	parts := make([]mailparse.Attachment, 0, len(atts))
 	for i, a := range atts {

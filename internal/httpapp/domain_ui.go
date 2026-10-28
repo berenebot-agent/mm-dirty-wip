@@ -1251,7 +1251,7 @@ func domainReceivingSteps(provider string) []string {
 			"Paste the webhook URL shown here.",
 			"Under events, tick email.received only.",
 			"Click Add, reopen the webhook, and copy its signing secret (whsec_...).",
-			"In Resend, open API Keys and create a key with Full access so MailMoose can retrieve received email content. Paste that key and the webhook signing secret below, then save in MailMoose.",
+			"In Resend, open API Keys and create a key with Full access so Mammoth Mail can retrieve received email content. Paste that key and the webhook signing secret below, then save in Mammoth Mail.",
 		}
 	case "mailgun":
 		return []string{
@@ -1260,7 +1260,7 @@ func domainReceivingSteps(provider string) []string {
 			"Choose Match Recipient and match all addresses at this domain (not other domains).",
 			"Enable the Forward action and paste this webhook URL exactly as shown. Its raw-mime suffix tells Mailgun to deliver the full original email.",
 			"Click Create Route to save it. In Mailgun, open API Security from the profile menu and copy the HTTP webhook signing key (not an API key or domain sending key).",
-			"Paste the HTTP webhook signing key below, then save in MailMoose.",
+			"Paste the HTTP webhook signing key below, then save in Mammoth Mail.",
 		}
 	case "sendgrid":
 		return []string{
@@ -1273,7 +1273,7 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "postmark":
 		return []string{
-			"Save in MailMoose first to generate a webhook username and password. The next dialog shows the authenticated webhook URL once, with the remaining Postmark setup steps.",
+			"Save in Mammoth Mail first to generate a webhook username and password. The next dialog shows the authenticated webhook URL once, with the remaining Postmark setup steps.",
 			"Do not use the bare ingest URL: Postmark requires the generated username and password in the webhook URL.",
 		}
 	case "dialmx":
@@ -1281,7 +1281,7 @@ func domainReceivingSteps(provider string) []string {
 			"Choose Antler MX for the zero-config free relay, or Custom receiver URLs to point at your own receiver.",
 			"For Antler MX, enter a contact email and save; the MX and TXT records to publish are then shown in this dialog.",
 			"For a custom service, add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
-			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain> and the shown MX records.",
+			"Save to generate the domain key, then publish the shown MM1 TXT record at _mammothmail-mx.<this-domain> and the shown MX records.",
 			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
 			"Choose moderate or hard receiver authentication enforcement, then save.",
 		}

@@ -992,10 +992,10 @@ func openFile(path string) (io.ReadCloser, error) {
 // free. Mode is snapshotted onto each request at creation, so changing it never
 // affects an in-flight request. A standalone inbox defaults to remote_draft
 // (hand off to its connected Drafts folder); a domain inbox is preset to
-// mailmoose_approval — remote_draft is a standalone-only mode and is rejected
-// for a domain inbox. The approver is meaningful only for mailmoose_approval, so
+// local_approval — remote_draft is a standalone-only mode and is rejected
+// for a domain inbox. The approver is meaningful only for local_approval, so
 // approver_enabled tracks the EFFECTIVE mode (a standalone inbox switched to
-// mailmoose_approval enables it; a domain inbox switched to remote_draft disables
+// local_approval enables it; a domain inbox switched to remote_draft disables
 // it). The notify override is optional and defaults to the connected address.
 type authoringResponse struct {
 	Mode             string `json:"mode"`
@@ -1033,8 +1033,8 @@ func (s *Server) apiInboxAuthoringGet(w http.ResponseWriter, r *http.Request) {
 		NotifyAddress:    settings.NotifyAddress,
 		NotifyOverridden: settings.NotifyOverridden,
 		// The approver is enabled exactly when the effective mode is the
-		// MailMoose approval workflow, regardless of inbox kind.
-		ApproverEnabled: settings.Mode == model.AuthoringMailMooseApproval,
+		// Mammoth Mail approval workflow, regardless of inbox kind.
+		ApproverEnabled: settings.Mode == model.AuthoringLocalApproval,
 		ApproverEmail:   box.ApproverEmail,
 		Standalone:      box.Kind == model.InboxKindStandalone,
 	})
@@ -1061,7 +1061,7 @@ func (s *Server) apiInboxAuthoringSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Mode != nil {
 		if *in.Mode != "" && !model.ValidAuthoringMode(*in.Mode) {
-			writeError(w, 400, "unknown authoring mode; expected mailmoose_approval or remote_draft")
+			writeError(w, 400, "unknown authoring mode; expected local_approval or remote_draft")
 			return
 		}
 		if err := s.Service.Store.SetInboxAuthoringMode(r.Context(), p, id, *in.Mode); err != nil {

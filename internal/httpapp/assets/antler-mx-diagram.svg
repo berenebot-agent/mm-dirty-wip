@@ -27,7 +27,7 @@
 <text x="565" y="420" font-size="17" fill="#3C3489" text-anchor="middle">Stores nothing</text>
 
 <rect x="860" y="225" width="230" height="150" rx="16" fill="#E1F5EE" stroke="#0F6E56" stroke-width="2.5"/>
-<text x="975" y="292" font-size="26" font-weight="bold" fill="#085041" text-anchor="middle">MailMoose</text>
+<text x="975" y="292" font-size="26" font-weight="bold" fill="#085041" text-anchor="middle">Mammoth Mail</text>
 <text x="975" y="324" font-size="18" fill="#0F6E56" text-anchor="middle">Self-hosted instance</text>
 
 <rect x="1160" y="245" width="170" height="110" rx="16" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="2"/>
@@ -49,6 +49,6 @@
 <path d="M770,426 H1050 L1024,452 L1050,478 H770 Z" fill="#1D9E75"/>
 <text x="792" y="460" font-size="22" font-weight="bold" fill="#FFFFFF">No port forwarding</text>
 <text x="792" y="514" font-size="17" fill="#0F6E56">Firewall stays closed.</text>
-<text x="792" y="538" font-size="17" fill="#0F6E56">MailMoose only connects out.</text>
+<text x="792" y="538" font-size="17" fill="#0F6E56">Mammoth Mail only connects out.</text>
 </g>
 </svg>

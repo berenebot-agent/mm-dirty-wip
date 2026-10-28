@@ -1,16 +1,16 @@
 /**
- * MailMoose setup adapter.
+ * Mammoth Mail setup adapter.
  *
  * Two onboarding paths:
- *   1. One-time setup code (recommended): MailMoose shows
- *      `openclaw channels add --channel mailmoose --code <setup-url>`. The URL
- *      origin is the MailMoose base URL and the fragment carries the code; the
+ *   1. One-time setup code (recommended): Mammoth Mail shows
+ *      `openclaw channels add --channel mammothmail --code <setup-url>`. The URL
+ *      origin is the Mammoth Mail base URL and the fragment carries the code; the
  *      adapter redeems it at POST /relay/enroll and stores the returned secret.
  *   2. Manual config: baseUrl + gatewayId + secret are supplied directly.
  *
  * The code is an authority, not an address: it does not carry the URL, so the
  * setup URL (or an explicit --base-url) is what tells the plugin where
- * MailMoose lives.
+ * Mammoth Mail lives.
  */
 import { createRequire } from "node:module";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
@@ -21,7 +21,7 @@ import type { CoreConfig } from "./types.js";
 
 const require = createRequire(import.meta.url);
 
-export type MailMooseSetupInput = {
+export type MammothMailSetupInput = {
   name?: string;
   code?: string;
   baseUrl?: string;
@@ -44,27 +44,27 @@ export function parseSetupCode(params: { code: string; baseUrl?: string }): {
 } {
   const raw = params.code.trim();
   if (!raw) {
-    throw new Error("MailMoose setup code is required");
+    throw new Error("Mammoth Mail setup code is required");
   }
   if (/^[a-z][a-z\d+.-]*:\/\//iu.test(raw)) {
     const url = new URL(raw);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("MailMoose setup URL must use http(s)");
+      throw new Error("Mammoth Mail setup URL must use http(s)");
     }
     const code = url.hash.replace(/^#/, "").trim();
     if (!code) {
-      throw new Error("MailMoose setup URL is missing its #code fragment");
+      throw new Error("Mammoth Mail setup URL is missing its #code fragment");
     }
     url.hash = "";
     const baseUrl = normalizeBaseUrl(url.toString());
     if (!baseUrl) {
-      throw new Error("MailMoose setup URL is invalid");
+      throw new Error("Mammoth Mail setup URL is invalid");
     }
     return { baseUrl, code };
   }
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   if (!baseUrl) {
-    throw new Error("A bare MailMoose setup code requires --base-url");
+    throw new Error("A bare Mammoth Mail setup code requires --base-url");
   }
   return { baseUrl, code: raw };
 }
@@ -76,7 +76,7 @@ export function generateGatewayId(): string {
 }
 
 /** Redeems a one-time code for relay credentials. */
-export async function claimMailMooseSetupCode(params: {
+export async function claimMammothMailSetupCode(params: {
   baseUrl: string;
   code: string;
   gatewayId?: string;
@@ -98,8 +98,8 @@ export async function claimMailMooseSetupCode(params: {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "MailMoose setup code is invalid, expired or already used"
-          : `MailMoose enrollment failed with HTTP ${response.status}`,
+          ? "Mammoth Mail setup code is invalid, expired or already used"
+          : `Mammoth Mail enrollment failed with HTTP ${response.status}`,
       );
     }
     const body = (await response.json()) as {
@@ -109,7 +109,7 @@ export async function claimMailMooseSetupCode(params: {
       kind?: string;
     };
     if (!body.secret) {
-      throw new Error("MailMoose enrollment response was missing a secret");
+      throw new Error("Mammoth Mail enrollment response was missing a secret");
     }
     return {
       secret: body.secret,
@@ -122,7 +122,7 @@ export async function claimMailMooseSetupCode(params: {
   }
 }
 
-export const mailMooseSetupAdapter = {
+export const mammothMailSetupAdapter = {
   resolveAccountId: ({ accountId }: { accountId?: string }) =>
     normalizeAccountId(accountId || DEFAULT_ACCOUNT_ID),
   prepareAccountConfigInput: async ({
@@ -131,16 +131,16 @@ export const mailMooseSetupAdapter = {
   }: {
     cfg: CoreConfig;
     accountId: string;
-    input: MailMooseSetupInput;
-  }): Promise<MailMooseSetupInput> => {
+    input: MammothMailSetupInput;
+  }): Promise<MammothMailSetupInput> => {
     if (!input.code?.trim()) {
       return input;
     }
     if (input.secret?.trim() || input.gatewayId?.trim()) {
-      throw new Error("MailMoose --code cannot be combined with --secret or --gateway-id");
+      throw new Error("Mammoth Mail --code cannot be combined with --secret or --gateway-id");
     }
     const parsed = parseSetupCode({ code: input.code, baseUrl: input.baseUrl });
-    const claim = await claimMailMooseSetupCode({ baseUrl: parsed.baseUrl, code: parsed.code });
+    const claim = await claimMammothMailSetupCode({ baseUrl: parsed.baseUrl, code: parsed.code });
     const { code: _code, ...rest } = input;
     return {
       ...rest,
@@ -149,7 +149,7 @@ export const mailMooseSetupAdapter = {
       secret: claim.secret,
     };
   },
-  validateInput: ({ input }: { cfg: CoreConfig; accountId: string; input: MailMooseSetupInput }) => {
+  validateInput: ({ input }: { cfg: CoreConfig; accountId: string; input: MammothMailSetupInput }) => {
     if (input.code?.trim()) {
       try {
         parseSetupCode({ code: input.code, baseUrl: input.baseUrl });
@@ -159,13 +159,13 @@ export const mailMooseSetupAdapter = {
       return null;
     }
     if (!normalizeBaseUrl(input.baseUrl)) {
-      return "MailMoose requires --base-url";
+      return "Mammoth Mail requires --base-url";
     }
     if (!input.gatewayId?.trim()) {
-      return "MailMoose requires --gateway-id";
+      return "Mammoth Mail requires --gateway-id";
     }
     if (!input.secret?.trim()) {
-      return "MailMoose requires --secret";
+      return "Mammoth Mail requires --secret";
     }
     return null;
   },
@@ -176,11 +176,11 @@ export const mailMooseSetupAdapter = {
   }: {
     cfg: CoreConfig;
     accountId: string;
-    input: MailMooseSetupInput;
+    input: MammothMailSetupInput;
   }) =>
     patchScopedAccountConfig({
       cfg: cfg as never,
-      channelKey: "mailmoose",
+      channelKey: "mammothmail",
       accountId,
       ensureChannelEnabled: true,
       ensureAccountEnabled: true,
@@ -194,26 +194,26 @@ export const mailMooseSetupAdapter = {
     }),
 };
 
-export const mailMooseSetupContract = defineChannelSetupContract({
+export const mammothMailSetupContract = defineChannelSetupContract({
   fields: {
     code: {
       kind: "string",
       sensitive: true,
-      cli: { flags: "--code <url-or-code>", description: "MailMoose one-time setup URL or code" },
+      cli: { flags: "--code <url-or-code>", description: "Mammoth Mail one-time setup URL or code" },
     },
     baseUrl: {
       kind: "string",
-      cli: { flags: "--base-url <url>", description: "MailMoose base URL" },
+      cli: { flags: "--base-url <url>", description: "Mammoth Mail base URL" },
     },
     gatewayId: {
       kind: "string",
-      cli: { flags: "--gateway-id <id>", description: "MailMoose connector gateway id" },
+      cli: { flags: "--gateway-id <id>", description: "Mammoth Mail connector gateway id" },
     },
     secret: {
       kind: "string",
       sensitive: true,
-      cli: { flags: "--secret <secret>", description: "MailMoose relay secret" },
+      cli: { flags: "--secret <secret>", description: "Mammoth Mail relay secret" },
     },
   },
-  legacyAdapter: mailMooseSetupAdapter,
+  legacyAdapter: mammothMailSetupAdapter,
 });

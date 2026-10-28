@@ -39,7 +39,7 @@ func TestDashboardLoadsGroupedSortableTablesForPrincipal(t *testing.T) {
 		"data-dashboard-group-edit",
 		"data-dashboard-group-head",
 		"data-dashboard-sort-key",
-		"mailmooseCombo",
+		"mammothmailCombo",
 		"combo-list",
 	} {
 		if !strings.Contains(assetResponse.Body.String(), want) {

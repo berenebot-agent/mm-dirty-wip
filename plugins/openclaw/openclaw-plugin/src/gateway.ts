@@ -1,5 +1,5 @@
 /**
- * Per-account gateway for the MailMoose channel.
+ * Per-account gateway for the Mammoth Mail channel.
  *
  * OpenClaw calls startAccount when the account is enabled and configured, and
  * aborts the signal on reload/stop. The relay dials out and stays up for the
@@ -9,27 +9,27 @@ import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveMailMooseAccount } from "./accounts.js";
-import { dispatchMailMooseInbound } from "./inbound.js";
-import { MailMooseRelay } from "./relay.js";
+import { resolveMammothMailAccount } from "./accounts.js";
+import { dispatchMammothMailInbound } from "./inbound.js";
+import { MammothMailRelay } from "./relay.js";
 import { setRelay } from "./runtime.js";
-import type { CoreConfig, ResolvedMailMooseAccount } from "./types.js";
+import type { CoreConfig, ResolvedMammothMailAccount } from "./types.js";
 
-export async function startMailMooseAccount(
-  ctx: ChannelGatewayContext<ResolvedMailMooseAccount>,
+export async function startMammothMailAccount(
+  ctx: ChannelGatewayContext<ResolvedMammothMailAccount>,
 ): Promise<void> {
-  const account = resolveMailMooseAccount({
+  const account = resolveMammothMailAccount({
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.account.accountId,
   });
   if (!account.configured) {
-    throw new Error(`MailMoose is not configured for account "${account.accountId}"`);
+    throw new Error(`Mammoth Mail is not configured for account "${account.accountId}"`);
   }
   const log = {
     info: (message: string) => ctx.log?.info?.(message),
     warn: (message: string) => ctx.log?.warn?.(message),
   };
-  const relay = new MailMooseRelay({
+  const relay = new MammothMailRelay({
     baseUrl: account.baseUrl,
     gatewayId: account.gatewayId,
     secret: account.secret,
@@ -46,7 +46,7 @@ export async function startMailMooseAccount(
       }
     },
     onInbound: async (event) => {
-      await dispatchMailMooseInbound({
+      await dispatchMammothMailInbound({
         account,
         cfg: ctx.cfg as CoreConfig,
         event,
@@ -68,7 +68,7 @@ export async function startMailMooseAccount(
   try {
     await relay.start(ctx.abortSignal);
   } catch (error) {
-    log.warn(`mailmoose: relay stopped: ${formatErrorMessage(error)}`);
+    log.warn(`mammothmail: relay stopped: ${formatErrorMessage(error)}`);
   } finally {
     setRelay(account.accountId, undefined);
     if (!ctx.abortSignal.aborted) {
@@ -77,10 +77,10 @@ export async function startMailMooseAccount(
   }
 }
 
-export async function stopMailMooseAccount(
-  ctx: ChannelGatewayContext<ResolvedMailMooseAccount>,
+export async function stopMammothMailAccount(
+  ctx: ChannelGatewayContext<ResolvedMammothMailAccount>,
 ): Promise<void> {
-  const account = resolveMailMooseAccount({
+  const account = resolveMammothMailAccount({
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.account.accountId,
   });

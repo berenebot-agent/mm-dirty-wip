@@ -296,7 +296,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	// domain rather than failing the whole send.
 	domainID := domainNull.String
 	now := nowText()
-	// rfc_message_id is the stable Message-ID MailMoose minted at enqueue time;
+	// rfc_message_id is the stable Message-ID Mammoth Mail minted at enqueue time;
 	// it is never rewritten, so a message id means the same thing whether the
 	// send succeeded or failed. A provider that assigns its own wire id is
 	// recorded in provider_message_id, and reply matching already looks in both

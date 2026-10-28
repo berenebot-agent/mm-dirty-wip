@@ -62,6 +62,17 @@ WHERE direction = 'outbound'
 // The backfill is data-only, so the pinned schema stays the previous lineage's.
 const SentPlacementBackfillHash = FolderLabelMappingHash
 
+// AuthoringLocalApprovalRename rewrites the stored approval mode to its renamed
+// value (formerly mailmoose_approval). Data-only, so the pinned schema hash
+// does not move.
+const AuthoringLocalApprovalRename = `UPDATE inboxes SET authoring_mode='local_approval'
+WHERE authoring_mode='mailmoose_approval';
+UPDATE assistant_handling_requests SET mode='local_approval'
+WHERE mode='mailmoose_approval';`
+
+// AuthoringLocalApprovalRenameHash pins the schema after the approval-mode rename.
+const AuthoringLocalApprovalRenameHash = SentPlacementBackfillHash
+
 // Queryer is the read surface shared by a pinned connection and a transaction.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -79,6 +90,7 @@ func migrations() []migration {
 		{"001", Baseline, BaselineHash},
 		{"002", FolderLabelMapping, FolderLabelMappingHash},
 		{"003", SentPlacementBackfill, SentPlacementBackfillHash},
+		{"004", AuthoringLocalApprovalRename, AuthoringLocalApprovalRenameHash},
 	}
 }
 
