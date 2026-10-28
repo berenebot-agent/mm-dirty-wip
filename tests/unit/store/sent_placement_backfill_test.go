@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestUpgradeBackfillsUnfiledSentPlacements proves the Sent-placement

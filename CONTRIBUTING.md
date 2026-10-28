@@ -66,7 +66,7 @@ decision recorded in `docs/DECISIONS.md`.
 
 1. Work on a branch; do not commit directly to the default branch.
 2. Keep commits focused and write a clear message describing the change.
-3. Open a pull request against `dellarb/mailmoose:main`.
+3. Open a pull request against `dellarb/mammothmail:main`.
 4. For architectural changes, include a `docs/DECISIONS.md` entry following the
    existing format.
 

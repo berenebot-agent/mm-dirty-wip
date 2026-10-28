@@ -3,8 +3,8 @@ package imap_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	imapadapter "github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/model"
+	imapadapter "github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 func TestDiscoverFoldersPersonalRootIncludesInboxAndSiblings(t *testing.T) {

@@ -20,7 +20,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // templatePath is the consolidated, fully-migrated database built once per test

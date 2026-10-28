@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {

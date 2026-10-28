@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mammothmail/internal/config"
 )
 
 // The receiver mode itself is not configured from the environment (the

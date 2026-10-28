@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // Account Remote MX receiver settings API. Unlike the installation MX routes,

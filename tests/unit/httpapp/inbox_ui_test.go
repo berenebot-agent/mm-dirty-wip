@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 func uiSession(t *testing.T, svc *app.Service, userID string) (*http.Cookie, string) {

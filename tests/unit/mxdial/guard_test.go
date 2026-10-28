@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // startSingleReceiver starts a real single-mode receiver on a loopback port and

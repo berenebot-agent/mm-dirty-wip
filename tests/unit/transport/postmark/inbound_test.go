@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/postmark"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/postmark"
 )
 
 var _ transport.InboundTransport = postmark.Transport{}

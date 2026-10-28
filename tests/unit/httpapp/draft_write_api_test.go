@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func draftPayload(inboxID string, extra map[string]any) string {

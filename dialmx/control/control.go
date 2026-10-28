@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // Environment variables naming the inherited file descriptors. The command

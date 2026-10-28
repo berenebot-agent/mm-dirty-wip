@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestFinalMIMESizeGuardRejectsExpansion proves the size limit is enforced on

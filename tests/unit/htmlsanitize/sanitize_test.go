@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/htmlsanitize"
+	"github.com/dellarb/mammothmail/internal/htmlsanitize"
 )
 
 // TestStripRemoteImagesRemovesAbsoluteAndProtocolRelative proves the default

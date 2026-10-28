@@ -2,10 +2,10 @@ package store_test
 
 import (
 	"context"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestManagedAliasesSurviveExternalAliasRemoval proves the removal migration

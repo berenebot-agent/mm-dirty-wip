@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/dnsfallback"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/dnsfallback"
 )
 
 // InboundAddr is the default address of the dedicated inbound webhook listener.

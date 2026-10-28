@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // DNSResolver is the small resolver surface the published-record checks need.

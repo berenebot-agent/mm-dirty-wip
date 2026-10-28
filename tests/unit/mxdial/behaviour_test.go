@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 func domainFor(t *testing.T, rc *fakeReceiver, name string) mxdial.Domain {

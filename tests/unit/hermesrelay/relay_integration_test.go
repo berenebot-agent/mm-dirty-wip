@@ -21,14 +21,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/config"
-	"github.com/dellarb/mailmoose/internal/cryptox"
-	"github.com/dellarb/mailmoose/internal/events"
-	"github.com/dellarb/mailmoose/internal/hermesrelay"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/tests/support/testdb"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/config"
+	"github.com/dellarb/mammothmail/internal/cryptox"
+	"github.com/dellarb/mammothmail/internal/events"
+	"github.com/dellarb/mammothmail/internal/hermesrelay"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/tests/support/testdb"
 )
 
 type rawWS struct {

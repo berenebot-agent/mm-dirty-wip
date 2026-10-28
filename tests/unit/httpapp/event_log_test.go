@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/httpapp"
 )
 
 // eventLogRecords returns the parsed JSON log records whose msg is one of the

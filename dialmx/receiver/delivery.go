@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // transaction is one SMTP session's delivery. It groups the recipients it

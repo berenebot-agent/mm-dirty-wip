@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/auth"
+	"github.com/dellarb/mammothmail/internal/idgen"
 )
 
 type HermesConnection struct {

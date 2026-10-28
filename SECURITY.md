@@ -9,7 +9,7 @@ operators safe.
 Please report suspected vulnerabilities **privately** through GitHub's Private
 Vulnerability Reporting:
 
-<https://github.com/dellarb/mailmoose/security/advisories/new>
+<https://github.com/dellarb/mammothmail/security/advisories/new>
 
 **Do not open a public issue or pull request for a suspected vulnerability.**
 A public report exposes every deployment before a fix is available.

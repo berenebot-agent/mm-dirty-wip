@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/dkimsign"
-	"github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mammothmail/internal/dkimsign"
+	"github.com/dellarb/mammothmail/internal/transport/mx"
 )
 
 // applyDKIMSendingKey writes the domain's DKIM signing material into a Direct MX

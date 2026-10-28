@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 func uiPost(t *testing.T, h http.Handler, cookie *http.Cookie, path, form string) *httptest.ResponseRecorder {

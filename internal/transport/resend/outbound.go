@@ -10,8 +10,8 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Config is the decrypted outbound credential for Resend.

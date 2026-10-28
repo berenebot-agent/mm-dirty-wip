@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // remoteMetaSetup creates a standalone inbox on an isolated account so its

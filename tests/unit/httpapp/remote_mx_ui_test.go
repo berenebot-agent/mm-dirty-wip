@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mammothmail/internal/app"
 )
 
 func TestRemoteMXUIExplainsOutboundConnectionAndShowsReceiverSettings(t *testing.T) {

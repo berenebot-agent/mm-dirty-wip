@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // Transport adapts SendGrid Inbound Parse to the generic inbound boundary.

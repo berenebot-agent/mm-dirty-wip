@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestTimezoneSetting covers the account default and per-user override

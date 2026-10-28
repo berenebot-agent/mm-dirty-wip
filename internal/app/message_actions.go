@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // ActionWorker owns the shared local/remote mutation queue. HTTP requests only

@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func TestSPFAlignmentWithoutDMARCPolicy(t *testing.T) {

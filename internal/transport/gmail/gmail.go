@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 // Production endpoints. BaseURL is the Gmail REST host; the per-user API prefix

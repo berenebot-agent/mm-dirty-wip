@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/htmlsanitize"
-	"github.com/dellarb/mailmoose/internal/messagepreview"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/htmlsanitize"
+	"github.com/dellarb/mammothmail/internal/messagepreview"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // messageResponse is the sole native API message shape. Availability, not inbox

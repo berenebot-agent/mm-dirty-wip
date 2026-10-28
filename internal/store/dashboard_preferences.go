@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // DashboardPreferences are personal display preferences, never mailbox policy.

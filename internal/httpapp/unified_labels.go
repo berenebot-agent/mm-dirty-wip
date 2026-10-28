@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // mailLabel is an additive classification, independent of folder location.

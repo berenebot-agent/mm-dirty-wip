@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	imapadapter "github.com/dellarb/mailmoose/internal/transport/imap"
+	imapadapter "github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 // dialFake connects an adapter to the fake server over plaintext with

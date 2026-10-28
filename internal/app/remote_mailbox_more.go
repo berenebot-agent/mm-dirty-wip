@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 // RemoteThreadView is a thread in the cached remote index.

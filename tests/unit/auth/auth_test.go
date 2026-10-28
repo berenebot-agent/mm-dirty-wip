@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mammothmail/internal/auth"
 )
 
 // argonTestSalt and argonTestHash are valid base64-raw encodings used to build

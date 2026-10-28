@@ -8,7 +8,7 @@ import (
 	"net/textproto"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/messagepreview"
+	"github.com/dellarb/mammothmail/internal/messagepreview"
 )
 
 const PreviewBytesLimit = 64 << 10

@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/apispec"
 )
 
 func main() {

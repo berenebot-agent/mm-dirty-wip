@@ -3,8 +3,8 @@ package httpapp_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
-	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/httpapp"
 )
 
 // TestAPISpecCoversEveryRegisteredRoute is the drift guard for agent

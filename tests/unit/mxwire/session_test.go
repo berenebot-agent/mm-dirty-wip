@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func TestSessionFrameFixtureAndStrictBounds(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // remoteMXReconcileInterval bounds how long an account Remote MX change can take

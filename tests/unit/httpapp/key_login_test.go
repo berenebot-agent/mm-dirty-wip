@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // keyLogin signs in through the HTML login form with an API key and returns the

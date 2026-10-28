@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/dbschema"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/dbschema"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestSentPlacementBackfillFilesStandaloneInbox proves the Sent-placement

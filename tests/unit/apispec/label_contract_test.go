@@ -3,7 +3,7 @@ package apispec_test
 import (
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mammothmail/internal/apispec"
 )
 
 // TestLabelRoutesDocumentActualResponses proves the labels and message-mutation

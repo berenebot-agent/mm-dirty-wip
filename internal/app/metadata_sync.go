@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // MetadataSyncStatus is inbox-wide metadata progress for the signed-in user's

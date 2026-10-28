@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/limits"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/limits"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {

@@ -1,4 +1,4 @@
-module github.com/dellarb/mailmoose
+module github.com/dellarb/mammothmail
 
 go 1.27
 

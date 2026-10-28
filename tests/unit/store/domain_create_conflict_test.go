@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // TestCreateDomainDuplicateReportsConflict proves re-adding a domain name the

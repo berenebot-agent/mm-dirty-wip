@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/app"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/app"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // seedRemoteMXReceiver registers this account's Remote MX receiver, which the

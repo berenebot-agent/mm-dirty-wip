@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/control"
-	"github.com/dellarb/mailmoose/internal/launcher"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/dialmx/control"
+	"github.com/dellarb/mammothmail/internal/launcher"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // rssKB reads VmRSS (in KiB) for a pid from /proc.

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/transport"
-	"github.com/dellarb/mailmoose/internal/transport/cloudflare"
+	"github.com/dellarb/mammothmail/internal/transport"
+	"github.com/dellarb/mammothmail/internal/transport/cloudflare"
 )
 
 func cfRequest(t *testing.T, secret, deliveryID, recipient, raw string) *http.Request {

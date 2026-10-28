@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mammothmail/internal/limits"
 )
 
 // DomainLogEntry is one row in a domain's two-way activity log. It merges the

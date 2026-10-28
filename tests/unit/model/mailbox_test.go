@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestListEnvelopeCompletenessIndependentOfCursor proves completeness describes

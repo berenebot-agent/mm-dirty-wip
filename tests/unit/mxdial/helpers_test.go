@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // fakeReceiver is a scriptable stand-in for the Dial MX receiver. It speaks the

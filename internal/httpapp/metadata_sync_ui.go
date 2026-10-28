@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // metadataSyncStatusView is the JSON projection of one inbox's live metadata

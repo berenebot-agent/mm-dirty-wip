@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/dialmx/receiver"
-	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mammothmail/dialmx/receiver"
+	"github.com/dellarb/mammothmail/internal/mxagent"
 )
 
 // Config is the standalone Dial MX receiver configuration. The HTTPS/2 session

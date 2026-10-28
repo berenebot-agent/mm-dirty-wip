@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 func TestReceiverTLSCustomCAKeepsHostnameVerification(t *testing.T) {

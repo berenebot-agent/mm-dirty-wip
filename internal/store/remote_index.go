@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // This file is the durable remote-metadata index for standalone (IMAP) mailboxes.

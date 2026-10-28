@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // This file is the durable remote-actions surface: the separate state machine

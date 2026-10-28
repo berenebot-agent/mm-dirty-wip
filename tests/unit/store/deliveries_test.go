@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
 )
 
 // relayEventFor commits an inbound message, builds a relay connection on its

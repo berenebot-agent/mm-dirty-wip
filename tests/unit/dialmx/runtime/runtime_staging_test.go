@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	receiverruntime "github.com/dellarb/mammothmail/dialmx/runtime"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/transport/mxdial"
 )
 
 // rawSMTP is a minimal SMTP client used to hold a DATA transaction open so the

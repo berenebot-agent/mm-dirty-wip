@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/netutil"
 )
 
 type WebhookWorker struct {

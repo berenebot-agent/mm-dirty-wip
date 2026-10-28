@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func TestMessageDirectionPolicy(t *testing.T) {

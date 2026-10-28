@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 // TestNotMXReasonMapsToRejected proves the core surfaces a receiver's routing-gate

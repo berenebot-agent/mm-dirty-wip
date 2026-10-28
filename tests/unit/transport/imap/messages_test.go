@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	imapadapter "github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/model"
+	imapadapter "github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 const sampleMessage = "MIME-Version: 1.0\r\n" +

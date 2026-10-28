@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/store"
+	"github.com/dellarb/mammothmail/internal/transport/imap"
 )
 
 // advanceEmptyTrash does bounded coordination work on the ordinary action

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 // TestUIDraftsBulkDelete proves the Drafts folder offers the same checkbox

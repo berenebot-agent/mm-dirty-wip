@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mammothmail/internal/httpapp"
 )
 
 func TestInviteSharesRegistrationRateLimit(t *testing.T) {

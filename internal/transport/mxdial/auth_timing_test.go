@@ -11,7 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func timingSession(t *testing.T) (*session, <-chan mxwire.Frame) {

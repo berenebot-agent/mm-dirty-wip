@@ -11,10 +11,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/dellarb/mailmoose/internal/idgen"
-	"github.com/dellarb/mailmoose/internal/limits"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/timezone"
+	"github.com/dellarb/mammothmail/internal/idgen"
+	"github.com/dellarb/mammothmail/internal/limits"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/timezone"
 )
 
 type AttachmentInput struct {

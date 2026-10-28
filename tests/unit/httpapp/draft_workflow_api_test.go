@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mammothmail/internal/model"
 )
 
 func apiDo(h http.Handler, method, path, key, body string) *httptest.ResponseRecorder {

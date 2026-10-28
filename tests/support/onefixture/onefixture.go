@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dellarb/mailmoose/internal/transport/one"
+	"github.com/dellarb/mammothmail/internal/transport/one"
 )
 
 const Key = "fixture-one-key-never-live"

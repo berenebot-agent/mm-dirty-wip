@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/safepath"
-	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/model"
+	"github.com/dellarb/mammothmail/internal/safepath"
+	"github.com/dellarb/mammothmail/internal/transport"
 )
 
 // workflowTokenRe matches any approval control token marker (request reference

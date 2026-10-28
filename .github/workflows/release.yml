@@ -142,5 +142,6 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --title "Mammoth Mail $GITHUB_REF_NAME" \
-              --generate-notes
+              --generate-notes \
+              --prerelease
           fi

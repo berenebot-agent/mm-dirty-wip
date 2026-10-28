@@ -14,9 +14,9 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"github.com/dellarb/mailmoose/internal/mailparse"
-	"github.com/dellarb/mailmoose/internal/mxagent"
-	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mammothmail/internal/mailparse"
+	"github.com/dellarb/mammothmail/internal/mxagent"
+	"github.com/dellarb/mammothmail/internal/mxwire"
 )
 
 func TestBuiltAttachmentPassesSMTPReceiver(t *testing.T) {
