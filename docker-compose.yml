@@ -1,6 +1,6 @@
 # Build-from-source single-container deployment (see CONTRIBUTING.md for the
 # toolchain). For a pull-and-run quickstart using the prebuilt
-# ghcr.io/dellarb/mailmoose image, see the README.
+# ghcr.io/dellarb/mammothmail image, see the README.
 #
 # Direct MX is configured from each domain's Receiving settings. It delivers
 # directly to the receiver bundled with this deployment on :2525. Host port 25

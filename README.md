@@ -76,7 +76,7 @@ Run Mammoth Mail with **one Docker Compose file**. No repository checkout or sep
 ```yaml
 services:
   mammothmail:
-    image: ghcr.io/dellarb/mailmoose:latest
+    image: ghcr.io/dellarb/mammothmail:latest
     restart: unless-stopped
     environment:
       ADMIN_EMAIL: "admin@example.com"
