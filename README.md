@@ -16,7 +16,7 @@ Deploy in a single Docker container, bring your own email providers, and integra
 
 **Public beta** · Open source · Self-hosted
 
-[![CI](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![CI](https://github.com/dellarb/mammothmail/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mammothmail/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 <img src="assets/mammothmail-dashboard.png" alt="The Mammoth Mail dashboard, listing inboxes, clients and domains, with provider connectors shown per inbox and domain" width="1000">
 
