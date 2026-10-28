@@ -32,9 +32,9 @@ import (
 // cores; known fields are still validated strictly.
 
 // AntlerManifestURL is the live manifest fetched when a setup is saved. The
-// embedded copy in antler-endpoints.json is the fallback and the copy of record
-// for this repository.
-const AntlerManifestURL = "https://raw.githubusercontent.com/dellarb/mailmoose/main/internal/transport/mxdial/antler-endpoints.json"
+// embedded copy in endpoints.json is the fallback and the copy of record for
+// this repository.
+const AntlerManifestURL = "https://raw.githubusercontent.com/dellarb/mailmoose/main/internal/transport/mxdial/endpoints.json"
 
 const (
 	antlerManifestTTL       = 10 * time.Minute
@@ -44,8 +44,15 @@ const (
 	antlerMaxReceivers      = 8
 )
 
-//go:embed antler-endpoints.json
+//go:embed endpoints.json
 var embeddedAntlerManifest []byte
+
+// antler-endpoints.json is the pre-rename filename. Older cores still fetch it
+// from this repository, so it is kept and used only if the copy of record fails
+// to decode.
+//
+//go:embed antler-endpoints.json
+var embeddedLegacyAntlerManifest []byte
 
 // AntlerReceiver is one Antler MX receiver: the HTTPS session origin the core
 // dials and the SMTP hostname (with MX preference) a receiving domain publishes.
@@ -186,10 +193,22 @@ func validAntlerID(id string) bool {
 	return true
 }
 
-// EmbeddedAntlerReceivers returns the manifest compiled into this build.
+// EmbeddedAntlerReceivers returns the manifest compiled into this build. The
+// legacy antler-endpoints.json copy is the fallback when the copy of record does
+// not decode.
 func EmbeddedAntlerReceivers() []AntlerReceiver {
-	receivers, _ := ParseAntlerManifest(embeddedAntlerManifest)
+	if receivers, err := ParseAntlerManifest(embeddedAntlerManifest); err == nil {
+		return receivers
+	}
+	receivers, _ := ParseAntlerManifest(embeddedLegacyAntlerManifest)
 	return receivers
+}
+
+// LegacyEmbeddedManifest returns the raw antler-endpoints.json copy compiled
+// into this build, so tests can hold it to the same receiver set as the copy of
+// record that older cores fetch from that path.
+func LegacyEmbeddedManifest() []byte {
+	return embeddedLegacyAntlerManifest
 }
 
 // AntlerResolver resolves the live manifest with a bounded cache, falling back

@@ -2648,8 +2648,8 @@ messages) to account for usage.
 - `custom` — the pre-existing manual `receiver_urls` behaviour, unchanged. A
   legacy save with only `receiver_urls` is never silently treated as Antler.
 
-The manifest is compiled in (`internal/transport/mxdial/antler-endpoints.json`)
-and fetched live from the project repository at setup-save time, with a
+The manifest is compiled in (`internal/transport/mxdial/endpoints.json`) and
+fetched live from the project repository at setup-save time, with a
 ten-minute cache, a last-known-good fallback and the embedded copy as the final
 fallback, so a hosting outage never blocks setup. It carries both the HTTPS
 session origins and the SMTP MX hostnames/priorities. The manifest decoder

@@ -1,16 +1,17 @@
 {
+  "_comment": "Kept for backwards compatibility: older cores fetch this path. Superseded by endpoints.json; both carry the same receiver set.",
   "schema_version": 1,
   "receivers": [
     {
-      "id": "antler-1",
-      "session_url": "https://antler1.hgolabs.com",
-      "smtp_hostname": "antler1.hgolabs.com",
+      "id": "tusk-1",
+      "session_url": "https://tusk1.hgolabs.com",
+      "smtp_hostname": "tusk1.hgolabs.com",
       "mx_priority": 10
     },
     {
-      "id": "antler-2",
-      "session_url": "https://antler2.hgolabs.com",
-      "smtp_hostname": "antler2.hgolabs.com",
+      "id": "tusk-2",
+      "session_url": "https://tusk2.hgolabs.com",
+      "smtp_hostname": "tusk2.hgolabs.com",
       "mx_priority": 10
     }
   ]

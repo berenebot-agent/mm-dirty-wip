@@ -166,6 +166,17 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **New Antler MX setups enrol with the renamed Tusk receivers.** The receiver
+  set now points at `tusk1.hgolabs.com` and `tusk2.hgolabs.com` (receiver ids
+  `tusk-1`/`tusk-2`), so a setup saved from here publishes the new MX and TXT
+  records and mail flows through the renamed service. The manifest is the copy of
+  record at `endpoints.json`; the pre-rename `antler-endpoints.json` is kept at
+  the same path with the same receiver set, because older cores still fetch it
+  from there and its absence would send them to their compiled-in defaults. A
+  core that cannot fetch either manifest falls back to the embedded copy, which
+  carries the same two receivers. Existing setups are unaffected: each keeps the
+  receiver snapshot it enrolled with, so their published records and live
+  sessions do not move.
 - **Client-facing names are brand-free (API change explicitly approved).**
   Webhook and forward headers are now `X-Mail-*` (for example
   `X-Mail-Signature`), sent alongside the old `X-MailMoose-*` names during the
