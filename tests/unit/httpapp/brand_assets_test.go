@@ -21,7 +21,6 @@ func TestBrandAssetsServed(t *testing.T) {
 		{"/favicon-32x32.png", "image/png"},
 		{"/apple-touch-icon.png", "image/png"},
 		{"/assets/logo-horizontal.png", "image/png"},
-		{"/assets/antler-mx-diagram.svg", "image/svg+xml"},
 		{"/assets/tusk-mx-diagram.svg", "image/svg+xml"},
 	} {
 		rr := httptest.NewRecorder()

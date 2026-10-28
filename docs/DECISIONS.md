@@ -6661,3 +6661,19 @@ existing AAD-bound credentials remain readable using the old salt as a fallback.
 Direct 32-byte keys are unaffected. Older binaries cannot decrypt credentials
 newly written with the new passphrase-derived key, so retain a pre-upgrade backup
 for rollback. Legacy ciphertext is not rewritten just by reading it.
+
+
+## D162 — Freeze neutral hosted MX API identifiers before wider promotion (2026-10-29)
+
+The Dial MX hosted relay now uses `service: "hosted"` (formerly `"antler"`),
+while `"custom"` and provider `"dialmx"` remain unchanged. Its receiving
+response uses `receiver_manifest` rather than `antler_manifest`; the encrypted
+receiving configuration uses `receiver_snapshot`, `receiver_manifest_source`,
+and `receiver_manifest_at` instead of `antler_*` keys.
+
+Existing encrypted configs cannot be migrated by SQL: decrypt normalizes
+legacy keys in memory, and the next save writes canonical keys while retaining
+setup identity, receiver snapshot and credentials. Legacy webhook header output,
+`/.well-known/mailmoose` and the old Antler diagram URL no longer advertise
+the obsolete identity. Compatibility reads for existing Cloudflare requests,
+old handoff headers, passphrase keys and old receiver manifest URL remain.

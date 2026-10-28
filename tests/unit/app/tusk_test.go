@@ -88,11 +88,11 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 		t.Fatalf("receiver snapshot missing: %+v", receivers)
 	}
 	// The snapshot records where it came from, so the status view can state it.
-	if values["antler_manifest_source"] != string(mxdial.AntlerSourceGitHub) {
-		t.Fatalf("manifest source = %v, want github", values["antler_manifest_source"])
+	if values["receiver_manifest_source"] != string(mxdial.AntlerSourceGitHub) {
+		t.Fatalf("manifest source = %v, want github", values["receiver_manifest_source"])
 	}
-	if values["antler_manifest_at"] != "2026-10-18T05:12:03Z" {
-		t.Fatalf("manifest fetch time = %v, want the resolver's fetch time", values["antler_manifest_at"])
+	if values["receiver_manifest_at"] != "2026-10-18T05:12:03Z" {
+		t.Fatalf("manifest fetch time = %v, want the resolver's fetch time", values["receiver_manifest_at"])
 	}
 
 	// A resave with no email keeps the stored contact and the same setup id.
@@ -109,8 +109,8 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 	}
 	// The record describes the receivers the published MX records point at, so a
 	// re-save keeps it rather than re-stamping it as a fresh fetch.
-	if again["antler_manifest_source"] != values["antler_manifest_source"] || again["antler_manifest_at"] != values["antler_manifest_at"] {
-		t.Fatalf("resave changed the manifest record: %v %v", again["antler_manifest_source"], again["antler_manifest_at"])
+	if again["receiver_manifest_source"] != values["receiver_manifest_source"] || again["receiver_manifest_at"] != values["receiver_manifest_at"] {
+		t.Fatalf("resave changed the manifest record: %v %v", again["receiver_manifest_source"], again["receiver_manifest_at"])
 	}
 	if stub.calls != 1 {
 		t.Fatalf("resave re-resolved the manifest: %d fetches", stub.calls)
@@ -173,11 +173,11 @@ func TestDialMXAntlerRecordsAndLogsTheManifestSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values["antler_manifest_source"] != string(mxdial.AntlerSourceEmbedded) {
-		t.Fatalf("fallback manifest source = %v, want embedded", values["antler_manifest_source"])
+	if values["receiver_manifest_source"] != string(mxdial.AntlerSourceEmbedded) {
+		t.Fatalf("fallback manifest source = %v, want embedded", values["receiver_manifest_source"])
 	}
-	if _, ok := values["antler_manifest_at"]; ok {
-		t.Fatalf("a fallback recorded a fetch time: %v", values["antler_manifest_at"])
+	if _, ok := values["receiver_manifest_at"]; ok {
+		t.Fatalf("a fallback recorded a fetch time: %v", values["receiver_manifest_at"])
 	}
 	if app.AntlerReceiversFromConfig(values) == nil {
 		t.Fatal("fallback snapshot missing its receivers")
