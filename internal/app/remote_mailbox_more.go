@@ -440,28 +440,75 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 	if err := sess.CreateFolder(ctx, path); err != nil {
 		return model.Folder{}, normalizeRemoteError(err)
 	}
-	// Mirror the new folder locally so it is immediately addressable.
-	display := strings.TrimSpace(name)
-	if display == "" {
-		display = lastRemoteSegment(path)
+	// Mirror the whole discovered tree, not just the new path: the reconcile
+	// replaces the remote folder set and prunes whatever it is not given, so a
+	// one-item call would drop an existing parent folder and every sibling.
+	if err := m.syncFolderTree(ctx, sess, inbox, p.AccountID, inboxID); err != nil {
+		return model.Folder{}, err
 	}
-	parent := ""
-	delim := m.scopeDelimiter(inbox)
-	if delim != 0 {
-		parent = parentOf(path, delim)
+	got, gerr := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, path)
+	if gerr != nil {
+		return model.Folder{}, mapStoreError(gerr)
 	}
-	folders, err := m.Service.Store.ReconcileRemoteFolders(ctx, p.AccountID, inboxID, []store.RemoteFolderSync{{
-		Path: path, Name: display, ParentPath: parent, Role: model.FolderRoleFolder, Selectable: true, IndexedAt: time.Now().UTC(),
-	}})
-	if err != nil {
-		return model.Folder{}, mapStoreError(err)
-	}
-	for _, f := range folders {
-		if f.Path == path {
-			return f, nil
+	return got, nil
+}
+
+// syncFolderTree re-reads the inbox's folder tree from the live server and
+// reconciles it into the cached index. It is the post-mutation mirror: a folder
+// create or rename changes the tree, and a partial reconcile would prune the
+// siblings the mutation did not mention. For a provider whose folder path is the
+// provider's own stable identity (Gmail label id, Graph folder id) the path is
+// also handed over as StableID, so a renamed folder keeps its Mammoth Mail id.
+func (m *RemoteMailboxService) syncFolderTree(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID string) error {
+	return m.syncFolderTreeRenamed(ctx, sess, inbox, accountID, inboxID, "", "")
+}
+
+// syncFolderTreeRenamed is syncFolderTree with a rename hint: when a provider has
+// no stable folder identity (IMAP), the subtree under oldPath is moved to newPath
+// in the cached index before the reconcile, so the renamed folder and every child
+// keep their ids. The reconcile would otherwise mint a fresh id for each path it
+// has not seen.
+func (m *RemoteMailboxService) syncFolderTreeRenamed(ctx context.Context, sess RemoteSession, inbox model.Inbox, accountID, inboxID, oldPath, newPath string) error {
+	if oldPath != "" && newPath != "" {
+		if _, err := m.Service.Store.RenameRemoteFolderPaths(ctx, accountID, inboxID, oldPath, newPath); err != nil {
+			return mapStoreError(err)
 		}
 	}
-	return model.Folder{InboxID: inboxID, Path: path, Name: display, Role: model.FolderRoleFolder, Selectable: true}, nil
+	folders, scope, err := sess.DiscoverFolders(ctx, inbox.Namespace)
+	if err != nil {
+		return normalizeRemoteError(err)
+	}
+	now := time.Now().UTC()
+	sync := make([]store.RemoteFolderSync, 0, len(folders))
+	for _, f := range folders {
+		sync = append(sync, store.RemoteFolderSync{
+			Path:        f.Path,
+			Name:        f.Name,
+			ParentPath:  parentOf(f.Path, scope.Delimiter),
+			Role:        f.Role,
+			Selectable:  f.Selectable,
+			HasChildren: f.HasChildren,
+			SpecialUse:  f.SpecialUse,
+			IndexedAt:   now,
+			StableID:    m.providerFolderIdentity(ctx, f.Path, inbox),
+		})
+	}
+	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, accountID, inboxID, sync); err != nil {
+		return mapStoreError(err)
+	}
+	return nil
+}
+
+// providerFolderIdentity reports whether a remote folder's path is the
+// provider's own rename-stable identity. A Graph folder path is its entry id and
+// a Gmail label path is its label id, so both survive a rename; an IMAP path is
+// the mailbox name and does not. Every other inbox (a domain inbox has no remote
+// tree) has no stable identity either.
+func (m *RemoteMailboxService) providerFolderIdentity(ctx context.Context, path string, inbox model.Inbox) string {
+	if path == "" || m.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) || m.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		return path
+	}
+	return ""
 }
 
 // RenameRemoteFolder renames a remote folder on the live server and re-mirrors the
@@ -518,20 +565,20 @@ func (m *RemoteMailboxService) RenameRemoteFolder(ctx context.Context, p model.P
 	} else {
 		newPath = newName
 	}
-	if !m.folderInScope(inbox, newPath) {
+	// A rename proposes a name that exists nowhere yet, so it is admitted by the
+	// same rule as a create: in scope already, a child of an in-scope folder, or a
+	// new top-level personal folder.
+	if !m.folderInScopeCreate(inbox, newPath) {
 		return model.Folder{}, model.NewMailboxError(model.ErrKindInvalid, "renamed folder would leave the mailbox scope", false, nil)
 	}
 	if err := sess.RenameFolder(ctx, oldPath, newPath); err != nil {
 		return model.Folder{}, normalizeRemoteError(err)
 	}
-	// Re-mirror: drop the old path and index the new one. A reconcile will pick
-	// up children whose paths the server moved with the parent.
-	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, p.AccountID, inboxID, []store.RemoteFolderSync{{
-		Path: newPath, Name: newName, ParentPath: parentOf(newPath, delim), Role: model.FolderRoleFolder, Selectable: true, IndexedAt: time.Now().UTC(),
-	}}); err != nil {
-		return model.Folder{}, mapStoreError(err)
-	}
-	if _, err := m.ReconcileRemote(ctx, p.AccountID, inboxID); err != nil {
+	// Re-mirror the whole tree: the rename changes the path of the folder and of
+	// every child the server moves with it, so a one-item reconcile would prune
+	// the rest of the set. IMAP has no stable folder identity, so the moved
+	// subtree is handed over explicitly to keep every id.
+	if err := m.syncFolderTreeRenamed(ctx, sess, inbox, p.AccountID, inboxID, oldPath, newPath); err != nil {
 		return model.Folder{}, err
 	}
 	got, err := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, newPath)
@@ -608,14 +655,43 @@ func (m *RemoteMailboxService) DeleteRemoteFolder(ctx context.Context, p model.P
 		if errors.Is(err, imap.ErrFolderNotEmpty) {
 			return model.NewMailboxError(model.ErrKindConflict, "folder is not empty", false, store.ErrFolderNotEmpty)
 		}
-		return normalizeRemoteError(err)
+		failed := normalizeRemoteError(err)
+		var mb *model.MailboxError
+		if errors.As(failed, &mb) && mb.Kind == model.ErrKindNotFound {
+			// The provider no longer has the folder: the delete already landed, so
+			// the cached row is what is stale. Finish the delete locally.
+			m.forgetRemoteFolder(p.AccountID, inboxID, target.Path)
+			return nil
+		}
+		return m.folderWriteFailed(p.AccountID, inboxID, failed)
 	}
-	// Drop the deleted folder's cached rows so a stale folder does not linger
-	// until the next reconcile prunes it.
-	if perr := m.Service.Store.DeleteRemoteFolderRow(ctx, p.AccountID, inboxID, target.Path); perr != nil {
-		m.Service.Log.Warn("prune deleted remote folder", "inbox_id", inboxID, "error", perr)
-	}
+	m.forgetRemoteFolder(p.AccountID, inboxID, target.Path)
 	return nil
+}
+
+// forgetRemoteFolder drops a provider-confirmed folder from the cached index. It
+// is detached from the request, so a client that gave up on a slow delete (or a
+// gateway timeout) cannot leave the row behind as a phantom child of its parent.
+// A local failure schedules a reconcile instead of surfacing: the provider
+// delete already happened.
+func (m *RemoteMailboxService) forgetRemoteFolder(accountID, inboxID, path string) {
+	ctx, cancel := outcomeContext(context.Background())
+	defer cancel()
+	if err := m.Service.Store.DeleteRemoteFolderRow(ctx, accountID, inboxID, path); err != nil {
+		m.Service.Log.Warn("prune deleted remote folder", "inbox_id", inboxID, "error", err)
+		m.ScheduleRefresh(accountID, inboxID)
+	}
+}
+
+// folderWriteFailed queues a reconcile for a folder mutation whose provider
+// outcome is neither a definitive refusal nor a confirmed write, so a partially
+// applied tree converges without an operator refresh.
+func (m *RemoteMailboxService) folderWriteFailed(accountID, inboxID string, err error) error {
+	var mb *model.MailboxError
+	if errors.As(err, &mb) && (mb.Retryable || mb.Kind == model.ErrKindUnavailable) {
+		m.ScheduleRefresh(accountID, inboxID)
+	}
+	return err
 }
 
 // SetRemoteFolderRole explicitly maps an existing folder of a standalone inbox to
@@ -707,14 +783,6 @@ func joinFolderPath(parent, name string, delim rune) string {
 		return name
 	}
 	return parent + string(delim) + name
-}
-
-// lastRemoteSegment returns the final path segment of a folder path.
-func lastRemoteSegment(path string) string {
-	if idx := strings.LastIndexAny(path, "/."); idx >= 0 && idx+1 < len(path) {
-		return path[idx+1:]
-	}
-	return path
 }
 
 // ---- RemoteDraft handoff publisher ----

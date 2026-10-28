@@ -29,7 +29,7 @@ func TestDialMXAntlerUnreachableReceiverKeepsConnectorHostname(t *testing.T) {
 		t.Fatalf("antler save: %v", err)
 	}
 
-	// A real manager dials the configured (unresolvable) Antler receiver, which
+	// A real manager dials the configured (unresolvable) Tusk receiver, which
 	// reports the domain as unreachable with no advertised SMTP hostname.
 	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{
 		DataDir:                  svc.Config.DataDir,

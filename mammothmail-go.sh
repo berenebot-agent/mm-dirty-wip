@@ -1,23 +1,23 @@
 #!/bin/bash
-# mailmoose-go.sh — run Go commands inside Docker (build/test/vet/tidy) with a
+# mammothmail-go.sh — run Go commands inside Docker (build/test/vet/tidy) with a
 # persistent cache so repeated runs are fast, and libsqlite3-dev pre-baked so
 # every run doesn't pay apt-get (internal/sqlite3driver is cgo).
 #
 # Usage:
-#   ./mailmoose-go.sh <go args...>     e.g. ./mailmoose-go.sh test -race -count=1 ./...
-#   ./mailmoose-go.sh vet ./...
-#   ./mailmoose-go.sh mod tidy
-#   ./mailmoose-go.sh gofmt -l cmd internal   (direct gofmt binary, for the CI fmt gate)
+#   ./mammothmail-go.sh <go args...>     e.g. ./mammothmail-go.sh test -race -count=1 ./...
+#   ./mammothmail-go.sh vet ./...
+#   ./mammothmail-go.sh mod tidy
+#   ./mammothmail-go.sh gofmt -l cmd internal   (direct gofmt binary, for the CI fmt gate)
 #
 # Caches (bind-mounted, NOT named volumes):
-#   gomod   = ~/.cache/mailmoose-go/mod      module download cache (/go/pkg/mod)
-#   gobuild = ~/.cache/mailmoose-go/build    compiled package cache (/root/.cache/go-build)
+#   gomod   = ~/.cache/mammothmail-go/mod      module download cache (/go/pkg/mod)
+#   gobuild = ~/.cache/mammothmail-go/build    compiled package cache (/root/.cache/go-build)
 #
 # Toolchain image:
 #   Base is pinned to match the Dockerfile build stage (golang:1.27-bookworm).
-#   The wrapper builds a local cached image (mailmoose-go:1.27) with
+#   The wrapper builds a local cached image (mammothmail-go:1.27) with
 #   libsqlite3-dev preinstalled on first use, then reuses it. Override with
-#   MAILMOOSE_GO_IMAGE to point at another image (e.g. the bare base).
+#   MAIL_GO_IMAGE to point at another image (e.g. the bare base).
 #
 # RAM safety:
 #   --memory/-m limits the container's hard memory ceiling (OOM inside, not host OOM)
@@ -25,8 +25,8 @@
 #   GOFLAGS=-p=<cores> sets build parallelism and test-binary package concurrency
 #   to the host's logical CPU count (nproc), which is also Go's own default for
 #   -p/GOMAXPROCS. The heavy packages (httpapp/app/store) overlap enough to keep
-#   the tier under the 60s per-binary -timeout. Overrides: MAILMOOSE_GO_PARALLEL
-#   sets -p explicitly; MAILMOOSE_GO_MEM sets the RAM cap. By default the cap is
+#   the tier under the 60s per-binary -timeout. Overrides: MAIL_GO_PARALLEL
+#   sets -p explicitly; MAIL_GO_MEM sets the RAM cap. By default the cap is
 #   half the host's physical RAM (a ceiling, not a reservation).
 #
 # Scratch disk:
@@ -36,14 +36,14 @@
 #   is therefore a tmpfs so those files live in RAM where fsync is free. Its size
 #   is a ceiling only (tmpfs allocates lazily), so it can be generous; it is
 #   capped so a runaway test cannot exhaust the container. Override with
-#   MAILMOOSE_GO_TMPFS (e.g. 8g); set MAILMOOSE_GO_TMPFS=0 to disable and use
+#   MAIL_GO_TMPFS (e.g. 8g); set MAIL_GO_TMPFS=0 to disable and use
 #   the container's normal /tmp.
 
 set -eu
 
 GO_BASE="golang:1.27-bookworm"
-GO_IMAGE="${MAILMOOSE_GO_IMAGE:-mailmoose-go:1.27}"
-CACHE_DIR="${MAILMOOSE_GO_CACHE:-$HOME/.cache/mailmoose-go}"
+GO_IMAGE="${MAIL_GO_IMAGE:-mammothmail-go:1.27}"
+CACHE_DIR="${MAIL_GO_CACHE:-$HOME/.cache/mammothmail-go}"
 MOD_CACHE="$CACHE_DIR/mod"
 BUILD_CACHE="$CACHE_DIR/build"
 
@@ -53,15 +53,15 @@ case "$CORES" in
     ''|*[!0-9]*) CORES=2 ;;
 esac
 [ "$CORES" -lt 1 ] && CORES=1
-GO_PARALLEL="${MAILMOOSE_GO_PARALLEL:-$CORES}"
+GO_PARALLEL="${MAIL_GO_PARALLEL:-$CORES}"
 case "$GO_PARALLEL" in
     ''|*[!0-9]*) GO_PARALLEL=$CORES ;;
 esac
 
 # Hard RAM cap for the container: half the host's physical RAM by default (a
 # ceiling, not a reservation), floored at 2g so a small box still builds -race.
-if [ -n "${MAILMOOSE_GO_MEM:-}" ]; then
-    MEM_LIMIT="$MAILMOOSE_GO_MEM"
+if [ -n "${MAIL_GO_MEM:-}" ]; then
+    MEM_LIMIT="$MAIL_GO_MEM"
 else
     MEM_TOTAL_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
     case "$MEM_TOTAL_KB" in
@@ -86,12 +86,12 @@ esac
 # Scratch tmpfs: a ceiling, not a reservation (tmpfs allocates lazily), so it can
 # be generous. Default is the whole RAM cap: the suite's temp data is small in
 # practice, and if it ever did grow, the cgroup would reclaim before the host
-# felt it. MAILMOOSE_GO_TMPFS=0 disables the tmpfs (container uses its own /tmp);
-# MAILMOOSE_GO_TMPFS=<n>g sets the size explicitly.
-if [ "${MAILMOOSE_GO_TMPFS:-auto}" = "0" ]; then
+# felt it. MAIL_GO_TMPFS=0 disables the tmpfs (container uses its own /tmp);
+# MAIL_GO_TMPFS=<n>g sets the size explicitly.
+if [ "${MAIL_GO_TMPFS:-auto}" = "0" ]; then
     SCRATCH_FLAGS=""
 else
-    TMPFS_G="${MAILMOOSE_GO_TMPFS:-auto}"
+    TMPFS_G="${MAIL_GO_TMPFS:-auto}"
     if [ "$TMPFS_G" = "auto" ]; then
         TMPFS_G=$MEM_LIMIT_G
     fi
@@ -109,14 +109,14 @@ fi
 # Create cache dirs if absent
 mkdir -p "$MOD_CACHE" "$BUILD_CACHE"
 
-# Repo root = this script's own directory (mailmoose-go.sh lives in the repo
+# Repo root = this script's own directory (mammothmail-go.sh lives in the repo
 # root, the dir that contains go.mod). Resolve symlinks + get absolute path.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT="$SCRIPT_DIR"
 
 # Build the cached toolchain image once (libsqlite3-dev pre-baked for cgo).
 if ! docker image inspect "$GO_IMAGE" >/dev/null 2>&1; then
-    echo "mailmoose-go.sh: building cached image $GO_IMAGE ..." >&2
+    echo "mammothmail-go.sh: building cached image $GO_IMAGE ..." >&2
     docker build -f "$REPO_ROOT/tests/docker/Dockerfile.gocache" \
         --build-arg "GO_BASE=$GO_BASE" \
         -t "$GO_IMAGE" "$REPO_ROOT/tests/docker" >&2
@@ -126,7 +126,7 @@ fi
 TTY_FLAG=""
 if [ -t 1 ]; then TTY_FLAG="-it"; fi
 
-# Build/test parallelism follows the host core count (or MAILMOOSE_GO_PARALLEL).
+# Build/test parallelism follows the host core count (or MAIL_GO_PARALLEL).
 #
 # -trimpath lives in GOFLAGS, NOT on a command line: this wrapper is a
 # pass-through (`go "$@"`), so a build flag added at the call site would be
@@ -144,7 +144,7 @@ ENV_FLAGS=(-e "GOFLAGS=-p=${GO_PARALLEL} -trimpath" -e CGO_ENABLED=1 -e "GOMAXPR
 # file, mount its parent directory at the identical container path and pass the
 # variable through, so an in-container test that writes the fixture lands on the
 # host. Without it the path is invisible inside the container (and the var is
-# not exported): the fixture test skips. This is how the mailmoose/Billbot
+# not exported): the fixture test skips. This is how the mammothmail/Billbot
 # webhook wire contract is exported from a real worker test run.
 FIXTURE_FLAGS=""
 if [ -n "${BILLBOT_CONTRACT_FIXTURE:-}" ]; then
@@ -153,11 +153,11 @@ if [ -n "${BILLBOT_CONTRACT_FIXTURE:-}" ]; then
     FIXTURE_FLAGS="-e BILLBOT_CONTRACT_FIXTURE=$BILLBOT_CONTRACT_FIXTURE -v $fixture_dir:$fixture_dir"
 fi
 
-# Optional smoke-tier passthrough: when MAILMOOSE_SMOKE is set (tests/run.sh
+# Optional smoke-tier passthrough: when MAIL_SMOKE is set (tests/run.sh
 # --smoke), forward it so the gated slow tests run instead of skipping.
 SMOKE_FLAGS=""
-if [ -n "${MAILMOOSE_SMOKE:-}" ]; then
-    SMOKE_FLAGS="-e MAILMOOSE_SMOKE=$MAILMOOSE_SMOKE"
+if [ -n "${MAIL_SMOKE:-}" ]; then
+    SMOKE_FLAGS="-e MAIL_SMOKE=$MAIL_SMOKE"
 fi
 
 # Manual One compatibility probe only: forward variable names, never embed
@@ -171,16 +171,16 @@ fi
 # tests/logs/ (gitignored, persistent across runs). The summary printed at
 # the end shows the path; on failure the first FAIL line is also inlined.
 #
-# When wrapped by tests/run.sh, MAILMOOSE_TEST_DIR is set: write straight to
+# When wrapped by tests/run.sh, MAIL_TEST_DIR is set: write straight to
 # <dir>/out.log so the unified runner owns the run folder. When unset, use
 # the dated per-invocation file (direct-invocation behavior is unchanged).
-if [ -n "${MAILMOOSE_TEST_DIR:-}" ]; then
-    LOG_DIR="$MAILMOOSE_TEST_DIR"
+if [ -n "${MAIL_TEST_DIR:-}" ]; then
+    LOG_DIR="$MAIL_TEST_DIR"
 else
-    LOG_DIR="tests/logs/mailmoose-go"
+    LOG_DIR="tests/logs/mammothmail-go"
 fi
 mkdir -p "$LOG_DIR"
-if [ -n "${MAILMOOSE_TEST_DIR:-}" ]; then
+if [ -n "${MAIL_TEST_DIR:-}" ]; then
     LOG_FILE="$LOG_DIR/out.log"
 else
     LOG_SLUG=$(echo "$*" | tr ' /' '__')
@@ -226,7 +226,7 @@ fi
 rc=${PIPESTATUS[0]}
 te=$(date +%s)
 
-echo "==> mailmoose-go.sh: rc=$rc, $((te - ts))s elapsed, log: $LOG_FILE" >&2
+echo "==> mammothmail-go.sh: rc=$rc, $((te - ts))s elapsed, log: $LOG_FILE" >&2
 if [ "$rc" -ne 0 ]; then
     first_fail=$(grep -m1 -E '^--- FAIL|^FAIL\b' "$LOG_FILE" 2>/dev/null | head -c 400 || true)
     [ -n "$first_fail" ] && echo "    first failure: $first_fail" >&2

@@ -48,7 +48,7 @@ func TestSessionFrameFixtureAndStrictBounds(t *testing.T) {
 	}
 }
 
-// TestDomainAuthRegistrationMetadata pins the optional Antler MX registration
+// TestDomainAuthRegistrationMetadata pins the optional Tusk MX registration
 // metadata wire shape: absent for custom cores, present (and decoded) for a
 // named-service core, and still strict about unknown fields.
 func TestDomainAuthRegistrationMetadata(t *testing.T) {
@@ -66,7 +66,7 @@ func TestDomainAuthRegistrationMetadata(t *testing.T) {
 		t.Fatalf("plain decode: %+v %v", decoded, err)
 	}
 
-	// An Antler core carries both fields.
+	// A Tusk core carries both fields.
 	full, err := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{
 		Domain: "example.com", KeyID: "key-1", ContactEmail: "ops@example.com", SetupID: "setup_ab12",
 	})
@@ -94,7 +94,7 @@ func TestContactEmailValidator(t *testing.T) {
 			t.Fatalf("invalid contact %q accepted", bad)
 		}
 	}
-	for _, ok := range []string{"setup_ab12", "Antler-1", "abcd"} {
+	for _, ok := range []string{"setup_ab12", "Tusk-1", "abcd"} {
 		if !mxwire.ValidSetupID(ok) {
 			t.Fatalf("valid setup id %q rejected", ok)
 		}
@@ -113,7 +113,7 @@ func TestSessionProofAndDNSSelection(t *testing.T) {
 	public := private.Public().(ed25519.PublicKey)
 	challenge := mxwire.Challenge{Domain: "example.com", KeyID: "key-1", ReceiverID: "rx", ConnectionID: "conn", Nonce: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
 	transcript, err := mxwire.AuthTranscript(challenge)
-	if err != nil || hex.EncodeToString(transcript) != "da24e29ac97410231a29b0ec438eaad68f7954b364502cffb21490c4c70a551a" {
+	if err != nil || hex.EncodeToString(transcript) != "4face7f697a56a9ae45ff699933dc75d9b31c9591041567d9a075b33f0291733" {
 		t.Fatalf("transcript fixture: %x %v", transcript, err)
 	}
 	sig, err := mxwire.SignChallenge(private, challenge)

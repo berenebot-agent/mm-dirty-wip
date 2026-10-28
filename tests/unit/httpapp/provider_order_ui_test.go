@@ -41,7 +41,7 @@ func attrValue(frag, name string) string {
 	return ""
 }
 
-// TestReceivingProviderOrder pins the receiving dropdown order: Antler MX,
+// TestReceivingProviderOrder pins the receiving dropdown order: Tusk MX,
 // Direct MX and Remote MX lead in that fixed order, and every other provider
 // follows alphabetically by display label. SendGrid is intentionally absent:
 // its adapter is complete and unit-tested but deliberately hidden until it can

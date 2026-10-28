@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to MailMoose are documented here. This project follows
+All notable changes to Mammoth Mail are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -8,6 +8,133 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **The reader names system folders in sentence case.** The move chooser, the
+  sidebar and the "Moved to …" notice show Inbox, Sent, Spam, Trash and the
+  other system folders in our own wording, so an IMAP `INBOX` or an Outlook
+  `Deleted Items` is no longer shown as the provider wrote it. A folder the
+  account renamed, and every custom folder, keeps its own name. A Microsoft
+  mailbox no longer lists an invented Archive destination: Graph answers the
+  well-known name `archive` with an unrelated folder.
+- **A message mutation answers with its result when it settles quickly.** A move,
+  delete, label change, read/spam change, restore, purge or seen call now waits
+  up to five seconds for its own action and returns the settled body (the
+  message, `204`, or `{id,seen}`). A provider slower than that still returns
+  `202` with the durable action and its `Location`, and `?wait=true` keeps its
+  30-second bound, so a 23-second IMAP move no longer looks like a failed write
+  to a client that reads straight back. The web UI stays asynchronous.
+- **Re-issuing a move does not queue it twice.** While an identical move is
+  pending or running, submitting it again returns the queued action instead of a
+  second one that would apply the move again.
+- **Deleting a folder that is already gone at the provider finishes locally.**
+  A provider answering "no such folder" (a retry after the first delete landed,
+  or an answer lost to a timeout) now prunes the cached row and reports success,
+  so the folder disappears from `GET /folders` and its parent stops refusing
+  deletion with `409`.
+- **A confirmed folder delete always updates the local index.** The prune and the
+  folder-tree mirror run on their own bounded context, so a client that gave up
+  or a gateway that timed out cannot leave a deleted folder cached. A folder
+  mutation with an unresolved provider outcome queues a reconcile instead of
+  waiting for an operator refresh.
+- **The Sent-placement backfill covers every inbox kind.** Migration `003` filed
+  completed sends into the Sent folder only for domain inboxes; it now applies to
+  a connected inbox's own Sent folder too, matching the placement every new send
+  records. The statement changes data only, so the schema hash is unchanged.
+- **The running build is reported.** `/healthz`, `/v1/health`, `/health` and
+  `/.well-known/mailmoose` carry a `build` value (the commit passed as
+  `MAILMOOSE_BUILD`, otherwise the build timestamp), so a deployed instance can
+  be identified without shell access.
+- **A folder keeps its id when it is renamed, or when a folder above it is
+  renamed.** Renaming a parent used to re-mint the `fld_...` id of every folder
+  beneath it, so a client holding a child id then got `404 folder not found`.
+  The renamed folder and its whole subtree now keep their ids (only `path` and
+  `parent_path` change), for every inbox kind: a domain inbox, Gmail, Outlook,
+  IMAP and One. A Gmail label id and an Outlook folder entry id survive a rename
+  at the provider, so they are reused rather than replaced; an IMAP rename
+  carries its subtree in the local index first, since an IMAP mailbox has no
+  stable folder identity. The rename response still returns only the renamed
+  folder, so re-read `GET /v1/inboxes/{id}/folders` for descendant paths.
+
+- **A domain inbox's folders report their real message counts.** The folder
+  list only ever filled `message_count` and `unread_count` from the connected
+  inbox's remote index, which holds nothing for a local mailbox, so every
+  folder of a domain inbox reported `0` while its listing returned rows. Each
+  role is now counted with the same membership rule the listing applies (Spam
+  is spam-classified mail, Trash is trashed mail, Sent is completed outbound
+  mail, and Inbox includes the unfiled bucket), so a count is the size of the
+  view a client gets from `folder=<id>`.
+- **An IMAP custom folder can be renamed.** A rename proposes a name that
+  exists nowhere yet, and the scope check only admitted existing folders, so
+  every rename — top-level or nested — answered `400` with "renamed folder
+  would leave the mailbox scope". Rename now admits a new name by the same rule
+  creation uses.
+- **Creating a nested folder no longer hides its parent.** A folder create
+  mirrored only the new path, and the folder reconcile replaces the remote set,
+  so the empty parent (and every sibling) was pruned from the tree and could no
+  longer be addressed. A create and a rename now re-read the discovered tree
+  and reconcile it whole, so a parent survives its child and a rename carries
+  its children.
+- **A move to Trash lands without two extra IMAP round-trips.** The move
+  re-selected the destination for a `UIDVALIDITY` the last sync already
+  recorded, then opened a second connection to refresh the header of the
+  message it had just written. Both are skipped: the cached tree supplies the
+  destination validity (with a live `SELECT` only as fallback) and the moved
+  message is reported from the move's own write.
+- **An Outlook category can be renamed and deleted.** Both were refused with
+  `409 unsupported_operation`, attributed to the provider, although Graph
+  supports `PATCH` and `DELETE` on a master category. Both operations are now
+  applied on the provider, addressed by Graph's category id, and the local
+  catalogue follows; `rename_labels` and `delete_labels` are true for an
+  Outlook inbox.
+- **The legacy `folder=<path>` form finds the same mail as the id form.** A
+  path selector (`folder=Spam`) was only resolved from a folder's stable
+  `fld_…` id, so on a domain inbox it kept an exact-placement filter the
+  classification never populates and answered 0 rows while `folder=<Spam id>`
+  listed the mail. Folder selectors now resolve a legacy path to the same
+  folder row on the inbox-scoped, account-wide, search, thread and Folder-tab
+  reads, then apply the same membership rule; on an account-wide query without
+  `inbox=` the path resolves only when one inbox uniquely holds it, while a
+  path several inboxes share keeps its compatibility behaviour (connected
+  inboxes narrowed by path).
+- **The Spam folder lists its mail on a domain inbox.** `folder=<Spam id>`
+  selected the folder by exact `mailbox_id` placement, but marking a message
+  Spam records `is_spam` without filing it, so the folder looked empty while
+  `spam=true` found the same message. The Spam folder now uses the Spam role's
+  membership rule (spam-classified mail) on the API and in the reader's Folder
+  tab, so the folder and the role selector agree.
+- **The domain Sent folder lists its mail again.** `folder=<Sent id>` on a
+  domain inbox returned an empty list for sends completed before explicit
+  filing, because the folder filter matched the exact `mailbox_id` placement
+  that those rows never had while every projection (including the listing the
+  rows came from) still counts them as Sent by the role rule. All folder-scoped
+  domain reads now select Sent by its membership rule — completed outbound mail
+  in the inbox — through one shared mapping the account-wide, inbox-scoped,
+  search and inbox-thread routes all apply.
+- **A Gmail message deleted mid-pass no longer fails the whole sync.** Gmail
+  drops a deleted message's history entry asynchronously, so a change window can
+  still name a message that `messages.get` then answers 404 for. The deep index
+  reconcile treated that as a failed pass, so it retried the same window on every
+  pass and logged `remote sync ... status=error` each time (`gmail messages.get:
+  Gmail could not find the resource`), while cheap detection already skipped it.
+  Reconcile now drops the stale cached row and skips the message, as detection
+  does, so the index completes and the error stops recurring.
+- **A plain listing spans the whole mailbox on every inbox kind.** An unscoped
+  listing is no longer narrowed to a single default folder on a connected
+  mailbox: an Outlook inbox now returns the mail in every folder (user-created
+  folders included) rather than only its Inbox, and Outlook, IMAP, Gmail and
+  domain inboxes all apply the same Spam/Trash exclusion. A plain read is not a
+  Trash or Spam view anywhere.
+- **`folder=<fld_id>` and role filters compose the same way everywhere.** An
+  explicit folder is the location and `trashed`/`spam`/`direction` narrow it,
+  so `folder=<Sent>&direction=outbound` lists Sent, `folder=<Inbox>&trashed=true`
+  lists nothing, and `folder=<Trash>&trashed=true` still lists Trash. A `fld_…`
+  id is resolved to the provider's own folder for a connected mailbox instead of
+  being passed through as a provider id, which returned no rows. An unknown
+  folder id selects nothing.
+- **A completed send is filed in the Sent folder it reports.** Domain system
+  folders are seeded when the first send completes, so `folder=<Sent>` lists the
+  message instead of an empty folder. Completed sends recorded before that
+  filing began are now backfilled into the Sent folder on upgrade, so the
+  stored placement agrees with the membership rule the reads apply.
 - **Common mailbox contract before Beta 3.** Attachment listings now return
   descriptors with authenticated relative `download_url` values for both domain
   and connected mailboxes. Remote enumeration fetches size-limited MIME live,
@@ -39,6 +166,51 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Changed
 
+- **The hosted relay is named Tusk MX.** Antler MX is renamed to **Tusk MX**
+  everywhere it is shown: the receiving provider selector, the Dial MX setup
+  wizard and status view, the dashboard and domain log labels
+  (`Tusk: <host>`), and the docs. The new mail-flow diagram replaces the old
+  one. The `dialmx` provider, its `"service": "antler"` value and the legacy
+  manifest URL remain unchanged. Saved setups keep their receiver snapshots,
+  DNS records and live sessions; new enrolments use the renamed receivers as
+  described below. See **D082**.
+- **The docs call the product Mammoth Mail throughout.** Every reference in
+  `README.md` and `docs/` now uses the current name. Protocol and storage
+  identifiers keep their old spelling, because they are what the running code
+  actually emits and accepts: `X-MailMoose-*`, `/.well-known/mailmoose`,
+  `MAILMOOSE_BUILD`, `_mailmoose-mx` and the `github.com/dellarb/mailmoose`
+  module path.
+- **New Tusk MX setups enrol with the renamed Tusk receivers.** The receiver
+  set now points at `tusk1.hgolabs.com` and `tusk2.hgolabs.com` (receiver ids
+  `tusk-1`/`tusk-2`), so a setup saved from here publishes the new MX and TXT
+  records and mail flows through the renamed service. The manifest is the copy of
+  record at `endpoints.json`; the pre-rename `antler-endpoints.json` is kept at
+  the same path with the same receiver set, because older cores still fetch it
+  from there and its absence would send them to their compiled-in defaults. A
+  core that cannot fetch either manifest falls back to the embedded copy, which
+  carries the same two receivers. Existing setups are unaffected: each keeps the
+  receiver snapshot it enrolled with, so their published records and live
+  sessions do not move.
+- **Client-facing names are brand-free (API change explicitly approved).**
+  Webhook and forward headers are now `X-Mail-*` (for example
+  `X-Mail-Signature`), sent alongside the old `X-MailMoose-*` names during the
+  transition. Cloudflare Worker inbound headers are `X-Mail-*` and the old
+  names are still accepted. Agent discovery is
+  `GET /.well-known/mail-api` (the old path remains an alias) and the auth
+  realm is `mail-api`. The DNS proof record is `_mail-proof.<domain>`, and
+  environment variables and scripts use `MAIL_*`. GHCR images are
+  `mammothmail` and `mammothmail-remote-mx`. See **D161**.
+
+- **Product renamed to Mammoth Mail (API change explicitly approved).** The
+  approval authoring mode `mailmoose_approval` is now **`local_approval`**
+  everywhere it appears in the API, including `GET`/`PUT
+  /v1/inboxes/{id}/authoring`. Clients sending or reading the old value must
+  switch. Stored values are migrated (migration 004). The DNS proof record
+  moves from `_mailmoose-mx.<domain>` to **`_mail-proof.<domain>`** (D161):
+  every domain must republish it. The display name, environment variables,
+  client configuration path and script names change to Mammoth Mail /
+  `mammothmail`. See **D161**.
+
 - **Unsupported-operation error code (API change explicitly approved).**
   Unsupported mailbox operations keep HTTP **409**, but return
   `code: "unsupported_operation"` instead of `conflict`. Ordinary conflicts
@@ -47,7 +219,7 @@ All notable changes to MailMoose are documented here. This project follows
 - Inbox capabilities add `archive` (null-destination move) and `purge`
   (permanent deletion after Trash), independently of caller permissions and
   provider availability. `realtime` means provider push detection, not whether
-  the MailMoose event/SSE API is available. The Beta 3 onward v1 compatibility
+  the Mammoth Mail event/SSE API is available. The Beta 3 onward v1 compatibility
   policy is documented in `docs/API.md`.
 
 - **Outbound idempotency rejects mismatched reuse (API change explicitly
@@ -76,7 +248,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 - **API Beta 3 — folders and labels are now two separate things (API change
   explicitly approved).** A message's location is its `folder_id`: one stable
-  MailMoose folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its
+  Mammoth Mail folder id from `GET /v1/inboxes/{id}/folders`, or `null`. Its
   labels are the additive `label_ids` (`tag:Name` only). A folder id is no
   longer a label id: the `folder:<id>` catalogue identity is removed, the
   exclusive/system label classification is gone, and `label_ids` no longer
@@ -184,6 +356,35 @@ All notable changes to MailMoose are documented here. This project follows
 
 ### Fixed
 
+- **A message mutation answers with its result when it settles quickly.** A move,
+  delete, label change, read/spam change, restore, purge or seen call now waits
+  up to five seconds for its own action and returns the settled body (the
+  message, `204`, or `{id,seen}`). A provider slower than that still returns
+  `202` with the durable action and its `Location`, and `?wait=true` keeps its
+  30-second bound, so a 23-second IMAP move no longer looks like a failed write
+  to a client that reads straight back. The web UI stays asynchronous.
+- **Re-issuing a move does not queue it twice.** While an identical move is
+  pending or running, submitting it again returns the queued action instead of a
+  second one that would apply the move again.
+- **Deleting a folder that is already gone at the provider finishes locally.**
+  A provider answering "no such folder" (a retry after the first delete landed,
+  or an answer lost to a timeout) now prunes the cached row and reports success,
+  so the folder disappears from `GET /folders` and its parent stops refusing
+  deletion with `409`.
+- **A confirmed folder delete always updates the local index.** The prune and the
+  folder-tree mirror run on their own bounded context, so a client that gave up
+  or a gateway that timed out cannot leave a deleted folder cached. A folder
+  mutation with an unresolved provider outcome queues a reconcile instead of
+  waiting for an operator refresh.
+- **The Sent-placement backfill covers every inbox kind.** Migration `003` filed
+  completed sends into the Sent folder only for domain inboxes; it now applies to
+  a connected inbox's own Sent folder too, matching the placement every new send
+  records. The statement changes data only, so the schema hash is unchanged.
+- **The running build is reported.** `/healthz`, `/v1/health`, `/health` and
+  `/.well-known/mailmoose` carry a `build` value (the commit passed as
+  `MAILMOOSE_BUILD`, otherwise the build timestamp), so a deployed instance can
+  be identified without shell access.
+
 - Message placement changes now publish durable lifecycle events consistently,
   and pending or failed outbound messages no longer appear in Sent. Connected
   message listings also honor `has_attachment=false`, as well as `true`.
@@ -194,7 +395,7 @@ All notable changes to MailMoose are documented here. This project follows
   `message_count`, and all-read threads explicitly return `unread_count: 0`.
 
 - Direct MX's DNS instruction now points the client domain at the hostname in
-  MailMoose's configured receiving URL (or public URL), not the separately
+  Mammoth Mail's configured receiving URL (or public URL), not the separately
   configurable SMTP greeting hostname.
 - Remote MX setup now saves the account connection, domain selection and spam
   policy in one submission. Validation errors reopen Receiving with non-secret
@@ -319,7 +520,7 @@ All notable changes to MailMoose are documented here. This project follows
 
 ## [0.1.0-beta.1] - 2026-10-20
 
-Initial release of MailMoose: self-hosted email infrastructure for people and
+Initial release of Mammoth Mail: self-hosted email infrastructure for people and
 AI agents. Run it as one container, manage inboxes on your domains or connect
 existing mailboxes, and give agents scoped access to read and send mail—with
 approval controls when you need them.

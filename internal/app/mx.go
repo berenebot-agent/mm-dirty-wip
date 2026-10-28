@@ -59,7 +59,7 @@ func (s *Service) ResolveMXRecipients(ctx context.Context, recipients []string) 
 // family keeps the operator's choice authoritative without leaking existence:
 // if neither spelling resolves, the recipient is still reported unknown.
 //
-// "dialmx" (the hosted Antler MX service) is deliberately NOT part of the
+// "dialmx" (the hosted Tusk MX service) is deliberately NOT part of the
 // family: a domain routed to the hosted service must not be accepted by a
 // self-hosted receiver, or vice versa.
 func selfHostedReceivingProviders(provider string) []string {
@@ -163,7 +163,7 @@ type MXIngestInput struct {
 	ProviderMessageID string
 	// ReceiverURL is the canonical base URL of the receiver session the message
 	// arrived on, used to label the activity-log source with the concrete
-	// receiver (for example "Antler: antler1.hgolabs.com").
+	// receiver (for example "Tusk: tusk1.hgolabs.com").
 	ReceiverURL string
 }
 
@@ -432,7 +432,7 @@ func (s *Service) ingestMXRecipient(ctx context.Context, routingProvider string,
 // mxSourceLabel composes the activity-log source label for one MX-family
 // delivery: the human name of the receiving path. Direct MX and Remote MX use
 // their short provider names; a Dial MX domain names the concrete receiver — an
-// Antler shared receiver is labelled "Antler: <host>" from the configured
+// Tusk shared receiver is labelled "Tusk: <host>" from the configured
 // receiver matching the session URL, and a custom receiver falls back to its
 // dialed host. A receiver URL with no configured match still yields a usable
 // host-based label.
@@ -457,13 +457,13 @@ func (s *Service) mxSourceLabel(ctx context.Context, binding store.InboundBindin
 	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
 		for _, r := range AntlerReceiversFromConfig(values) {
 			if r.SessionURL == receiverURL && r.SMTPHostname != "" {
-				return "Antler: " + r.SMTPHostname
+				return "Tusk: " + r.SMTPHostname
 			}
 		}
 		if host == "" {
-			return "Antler MX"
+			return "Tusk MX"
 		}
-		return "Antler: " + host
+		return "Tusk: " + host
 	}
 	if host == "" {
 		return "Dial MX"

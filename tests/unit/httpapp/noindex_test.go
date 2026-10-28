@@ -49,7 +49,7 @@ func TestNoIndexSkipsAPIAndDiscovery(t *testing.T) {
 		{"/login", "noindex, nofollow"},
 		{"/setup", "noindex, nofollow"},
 		{"/v1/health", ""},
-		{"/.well-known/mailmoose", ""},
+		{"/.well-known/mail-api", ""},
 		{"/openapi.json", ""},
 	} {
 		rr := httptest.NewRecorder()

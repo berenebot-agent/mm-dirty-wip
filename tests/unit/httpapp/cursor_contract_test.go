@@ -72,3 +72,23 @@ func TestListingCursorsFailClosed(t *testing.T) {
 		}
 	}
 }
+
+// TestAccountWideListingsBoundHugeLimit guards the merged listings against an
+// unbounded limit sizing their up-front allocations: before the clamp,
+// limit=1000000000 reserved gigabytes and took the process down.
+func TestAccountWideListingsBoundHugeLimit(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	key := adminKey(t, svc, u)
+	seedInbound(t, svc, box, "huge-limit", "<huge-limit@test>", "huge limit", "huge limit")
+	for _, path := range []string{"/v1/messages", "/v1/threads", "/v1/search?q=huge"} {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		rr := apiGet(t, h, path+sep+"limit=1000000000", key)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+	}
+}

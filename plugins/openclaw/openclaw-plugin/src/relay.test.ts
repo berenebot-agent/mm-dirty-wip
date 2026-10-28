@@ -10,7 +10,7 @@ test("websocketUrl maps http(s) to ws(s) and keeps only the relay path", () => {
 
 // The relay bearer must stay byte-compatible with internal/hermesrelay:
 // base64url("<gatewayId>:<exp>:<hex hmac-sha256 of "gatewayId:exp">").
-test("relayBearer matches the MailMoose upgrade token format", () => {
+test("relayBearer matches the Mammoth Mail upgrade token format", () => {
   const gatewayId = "gw-oc-test";
   const secret = "s3cret";
   const now = 1_800_000_000_000; // fixed clock

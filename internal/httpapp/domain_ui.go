@@ -30,7 +30,7 @@ type domainEditorView struct {
 	ProviderLabel string
 	// SelectLabel is the longer label shown in the provider <select>. It falls
 	// back to ProviderLabel when empty, so only providers that distinguish a
-	// short label from a descriptive choice set it (Antler MX).
+	// short label from a descriptive choice set it (Tusk MX).
 	SelectLabel string
 	Fields      []transport.ConfigField
 	WebhookURL  string
@@ -69,7 +69,7 @@ type domainEditorView struct {
 
 // dkimInlineView is the inline DKIM panel shown in the Direct MX sending editor
 // once signing is on. It carries the record to publish and the domain the key
-// record belongs to, in the same shape as the Antler MX setup records so both
+// record belongs to, in the same shape as the Tusk MX setup records so both
 // read identically.
 type dkimInlineView struct {
 	Selector string
@@ -223,7 +223,7 @@ func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID, 
 }
 
 // domainReceivingEditors is the receiving counterpart of domainSendingEditors.
-// Antler MX, Direct MX and Remote MX lead in that order; the rest follow
+// Tusk MX, Direct MX and Remote MX lead in that order; the rest follow
 // alphabetically by display label.
 func (s *Server) domainReceivingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
 	out := []*domainEditorView{}
@@ -263,7 +263,7 @@ func sortDomainEditors(editors []*domainEditorView, priorities map[string]int) {
 
 // receivingProviderLabel is the short label the dashboard's Receiving cell shows
 // for a provider. Dial MX needs dialMXCustom because one provider carries two
-// labels: the hosted relay keeps its registered "Antler MX" description, while a
+// labels: the hosted relay keeps its registered "Tusk MX" description, while a
 // custom receiver set is the operator's own receiver and reads "Dial MX". Every
 // other provider uses its registered description, and "" means nothing is
 // configured. The page render and the live dashboard snapshot share this one
@@ -1132,7 +1132,7 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 		e.WebhookStep = 2
 	}
 	// A provider may supply a longer, descriptive picker label than its short
-	// Description(): Antler MX states its zero-config nature, Remote MX states
+	// Description(): Tusk MX states its zero-config nature, Remote MX states
 	// that the receiver is the account's own.
 	e.SelectLabel = transport.InboundSelectLabel(t)
 	applyGeneratedFields(e)
@@ -1181,7 +1181,7 @@ func (s *Server) receivingEditorState(ctx context.Context, accountID, domainID, 
 	}
 	if dec, err := s.Service.DecryptDomainReceivingConfig(cfg); err == nil {
 		overlayNonSecret(values, fields, dec)
-		// A pre-Antler Dial MX config has receiver URLs but no service choice.
+		// A pre-Tusk Dial MX config has receiver URLs but no service choice.
 		// Prefill it as custom so saving the form cannot silently migrate it.
 		if provider == "dialmx" {
 			if _, ok := dec["service"]; !ok {
@@ -1251,7 +1251,7 @@ func domainReceivingSteps(provider string) []string {
 			"Paste the webhook URL shown here.",
 			"Under events, tick email.received only.",
 			"Click Add, reopen the webhook, and copy its signing secret (whsec_...).",
-			"In Resend, open API Keys and create a key with Full access so MailMoose can retrieve received email content. Paste that key and the webhook signing secret below, then save in MailMoose.",
+			"In Resend, open API Keys and create a key with Full access so Mammoth Mail can retrieve received email content. Paste that key and the webhook signing secret below, then save in Mammoth Mail.",
 		}
 	case "mailgun":
 		return []string{
@@ -1260,7 +1260,7 @@ func domainReceivingSteps(provider string) []string {
 			"Choose Match Recipient and match all addresses at this domain (not other domains).",
 			"Enable the Forward action and paste this webhook URL exactly as shown. Its raw-mime suffix tells Mailgun to deliver the full original email.",
 			"Click Create Route to save it. In Mailgun, open API Security from the profile menu and copy the HTTP webhook signing key (not an API key or domain sending key).",
-			"Paste the HTTP webhook signing key below, then save in MailMoose.",
+			"Paste the HTTP webhook signing key below, then save in Mammoth Mail.",
 		}
 	case "sendgrid":
 		return []string{
@@ -1273,15 +1273,15 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "postmark":
 		return []string{
-			"Save in MailMoose first to generate a webhook username and password. The next dialog shows the authenticated webhook URL once, with the remaining Postmark setup steps.",
+			"Save in Mammoth Mail first to generate a webhook username and password. The next dialog shows the authenticated webhook URL once, with the remaining Postmark setup steps.",
 			"Do not use the bare ingest URL: Postmark requires the generated username and password in the webhook URL.",
 		}
 	case "dialmx":
 		return []string{
-			"Choose Antler MX for the zero-config free relay, or Custom receiver URLs to point at your own receiver.",
-			"For Antler MX, enter a contact email and save; the MX and TXT records to publish are then shown in this dialog.",
+			"Choose Tusk MX for the zero-config free relay, or Custom receiver URLs to point at your own receiver.",
+			"For Tusk MX, enter a contact email and save; the MX and TXT records to publish are then shown in this dialog.",
 			"For a custom service, add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
-			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain> and the shown MX records.",
+			"Save to generate the domain key, then publish the shown MM1 TXT record at _mail-proof.<this-domain> and the shown MX records.",
 			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
 			"Choose moderate or hard receiver authentication enforcement, then save.",
 		}

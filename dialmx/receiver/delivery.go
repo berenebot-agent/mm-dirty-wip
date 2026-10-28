@@ -213,7 +213,7 @@ func (rc *resolveCompletion) finish(t *transaction, ctx context.Context, started
 	if rc.reason != "" {
 		args = append(args, "reason", rc.reason)
 	}
-	// Antler MX registration metadata, when present, ties each routing decision
+	// Tusk MX registration metadata, when present, ties each routing decision
 	// to the operator contact that supplied it. It is metadata, not authority.
 	if rc.contactEmail != "" || rc.setupID != "" {
 		args = append(args, "contact_email", rc.contactEmail, "setup_id", rc.setupID)
@@ -518,7 +518,7 @@ func (t *transaction) logHandoffResult(ctx context.Context, c *connection, tx ui
 	if rr.Reason != "" {
 		args = append(args, "reason", boundedField(rr.Reason))
 	}
-	// The recipient's pinned binding ties the durable outcome to its Antler MX
+	// The recipient's pinned binding ties the durable outcome to its Tusk MX
 	// registration metadata, so a per-recipient export can be aggregated by
 	// contact without parsing the handoff group record.
 	if b := t.accepted[strings.ToLower(rr.Recipient)]; b != nil && (b.contactEmail != "" || b.setupID != "") {

@@ -22,7 +22,7 @@ type MetadataSyncStatus struct {
 	Indexed  int64  `json:"indexed"`
 	Total    int64  `json:"total"`
 	// EstimatedTotal marks Total as approximate: Gmail/One report a count over
-	// every label while MailMoose indexes a folder subset, so the denominator is
+	// every label while Mammoth Mail indexes a folder subset, so the denominator is
 	// an estimate and the UI shows it as such.
 	EstimatedTotal bool      `json:"estimated_total,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`

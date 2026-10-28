@@ -44,7 +44,7 @@ type domainConfigResponse struct {
 	// Instructions are the copy-ready DNS records for the setup (Dial MX only).
 	Instructions *dialMXDNSInstructions `json:"instructions,omitempty"`
 	// UnexpectedMX lists published MX hostnames that are not one of the domain's
-	// configured Antler receivers (Dial MX only). It is returned only when the
+	// configured Tusk receivers (Dial MX only). It is returned only when the
 	// caller asked for the published-record checks (?dns=1) and is independent of
 	// Instructions, so the dashboard's amber warning and the status dialog's
 	// warning are driven by the same single verdict.
@@ -54,8 +54,8 @@ type domainConfigResponse struct {
 	// verdict. The status dialog uses it to re-read instead of showing a stale
 	// "additional MX servers" warning until its next poll.
 	DNSStale bool `json:"dns_stale,omitempty"`
-	// AntlerManifest is where the domain's snapshotted Antler MX receiver set came
-	// from (Dial MX Antler only): github, cache or embedded, with the fetch time.
+	// AntlerManifest is where the domain's snapshotted Tusk MX receiver set came
+	// from (Dial MX Tusk only): github, cache or embedded, with the fetch time.
 	// The setup dialog states it so an operator can tell a live GitHub fetch from
 	// the built-in defaults.
 	AntlerManifest *antlerManifestView `json:"antler_manifest,omitempty"`
@@ -96,7 +96,7 @@ type domainDNSView struct {
 }
 
 // dialMXDNSInstructions is the copy-ready DNS set for a domain's Dial MX
-// setup. For an Antler MX setup it lists both the MX records to publish and the
+// setup. For a Tusk MX setup it lists both the MX records to publish and the
 // TXT verification record; for a custom service it lists the TXT record and
 // leaves the MX hostnames to the operator.
 type dialMXDNSInstructions struct {
@@ -362,7 +362,7 @@ func (s *Server) domainSendingResponse(ctx context.Context, domainID string, cfg
 	if strings.EqualFold(cfg.Provider, mx.Provider) {
 		// The DKIM record an operator must publish. The public key is derived
 		// from the stored private key, so a stored key can never be presented
-		// alongside a public key that does not match what MailMoose signs with.
+		// alongside a public key that does not match what Mammoth Mail signs with.
 		if keyPEM, _ := dec[mx.FieldDKIMPrivateKey].(string); strings.TrimSpace(keyPEM) != "" {
 			if key, kerr := dkimsign.ParsePrivateKey(keyPEM); kerr == nil {
 				if pubPEM, perr := dkimsign.PublicKeyPEM(key); perr == nil {

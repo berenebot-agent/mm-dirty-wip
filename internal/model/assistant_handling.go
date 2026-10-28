@@ -4,7 +4,7 @@ import "time"
 
 // Per-inbox authoring modes. A standalone inbox defaults to RemoteDraft: requests
 // to send are handed off one-way to the connected remote server's Drafts folder
-// and are never sent by MailMoose. A domain inbox uses MailMooseApproval: the
+// and are never sent by Mammoth Mail. A domain inbox uses LocalApproval: the
 // in-product approval workflow, with UI/API decisions and tokenized email
 // approval. RemoteDraft is a standalone-inbox concept — it requires a connected
 // remote Drafts folder — so it is preset (not selectable) for a domain inbox and
@@ -13,31 +13,31 @@ import "time"
 // The mode is snapshotted onto each request at creation, so flipping the inbox
 // setting never changes an in-flight request.
 const (
-	// AuthoringMailMooseApproval is the MailMoose local approval workflow.
-	AuthoringMailMooseApproval = "mailmoose_approval"
+	// AuthoringLocalApproval is the Mammoth Mail local approval workflow.
+	AuthoringLocalApproval = "local_approval"
 	// AuthoringRemoteDraft is the one-way handoff to the connected remote Drafts.
 	AuthoringRemoteDraft = "remote_draft"
 )
 
 // DefaultAuthoringMode returns the authoring mode an inbox kind defaults to:
 // a standalone inbox hands off to its connected remote Drafts, a domain inbox
-// uses the MailMoose approval workflow.
+// uses the Mammoth Mail approval workflow.
 func DefaultAuthoringMode(kind string) string {
 	if kind == InboxKindStandalone {
 		return AuthoringRemoteDraft
 	}
-	return AuthoringMailMooseApproval
+	return AuthoringLocalApproval
 }
 
 // ValidAuthoringMode reports whether a string is a known authoring mode.
 func ValidAuthoringMode(mode string) bool {
-	return mode == AuthoringMailMooseApproval || mode == AuthoringRemoteDraft
+	return mode == AuthoringLocalApproval || mode == AuthoringRemoteDraft
 }
 
 // AuthoringModeAllowedForKind reports whether a mode may be stored on an inbox
 // of the given kind. RemoteDraft is meaningful only for a standalone inbox (a
 // domain inbox has no connected remote Drafts folder), so a domain inbox is
-// preset to MailMooseApproval rather than offering the selector.
+// preset to LocalApproval rather than offering the selector.
 func AuthoringModeAllowedForKind(kind, mode string) bool {
 	if kind != InboxKindStandalone && mode == AuthoringRemoteDraft {
 		return false
@@ -60,7 +60,11 @@ func NormalizeAuthoringMode(kind, stored string) string {
 // RemoteDraft handoff. It is set on the appended draft and searched back on the
 // remote server to confirm an append whose outcome is uncertain. It is never an
 // approval token.
-const HandoffHeader = "X-MailMoose-Handoff-ID"
+const HandoffHeader = "X-Mail-Handoff-ID"
+
+// LegacyHandoffHeader is the pre-rename spelling, still written on drafts
+// appended before the rename; readers accept both.
+const LegacyHandoffHeader = "X-MailMoose-Handoff-ID"
 
 // Remote handoff publication states. They record whether the frozen draft was
 // actually appended to the remote Drafts folder. Because a provider may not

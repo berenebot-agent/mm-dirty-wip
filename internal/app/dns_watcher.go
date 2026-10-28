@@ -23,9 +23,9 @@ import (
 const dnsDemandFloor = 10 * time.Second
 
 // DNSWatcher is the single owner of every domain's published-record verdict:
-// the receiving checks for a Dial MX domain (the `_mailmoose-mx` TXT check and
+// the receiving checks for a Dial MX domain (the `_mail-proof` TXT check and
 // the MX routing check, including the "extra MX" hosts that are not one of the
-// domain's Antler receivers) and the sending check for a Direct MX domain that
+// domain's Tusk receivers) and the sending check for a Direct MX domain that
 // signs outbound mail (its `_domainkey` public-key record). It diffs each
 // verdict against the last one it published and publishes a transient
 // mx.dns_changed event only when it changes. The dashboard lights and the setup
@@ -79,7 +79,7 @@ func (s *Service) DNSState(domainID string) (DNSVerdict, bool) {
 }
 
 // ExtraMXState returns just the unexpected-MX host list from the shared verdict:
-// published MX hostnames that are not one of the domain's Antler receivers. It is
+// published MX hostnames that are not one of the domain's Tusk receivers. It is
 // the projection the dashboard light turns amber on.
 func (s *Service) ExtraMXState(domainID string) ([]string, bool) {
 	v, ok := s.DNSState(domainID)
@@ -327,7 +327,7 @@ func (w *DNSWatcher) addReceivingChecks(ctx context.Context, verdict *DNSVerdict
 		}
 	}
 
-	// The MX check applies only to an Antler setup with configured receivers; a
+	// The MX check applies only to a Tusk setup with configured receivers; a
 	// custom-service domain leaves the MX hostnames to its own operator.
 	receivers := AntlerReceiversFromConfig(values)
 	expected := make([]string, 0, len(receivers))

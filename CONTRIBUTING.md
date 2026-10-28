@@ -1,4 +1,4 @@
-# Contributing to MailMoose
+# Contributing to Mammoth Mail
 
 Thanks for your interest. This is a beta project with a deliberately small scope.
 
@@ -8,15 +8,15 @@ a public issue for a suspected vulnerability.
 ## Prerequisites
 
 Docker is required. Go is intentionally **not** installed on the host; all Go
-commands run in a container through `./mailmoose-go.sh`.
+commands run in a container through `./mammothmail-go.sh`.
 
 ## Development commands
 
 ```bash
 ./tests/run.sh --unit                         # tests (captured; see docs/TESTING.md)
 make test                                     # same, via the runner
-./mailmoose-go.sh build ./cmd/...             # build server and mx
-./mailmoose-go.sh gofmt -w cmd internal       # format
+./mammothmail-go.sh build ./cmd/...             # build server and mx
+./mammothmail-go.sh gofmt -w cmd internal       # format
 ```
 
 For tiered runs with log capture and CI parity, use the unified runner:
@@ -50,7 +50,7 @@ CI fails on unformatted Go files. Before pushing, confirm the gate is clean:
 ```bash
 ./tests/run.sh --fmt          # same gate CI runs
 # or directly:
-./mailmoose-go.sh gofmt -l cmd internal tests dialmx
+./mammothmail-go.sh gofmt -l cmd internal tests dialmx
 ```
 
 Write Go with tabs, never spaces, and never collapse a block onto one line.
@@ -72,6 +72,6 @@ decision recorded in `docs/DECISIONS.md`.
 
 ## Licence
 
-MailMoose is licensed under the GNU Affero General Public License v3.0
+Mammoth Mail is licensed under the GNU Affero General Public License v3.0
 (AGPL-3.0). By contributing, you agree that your contributions are licensed
 under the same terms.

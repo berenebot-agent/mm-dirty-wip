@@ -52,7 +52,7 @@ func (r recordingResolver) LookupTXT(_ context.Context, name string) ([]string, 
 }
 
 func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
-	expected := []string{"antler1.example.test", "antler2.example.test"}
+	expected := []string{"antler1.example.test", "tusk2.example.test"}
 	for _, tc := range []struct {
 		name      string
 		published []*net.MX
@@ -62,9 +62,9 @@ func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 	}{
 		{
 			name:      "only our receivers",
-			published: []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "antler2.example.test.", Pref: 20}},
+			published: []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "tusk2.example.test.", Pref: 20}},
 			wantState: "ok",
-			wantMatch: []string{"antler1.example.test", "antler2.example.test"},
+			wantMatch: []string{"antler1.example.test", "tusk2.example.test"},
 		},
 		{
 			name:      "one receiver plus a rogue",
@@ -147,13 +147,13 @@ func TestCheckMXQueriesAbsoluteName(t *testing.T) {
 }
 
 // TestCheckTXTQueriesAbsoluteName proves the same for the TXT check: the
-// _mailmoose-mx name must be qualified or a search-suffix failure can mask its
+// _mail-proof name must be qualified or a search-suffix failure can mask its
 // absent answer as dns_error.
 func TestCheckTXTQueriesAbsoluteName(t *testing.T) {
 	var got string
 	res := recordingResolver{txt: func(name string) { got = name }}
 	CheckTXT(context.Background(), res, "example.test", "id", []byte("x"), "v=MM1")
-	if want := "_mailmoose-mx.example.test."; got != want {
+	if want := "_mail-proof.example.test."; got != want {
 		t.Fatalf("TXT lookup queried %q, want %q", got, want)
 	}
 }
@@ -213,7 +213,7 @@ func TestCheckTXTAgreesWithReceiverParser(t *testing.T) {
 // published, red (mismatch) when a different key is published, and dns_error
 // when the lookup cannot be completed.
 func TestCheckDKIM(t *testing.T) {
-	const name = "mailmoose._domainkey.example.test"
+	const name = "mammothmail._domainkey.example.test"
 	const want = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"
 	for _, tc := range []struct {
 		name    string

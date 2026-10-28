@@ -19,7 +19,7 @@ func guideFixture() []apispec.Route {
 
 func TestRenderAgentGuideHeadingsAndRoutes(t *testing.T) {
 	guide := apispec.RenderAgentGuide(guideFixture())
-	if !strings.HasPrefix(guide, "# MailMoose\n\n") {
+	if !strings.HasPrefix(guide, "# Mammoth Mail\n\n") {
 		t.Fatalf("guide does not start with the header: %q", guide)
 	}
 	if !strings.Contains(guide, "Authenticate with `Authorization: Bearer <key>`.") {

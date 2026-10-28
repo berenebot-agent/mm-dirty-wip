@@ -14,7 +14,7 @@ import (
 // TestDashboardConnectorLightRendersForDialMXOnly proves the dashboard's
 // Domains table draws the aggregate red/green connector light for a Dial MX
 // domain and leaves a non-Dial MX domain's Receiving cell untouched. With no
-// live manager the configured Antler receiver is only "connecting", and the
+// live manager the configured Tusk receiver is only "connecting", and the
 // light is red — the honest state when no receiver can be confirmed ready and
 // routed. (The red/green MX-gating logic itself is pinned by
 // TestDialMXHealthAggregatesReceiverStatus.)
@@ -66,7 +66,7 @@ func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 }
 
 // TestDashboardConnectorLightAbsentWithoutReceivers proves the aggregate light is
-// gated on the domain actually naming a receiver target. An Antler MX setup whose
+// gated on the domain actually naming a receiver target. A Tusk MX setup whose
 // receiver set is empty — the manifest advertised none, or the operator started
 // setup and abandoned it after the config was saved — must render no dot at all,
 // rather than a red "no inbound connector is ready / mail delivery is blocked"
@@ -140,7 +140,7 @@ func TestDashboardConnectorLightAbsentWithoutReceivers(t *testing.T) {
 
 // TestDashboardReceivingLabelNamesStoredProvider proves the live dashboard
 // snapshot names a domain's receiving provider as soon as one is stored, with no
-// receiver ready. The Antler MX setup wizard stores the provider on its first
+// receiver ready. The Tusk MX setup wizard stores the provider on its first
 // step, so an operator who starts a setup and cancels it part-way leaves a
 // configured domain: without the label the row keeps drawing its pre-open amber
 // "Add" beside the live light until a manual reload, even though the domain
@@ -185,7 +185,7 @@ func TestDashboardReceivingLabelNamesStoredProvider(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
-	if got := label(); got != "Antler MX" {
-		t.Fatalf("partly configured domain label = %q, want Antler MX", got)
+	if got := label(); got != "Tusk MX" {
+		t.Fatalf("partly configured domain label = %q, want Tusk MX", got)
 	}
 }

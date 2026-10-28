@@ -302,6 +302,16 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// The legacy path form reaches the same folder, so a typed or hand-built
+	// link answers the same listing the id form does.
+	if target == nil {
+		for i := range folders {
+			if folders[i].Path == folderID {
+				target = &folders[i]
+				break
+			}
+		}
+	}
 	if target == nil {
 		http.Error(w, "folder not found", 404)
 		return
@@ -823,7 +833,7 @@ func (s *Server) authoringSettingsByInbox(ctx context.Context, boxes []model.Inb
 			// Approver is enabled by the EFFECTIVE mode, not the kind. A
 			// remote-draft inbox has no approver: its request to send just places
 			// the draft in the connected Drafts folder.
-			"approver_enabled": settings.Mode == model.AuthoringMailMooseApproval,
+			"approver_enabled": settings.Mode == model.AuthoringLocalApproval,
 			"standalone":       box.Kind == model.InboxKindStandalone,
 		}
 		b, merr := json.Marshal(payload)
@@ -1096,7 +1106,7 @@ const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.I
 </form>
 </section>
 <section class="card"><h2>Special folders</h2>
-<p class="muted small">Each well-known role is mapped to a folder on the remote server. A role is mapped only when a folder is selected for it; MailMoose never invents a mapping. Select an existing folder or create the conventional one.</p>
+<p class="muted small">Each well-known role is mapped to a folder on the remote server. A role is mapped only when a folder is selected for it; Mammoth Mail never invents a mapping. Select an existing folder or create the conventional one.</p>
 <table class="dense"><thead><tr><th>Role</th><th>Mapped folder</th><th>Map an existing folder</th><th></th></tr></thead><tbody>
 {{range .RoleMappings}}<tr><td>{{.Role}}</td><td>{{if .Mapped}}{{.FolderName}} <span class="pill">mapped</span>{{else}}<span class="pill amber">missing</span>{{end}}</td>
 <td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="folder_id"><option value="">Select a folder…</option>{{range .Candidates}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="secondary btn-sm">Map</button></form></td>

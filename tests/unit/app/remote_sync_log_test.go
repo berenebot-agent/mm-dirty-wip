@@ -421,6 +421,60 @@ func TestGmailDetectionToleratesVanishedMessage(t *testing.T) {
 	}
 }
 
+// TestGmailReconcileToleratesVanishedMessage proves the deep index reconcile, not
+// just cheap detection, survives a history entry whose messages.get returns 404.
+// Gmail drops a deleted message's history entry asynchronously, so a change window
+// can still name a message that is already gone; treating that as a failed pass
+// left the index stuck on the same doomed window and errored a "remote sync" line
+// on every pass.
+func TestGmailReconcileToleratesVanishedMessage(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fixture := googleLogEnv(t)
+	ctx := context.Background()
+	sink := newSyncLogSink()
+	svc.Log = slog.New(sink)
+	var passes atomic.Int32
+	fixture.page = func() string {
+		if passes.Add(1) == 1 {
+			return "msg-gone"
+		}
+		return "msg-fine"
+	}
+
+	// Seed a cached row for the message that is about to vanish.
+	fixture.add("msg-gone")
+	if _, err := rm.ReconcileRemote(ctx, box.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	local, err := svc.Store.GoogleLocalID(ctx, box.AccountID, box.ID, "msg-gone")
+	if err != nil {
+		t.Fatalf("expected the cached row for msg-gone: %v", err)
+	}
+
+	// The next pass names msg-gone, but messages.get now 404s.
+	fixture.add("msg-fine")
+	fixture.vanish("msg-gone")
+	status, err := rm.ReconcileRemote(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatalf("reconcile after a vanished message failed: %v", err)
+	}
+	if status.Status != store.RemoteIndexComplete {
+		t.Fatalf("index status = %q, want complete", status.Status)
+	}
+	last := sink.syncRecords()[1]
+	_, loggedError := last["error"]
+	if last["status"] != "complete" || loggedError {
+		t.Fatalf("reconcile after a vanished message = %#v, want status=complete with no error", last)
+	}
+	// The stale cached row is dropped and the rest of the window is still indexed.
+	if _, err := svc.Store.GetRemoteMessage(ctx, box.AccountID, box.ID, local); err == nil {
+		t.Fatal("stale cached row for the vanished message was not removed")
+	}
+	if _, err := svc.Store.GoogleLocalID(ctx, box.AccountID, box.ID, "msg-fine"); err != nil {
+		t.Fatalf("live message in the same window was not indexed: %v", err)
+	}
+}
+
 // ---- fixtures ----
 
 // microsoftLogEnv builds a service with a Microsoft-connected standalone inbox
@@ -557,6 +611,9 @@ type googleLogFixture struct {
 	// gone holds message ids that history still names but whose fetch must 404,
 	// simulating a message deleted between the history snapshot and the get.
 	gone map[string]bool
+	// page, when set, names the one id reported as added in the change history,
+	// so a test can hand the reconcile a different window on each pass.
+	page func() string
 }
 
 func (f *googleLogFixture) add(id string) {
@@ -595,6 +652,11 @@ func (f *googleLogFixture) handle(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"historyId": "100", "emailAddress": "agent@remote.example"})
 	case strings.Contains(r.URL.Path, "/history"):
 		var hist []any
+		// The first history page names f.page, which the test rotates so the next
+		// pass walks a fresh change window rather than replaying the baseline one.
+		if f.page != nil {
+			hist = append(hist, map[string]any{"messagesAdded": []any{map[string]any{"message": map[string]any{"id": f.page()}}}})
+		}
 		for _, id := range f.messages {
 			hist = append(hist, map[string]any{"messagesAdded": []any{map[string]any{"message": map[string]any{"id": id}}}})
 		}

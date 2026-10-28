@@ -132,7 +132,7 @@ func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, passwor
 		now := nowText()
 		name := strings.TrimSpace(accountName)
 		if name == "" {
-			name = "MailMoose"
+			name = "Mammoth Mail"
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, name, quota, now); err != nil {
 			return model.User{}, false, err

@@ -1,10 +1,10 @@
 /**
- * MailMoose channel plugin object.
+ * Mammoth Mail channel plugin object.
  *
- * MailMoose is a dial-out email channel: the gateway runs one relay socket per
+ * Mammoth Mail is a dial-out email channel: the gateway runs one relay socket per
  * account, dispatches inbound mail through the shared turn kernel, and sends
  * replies back over the same socket. The channel declares a thread-first
- * messaging target (`thread:<id>`), matching one MailMoose email thread to one
+ * messaging target (`thread:<id>`), matching one Mammoth Mail email thread to one
  * OpenClaw conversation.
  */
 import {
@@ -21,63 +21,63 @@ import {
   DEFAULT_ACCOUNT_ID,
   listAccountIds,
   resolveDefaultAccountId,
-  resolveMailMooseAccount,
+  resolveMammothMailAccount,
 } from "./accounts.js";
-import { startMailMooseAccount, stopMailMooseAccount } from "./gateway.js";
-import { sendMailMooseText } from "./outbound.js";
-import { mailMooseSetupContract } from "./setup.js";
+import { startMammothMailAccount, stopMammothMailAccount } from "./gateway.js";
+import { sendMammothMailText } from "./outbound.js";
+import { mammothMailSetupContract } from "./setup.js";
 import {
-  buildMailMooseTarget,
-  looksLikeMailMooseTarget,
-  normalizeMailMooseTarget,
-  parseMailMooseTarget,
+  buildMammothMailTarget,
+  looksLikeMammothMailTarget,
+  normalizeMammothMailTarget,
+  parseMammothMailTarget,
 } from "./target.js";
-import type { CoreConfig, ResolvedMailMooseAccount } from "./types.js";
+import type { CoreConfig, ResolvedMammothMailAccount } from "./types.js";
 
-export const MAILMOOSE_CHANNEL_ID = "mailmoose" as const;
+export const MAIL_CHANNEL_ID = "mammothmail" as const;
 
 // External channels define their own metadata; getChatChannelMeta only knows
 // about bundled channel ids.
-export const mailMooseMeta: ChannelMeta = {
-  id: MAILMOOSE_CHANNEL_ID,
-  label: "MailMoose",
-  selectionLabel: "MailMoose (email)",
-  docsPath: "/channels/mailmoose",
-  blurb: "Give your agent its own email inbox through MailMoose.",
-  detailLabel: "MailMoose inbox",
+export const mammothMailMeta: ChannelMeta = {
+  id: MAIL_CHANNEL_ID,
+  label: "Mammoth Mail",
+  selectionLabel: "Mammoth Mail (email)",
+  docsPath: "/channels/mammothmail",
+  blurb: "Give your agent its own email inbox through Mammoth Mail.",
+  detailLabel: "Mammoth Mail inbox",
   systemImage: "envelope",
   markdownCapable: false,
   order: 60,
 };
 
-export const mailMooseConfigAdapter = {
+export const mammothMailConfigAdapter = {
   listAccountIds: (cfg: CoreConfig) => listAccountIds(cfg as never),
   resolveAccount: (cfg: CoreConfig, accountId?: string | null) =>
-    resolveMailMooseAccount({ cfg, accountId }),
+    resolveMammothMailAccount({ cfg, accountId }),
   defaultAccountId: (cfg: CoreConfig) => resolveDefaultAccountId(cfg as never),
-  isConfigured: (account: ResolvedMailMooseAccount) => account.configured,
+  isConfigured: (account: ResolvedMammothMailAccount) => account.configured,
   resolveAllowFrom: ({ cfg, accountId }: { cfg: CoreConfig; accountId?: string | null }) =>
-    resolveMailMooseAccount({ cfg, accountId }).allowFrom,
-} satisfies NonNullable<ChannelPlugin<ResolvedMailMooseAccount>["config"]>;
+    resolveMammothMailAccount({ cfg, accountId }).allowFrom,
+} satisfies NonNullable<ChannelPlugin<ResolvedMammothMailAccount>["config"]>;
 
-export const mailMoosePlugin: ChannelPlugin<ResolvedMailMooseAccount> = createChatChannelPlugin({
+export const mammothMailPlugin: ChannelPlugin<ResolvedMammothMailAccount> = createChatChannelPlugin({
   base: {
-    id: MAILMOOSE_CHANNEL_ID,
-    meta: mailMooseMeta,
+    id: MAIL_CHANNEL_ID,
+    meta: mammothMailMeta,
     capabilities: {
       chatTypes: ["direct", "channel"],
       threads: false,
       media: false,
       blockStreaming: false,
     },
-    reload: { configPrefixes: ["channels.mailmoose"] },
-    config: mailMooseConfigAdapter,
-    setupContract: mailMooseSetupContract,
+    reload: { configPrefixes: ["channels.mammothmail"] },
+    config: mammothMailConfigAdapter,
+    setupContract: mammothMailSetupContract,
     gateway: {
-      startAccount: startMailMooseAccount,
-      stopAccount: stopMailMooseAccount,
+      startAccount: startMammothMailAccount,
+      stopAccount: stopMammothMailAccount,
     },
-    status: createComputedAccountStatusAdapter<ResolvedMailMooseAccount>({
+    status: createComputedAccountStatusAdapter<ResolvedMammothMailAccount>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: ({ snapshot }) => ({
         ok: snapshot.configured,
@@ -97,30 +97,30 @@ export const mailMoosePlugin: ChannelPlugin<ResolvedMailMooseAccount> = createCh
       }),
     }),
     messaging: {
-      targetPrefixes: ["mailmoose", "mm"],
-      normalizeTarget: normalizeMailMooseTarget,
+      targetPrefixes: ["mammothmail", "mm"],
+      normalizeTarget: normalizeMammothMailTarget,
       inferTargetChatType: () => "channel",
       targetResolver: {
-        looksLikeId: looksLikeMailMooseTarget,
+        looksLikeId: looksLikeMammothMailTarget,
         hint: "<thread:<thread_id>>",
       },
       resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, replyToId, threadId }) => {
-        const parsed = parseMailMooseTarget(target);
+        const parsed = parseMammothMailTarget(target);
         return buildChannelOutboundSessionRoute({
           cfg,
           agentId,
-          channel: MAILMOOSE_CHANNEL_ID,
+          channel: MAIL_CHANNEL_ID,
           accountId,
           recipientSessionExact: false,
-          peer: { kind: "channel", id: buildMailMooseTarget(parsed) },
+          peer: { kind: "channel", id: buildMammothMailTarget(parsed) },
           chatType: "channel",
-          from: `mailmoose:${accountId ?? DEFAULT_ACCOUNT_ID}`,
-          to: buildMailMooseTarget(parsed),
+          from: `mammothmail:${accountId ?? DEFAULT_ACCOUNT_ID}`,
+          to: buildMammothMailTarget(parsed),
           threadId: threadId ?? parsed.id,
         });
       },
       resolveSessionConversation: ({ rawId }) => {
-        const parsed = parseMailMooseTarget(rawId);
+        const parsed = parseMammothMailTarget(rawId);
         return {
           id: parsed.id,
           baseConversationId: parsed.id,
@@ -133,9 +133,9 @@ export const mailMoosePlugin: ChannelPlugin<ResolvedMailMooseAccount> = createCh
   outbound: {
     base: { deliveryMode: "direct" },
     attachedResults: {
-      channel: MAILMOOSE_CHANNEL_ID,
+      channel: MAIL_CHANNEL_ID,
       sendText: async (ctx) => {
-        const messageId = await sendMailMooseText({
+        const messageId = await sendMammothMailText({
           cfg: ctx.cfg,
           accountId: ctx.accountId,
           to: String(ctx.to ?? ""),

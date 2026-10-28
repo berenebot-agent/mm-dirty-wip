@@ -60,7 +60,7 @@ import (
 //
 // The shared SMTP edge's mx * records use the same [MX] text format.
 //
-// Registration metadata: a core enrolled through a named shared service (Antler
+// Registration metadata: a core enrolled through a named shared service (Tusk
 // MX) supplies contact_email and setup_id on DomainAuth. Both are operational
 // metadata, never credentials — domain authority remains the DNS-anchored
 // Ed25519 proof. They are logged on the domain proof registration/renewal and

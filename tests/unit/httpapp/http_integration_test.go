@@ -28,6 +28,18 @@ import (
 
 func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {
 	t.Helper()
+	return httpFixtureWithActionWorker(t, true)
+}
+
+// httpFixtureWithoutActionWorker leaves queued message actions pending so tests
+// can exercise in-flight behavior without the live worker settling them first.
+func httpFixtureWithoutActionWorker(t *testing.T) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {
+	t.Helper()
+	return httpFixtureWithActionWorker(t, false)
+}
+
+func httpFixtureWithActionWorker(t *testing.T, runWorker bool) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {
+	t.Helper()
 	st, dir := testdb.OpenDir(t)
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
@@ -47,7 +59,11 @@ func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Do
 		t.Fatal(err)
 	}
 	seedInboundCredential(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
-	return svc, settledActionFixture(t, svc, app.NewRemoteMailboxService(svc), httpapp.New(svc, nil).Handler(), u.AccountID), u, d, b
+	h := httpapp.New(svc, nil).Handler()
+	if runWorker {
+		h = settledActionFixture(t, svc, app.NewRemoteMailboxService(svc), h, u.AccountID)
+	}
+	return svc, h, u, d, b
 }
 
 const (

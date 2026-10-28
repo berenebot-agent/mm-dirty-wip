@@ -26,7 +26,7 @@ type InboundRecord struct {
 	Inbox                                           model.Inbox
 	Provider, ProviderDeliveryID, ProviderMessageID string
 	// Source is the human label the activity log shows for where the message was
-	// received (for example a concrete Antler receiver or a webhook provider
+	// received (for example a concrete Tusk receiver or a webhook provider
 	// name). It is snapshotted on the inbound_delivery_log row.
 	Source            string
 	EnvelopeRecipient string

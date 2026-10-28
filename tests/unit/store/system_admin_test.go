@@ -22,7 +22,7 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	const first = "correct horse battery staple"
-	u, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", first, 50<<20)
+	u, changed, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", first, 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Re-applying identical credentials is a no-op and keeps the session.
-	if _, changed, err = s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", first, 50<<20); err != nil || changed {
+	if _, changed, err = s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", first, 50<<20); err != nil || changed {
 		t.Fatalf("no-op sync changed=%v err=%v", changed, err)
 	}
 	if _, _, err := s.SessionPrincipal(ctx, session); err != nil {
@@ -45,7 +45,7 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 	}
 	// Changing the password rotates the login and revokes existing sessions.
 	const second = "another correct horse battery staple"
-	if _, changed, err = s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", second, 50<<20); err != nil || !changed {
+	if _, changed, err = s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", second, 50<<20); err != nil || !changed {
 		t.Fatalf("password sync changed=%v err=%v", changed, err)
 	}
 	if _, _, err := s.SessionPrincipal(ctx, session); !errors.Is(err, store.ErrNotFound) {
@@ -58,7 +58,7 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 		t.Fatalf("new password rejected: %v", err)
 	}
 	// Changing the email rotates the login identity too.
-	if _, changed, err = s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", second, 50<<20); err != nil || !changed {
+	if _, changed, err = s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", second, 50<<20); err != nil || !changed {
 		t.Fatalf("email sync changed=%v err=%v", changed, err)
 	}
 	if _, err := s.AuthenticateUser(ctx, "admin@example.com", second); !errors.Is(err, store.ErrNotFound) {
@@ -81,7 +81,7 @@ func TestSyncSystemAdminAdoptsExistingUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	const rotated = "another correct horse battery staple"
-	u, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", rotated, 50<<20)
+	u, changed, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", rotated, 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestSyncSystemAdminPromotesAnOperatorAccount(t *testing.T) {
 	if op.IsAdmin {
 		t.Fatal("operator fixture unexpectedly already an account Admin")
 	}
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "op@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "op@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSyncSystemAdminMovesRoleOnEmailChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	first, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	first, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "root@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestSyncSystemAdminMovesRoleOnEmailChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "other@example.com", "correct horse battery staple", 50<<20)
+	u, changed, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "other@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestAdminResetRefusesSystemAdmin(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, _, err := s.SyncSystemAdmin(ctx, "Mammoth Mail", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func (Transport) Description() string {
 
 // SelectLabel is the longer provider-picker label (transport.SelectLabelProvider).
 // It makes the distinction from the installation Direct MX receiver explicit.
-func (Transport) SelectLabel() string { return "Remote MailMoose MX (your own receiver)" }
+func (Transport) SelectLabel() string { return "Remote Mammoth Mail MX (your own receiver)" }
 
 func (Transport) ConfigFields() []transport.ConfigField {
 	// The receiver computes SPF/DKIM/DMARC evidence on its own host; the core

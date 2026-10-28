@@ -2,18 +2,18 @@
 
 ## 1. System overview
 
-MailMoose is a self-hosted Go application with a web interface, REST API, SQLite database and message storage under `/data`. It supports mailboxes hosted on your domains and existing mailboxes connected through Gmail, Microsoft, One or IMAP.
+Mammoth Mail is a self-hosted Go application with a web interface, REST API, SQLite database and message storage under `/data`. It supports mailboxes hosted on your domains and existing mailboxes connected through Gmail, Microsoft, One or IMAP.
 
 ```text
 Incoming mail                         Existing mailboxes
 ├── Direct MX (SMTP)                  ├── Gmail / Google
-├── Antler MX (hosted receiver)       ├── Microsoft / Outlook
+├── Tusk MX (hosted receiver)         ├── Microsoft / Outlook
 ├── Mailgun / Resend / Postmark       ├── One / Gmail
-└── Cloudflare Email Routing         └── IMAP + SMTP
+└── Cloudflare Email Routing          └── IMAP + SMTP
              │                                   │
              ▼                                   ▼
       ┌─────────────────────────────────────────────┐
-      │                 MailMoose                   │
+      │                 Mammoth Mail                   │
       │ Domain inboxes    Connected mailbox index  │
       │ REST API          Web UI                    │
       │ Permissions       Drafts and approvals     │
@@ -25,7 +25,7 @@ Incoming mail                         Existing mailboxes
                (Hermes, OpenClaw, REST)
 ```
 
-Direct MX can use the SMTP receiver included with MailMoose. Antler MX receives SMTP on a hosted receiver while MailMoose connects outbound to it over encrypted HTTP/2. Other providers deliver through authenticated webhooks. Connected mailboxes remain hosted by their original providers: MailMoose indexes metadata and retrieves bodies when required.
+Direct MX can use the SMTP receiver included with Mammoth Mail. Tusk MX receives SMTP on a hosted receiver while Mammoth Mail connects outbound to it over encrypted HTTP/2. Other providers deliver through authenticated webhooks. Connected mailboxes remain hosted by their original providers: Mammoth Mail indexes metadata and retrieves bodies when required.
 
 The standard deployment uses one application container. A separate SMTP receiver is optional for more advanced deployments. The optional dedicated receiver HTTP listener runs in the same application process. See [Self-hosting](SELFHOSTING.md) and [Email providers](EMAIL_PROVIDERS.md).
 
@@ -311,7 +311,7 @@ Brevo HTTP API
 
 Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. Each domain owns at most one optional sending configuration (`domain_sending_configs`); there is no account-level connector pool, no reusable named credential, and no assignment selector, so a domain with no sending configuration queues mail instead of sending through another domain's provider. A queued send resolves the domain's current configuration at worker delivery time; if the domain has none, the message is held without consuming a retry attempt. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
-Generic SMTP applies bounded connect/read/write timeouts and can validate resolved destinations as public-routable before connecting. The same optional check guards HTTP provider clients and outbound webhooks. MailMoose is self-hosted-only: `ALLOW_PRIVATE_OUTBOUND=true` is the default, allowing private gateways, local relays, LAN receivers and local webhooks. An operator who wants to confine outbound traffic sets `ALLOW_PRIVATE_OUTBOUND=false`; the guard then applies at dial time, including hostname resolution. No webhook-specific override exists.
+Generic SMTP applies bounded connect/read/write timeouts and can validate resolved destinations as public-routable before connecting. The same optional check guards HTTP provider clients and outbound webhooks. Mammoth Mail is self-hosted-only: `ALLOW_PRIVATE_OUTBOUND=true` is the default, allowing private gateways, local relays, LAN receivers and local webhooks. An operator who wants to confine outbound traffic sets `ALLOW_PRIVATE_OUTBOUND=false`; the guard then applies at dial time, including hostname resolution. No webhook-specific override exists.
 
 A **standalone** inbox does not send through a managed domain. Its outbound is
 its own optional remote SMTP binding, resolved through the generic SMTP adapter
@@ -335,7 +335,7 @@ stays `partial` and un-pruned.
 
 ### Optional MX receiving edge
 
-An operator may enable direct-SMTP ingress. The `mailmoose-mx` edge (same
+An operator may enable direct-SMTP ingress. The `mammothmail-mx` edge (same
 module and image, separate non-root process) terminates SMTP, strictly frames
 and stages the original bytes and computes SPF/DKIM/DMARC evidence. The core
 connects outward over HTTP/2; private `single` mode uses a bearer key and optional
@@ -459,7 +459,7 @@ Use small in-process rate limiters for login and outbound-send endpoints. Accoun
 
 The application listens on plain HTTP inside its deployment network. A reverse
 proxy terminates public TLS and forwards the original scheme and host. Configure
-any proxy separately using its own documentation; MailMoose does not ship proxy
+any proxy separately using its own documentation; Mammoth Mail does not ship proxy
 configuration.
 
 A second HTTP listener defaults to `:8082` and serves only the inbound webhook connector and health checks. It can be disabled or assigned another port using `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The receiver can also terminate TLS using `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.

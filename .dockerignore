@@ -17,7 +17,7 @@ tests/logs
 # local `docker build` transfers hundreds of megabytes for nothing.
 **/node_modules
 server
-tests/fixtures/mailmoose-mx
+tests/fixtures/mammothmail-mx
 # `server` above is root-anchored on purpose: it prunes the root-level binary
 # only. Do not widen it to `**/server` — that would prune `cmd/server/` and
 # break the build.

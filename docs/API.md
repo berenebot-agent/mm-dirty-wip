@@ -1,4 +1,4 @@
-# MailMoose — API Contract
+# Mammoth Mail — API Contract
 
 This document describes the native API contract and its explicit compatibility
 surfaces. OpenAPI defines the operation schemas; the sections below explain
@@ -76,15 +76,18 @@ Example authorization result:
 
 ## 2. Discovery
 
-### `GET /.well-known/mailmoose`
+### `GET /.well-known/mail-api`
 
-Returns a compact discovery document:
+Returns a compact discovery document. `build` identifies the running binary (the
+commit stamped at build time, otherwise the build timestamp); `/healthz` reports
+the same value, so a deployed instance can be identified without shell access.
 
 ```json
 {
-  "name": "MailMoose",
+  "name": "Mammoth Mail",
   "api_version": "v1",
   "api_base": "/v1",
+  "build": "9d7d1ce",
   "auth": {"scheme": "bearer", "header": "Authorization", "key_prefix": "mmm_"},
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
@@ -186,7 +189,7 @@ human wizard with a BYO Google OAuth Web client; see
 [Google/Gmail setup](EMAIL_PROVIDERS.md#google--gmail).
 Google list views cache metadata and synchronize through the History API; body
 and attachment reads remain live. A message can occur in several Gmail views
-with the same stable ID, so MailMoose projects one canonical folder from the
+with the same stable ID, so Mammoth Mail projects one canonical folder from the
 Gmail system labels — Trash, Spam, Drafts, Inbox, Sent, first match wins — and
 reports the rest as additive labels. A Gmail inbox exposes exactly those five
 system destinations: there is no All Mail, no virtual folder and no derived
@@ -229,7 +232,7 @@ server) alike. Common message, thread, search and folder listings return the sha
 - An **account-wide** listing (no `inbox` scope) merges authorized sources by
   choosing their newest available heads, not by concatenating inboxes. Message
   and search continuations preserve each provider's native order and tie-breaks;
-  sorting a provider window by MailMoose IDs would break its continuation. The
+  sorting a provider window by Mammoth Mail IDs would break its continuation. The
   opaque cursor records source progress. A per-source failure is reported in
   `errors` and does not fail the page. Listings are not a frozen snapshot when
   messages change between requests.
@@ -251,7 +254,7 @@ Empty optional envelope fields (`next_cursor`, `errors`) may be omitted.
 | Labels | Persistent additive tags; no custom folders | Catalogue describes the additive labels/categories the mailbox supports; a folder is never a label |
 | Folders | System folders only | System folders, plus custom folders for Outlook and IMAP |
 | Permanent deletion | Supported after Trash | IMAP/Outlook subject to provider constraints; Google/One unsupported |
-| Assistant request-send | MailMoose approval | Remote draft by default; MailMoose approval can be configured |
+| Assistant request-send | Mammoth Mail approval | Remote draft by default; Mammoth Mail approval can be configured |
 | Sending identities | Primary, managed aliases and explicit domain grants | Connected address; no managed-domain alias grant |
 | Transport setup | Domain sending/receiving settings | Per-inbox connector or human OAuth setup |
 
@@ -290,8 +293,9 @@ folder and, separately, additive labels. The two are never mixed: a folder id
 is not a label id. The full contract, the per-provider matrix and the
 examples are in [§3b Folders and labels](#3b-folders-and-labels). In short:
 
-- `Message.folder_id` is the message's location: one stable MailMoose folder
-  id (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null`.
+- `Message.folder_id` is the message's location: one stable Mammoth Mail folder
+  id (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null` (see
+  [§3b](#two-things-never-mixed) for what "stable" covers).
 - `Message.label_ids` holds additive labels only (`tag:Name`), always present
   and empty for an IMAP inbox.
 - A folder carries a `role` (`folder`, `inbox`, `sent`, `drafts`, `trash`,
@@ -347,13 +351,13 @@ PUT /v1/inboxes/{id}/authoring
   `publication` state and never an approval token, notification state, or frozen
   content hash. Remote-draft handoffs do not send a notification email.
 - `GET`/`PUT /authoring` read/write the assistant authoring mode
-  (`mailmoose_approval` or `remote_draft`). A standalone inbox defaults to
-  `remote_draft`; a domain inbox is **preset** to `mailmoose_approval` —
+  (`local_approval` or `remote_draft`). A standalone inbox defaults to
+  `remote_draft`; a domain inbox is **preset** to `local_approval` —
   `remote_draft` is a standalone-only mode and is rejected (`400`) for a domain
   inbox. The mode is snapshotted onto each request. Setting a standalone inbox to
   `remote_draft` clears any approver. The read also reports `standalone` and
   `approver_enabled` (true exactly when the effective mode is
-  `mailmoose_approval`). The legacy `notify_address`/`notify_overridden` fields
+  `local_approval`). The legacy `notify_address`/`notify_overridden` fields
   are still returned but have no effect.
 
 For a standalone inbox, a message's body and attachments are fetched **live**
@@ -375,12 +379,15 @@ the earlier unified-label projection, where a folder was also a label and
 
 | Concept | Field | Shape | Meaning |
 |---|---|---|---|
-| Location | `folder_id` | one MailMoose folder id (`fld_...`) or `null` | the folder the message is filed in |
+| Location | `folder_id` | one Mammoth Mail folder id (`fld_...`) or `null` | the folder the message is filed in |
 | Labels | `label_ids` | array of `tag:Name` | additive metadata, several per message |
 
 - `folder_id` is **always present** and nullable: `null` means the message has
   no canonical folder. The ids are the ones `GET /v1/inboxes/{id}/folders`
-  returns, and they are stable.
+  returns, and they are stable: a folder keeps its id when it is renamed, and
+  when a folder above it is renamed (its `path` changes, its id does not). A
+  folder that is deleted and later recreated is a new folder with a new id, and
+  a message that moves to another folder reports that folder's id.
 - `label_ids` is **always present** and holds **additive labels only**. There
   is no system classification in it any more, and no `folder:<id>` identity:
   a folder id is never a label id, and `label_id` filters match labels only.
@@ -418,18 +425,18 @@ These describe mailbox support, not the caller's permissions or a guarantee that
 the provider is currently reachable. `archive` is true for domain and Google/One
 inboxes; `purge` is true for domain, IMAP and Microsoft inboxes. Purge still requires
 the proper role and a message already in Trash. `realtime` describes source-side
-push detection, not access to MailMoose's SSE/event endpoints.
+push detection, not access to Mammoth Mail's SSE/event endpoints.
 
 ### What each provider supports
 
-| | Domain (MailMoose) | Gmail | Outlook (Microsoft) | IMAP |
+| | Domain (Mammoth Mail) | Gmail | Outlook (Microsoft) | IMAP |
 |---|---|---|---|---|
 | Folders | system folders only | the five system folders only | system **and** custom | system **and** custom |
 | Custom folders | none — `create_folders`, `rename_folders`, `delete_folders` are false | none — same three are false | yes | yes |
 | `folder_id` | one canonical folder, may be `null` | one canonical folder, may be `null` | one physical folder, always present once indexed | one physical folder, always present once indexed |
-| Labels | MailMoose tags | Gmail user labels | Outlook categories | **none** |
+| Labels | Mammoth Mail tags | Gmail user labels | Outlook categories | **none** |
 | `label_ids` | `tag:Name` | `tag:Name` | `tag:Name` | `[]` |
-| Label create / rename / delete | yes / yes / yes | yes / yes / yes | yes / no / no | no / no / no |
+| Label create / rename / delete | yes / yes / yes | yes / yes / yes | yes / yes / yes | no / no / no |
 | Move a message | yes | yes | yes | yes |
 | Move with `folder_id: null` (archive) | yes | yes | no | no |
 
@@ -442,12 +449,14 @@ Spam or Trash; mail in a legacy custom folder has no canonical folder
 either, and carries the folder's name as a label instead (see
 [Existing mail](#existing-mail)).
 
-Outlook categories can be created, but the connector does not implement native
-category rename or deletion and advertises those operations as unsupported.
-Creating a category requires `MailboxSettings.ReadWrite` and uses the
-native master-category endpoint (see
-[Microsoft / Outlook](EMAIL_PROVIDERS.md#microsoft--outlook)); a mailbox
-connected before that grant was added must be reconnected once. A MailMoose
+Outlook categories are created, renamed and deleted natively on the provider,
+through the master-category endpoint (see
+[Microsoft / Outlook](EMAIL_PROVIDERS.md#microsoft--outlook)). A rename or a
+delete is applied to the category Graph has, so a client is never told a
+category changed when only a local copy did; deleting a category also removes it
+from every message carrying it. All three operations require
+`MailboxSettings.ReadWrite`, so a mailbox connected before that grant was added
+must be reconnected once. A Mammoth Mail
 domain inbox and a Gmail inbox have no custom folders at all, so folder
 creation, rename and delete are refused for them.
 
@@ -459,7 +468,7 @@ they are not canonical `label_ids` and cannot be applied or removed.
 
 ### Gmail: one deterministic folder, five system destinations
 
-Gmail can hold a message under several system labels at once, so MailMoose
+Gmail can hold a message under several system labels at once, so Mammoth Mail
 projects exactly one canonical folder, deterministically. The folder list of a
 Gmail inbox is these five system destinations and nothing else:
 
@@ -498,6 +507,14 @@ and **Sent, Drafts and Outbox are never move destinations** — a sent copy is
 produced by sending, a draft by the drafts API. A move into them is refused.
 A domain or Gmail inbox files only into its canonical system destinations; a
 move into any other folder is refused.
+
+A **rename** (`PATCH /v1/inboxes/{id}/folders/{folderId}`) keeps every folder id
+in the subtree: the renamed folder and each of its descendants keep the id a
+client may already hold, so no held id starts answering `404`. Their `path` and
+`parent_path` do change. The response carries only the renamed folder, so a
+client that displays child paths should re-read
+`GET /v1/inboxes/{id}/folders` after a rename rather than assume its cached
+paths are still current.
 
 `{"folder_id": null}` means **archive**, not "no folder": a domain inbox files
 the message in its archive (an internal destination, so the message then
@@ -605,7 +622,7 @@ user labels either way.
 }
 ```
 
-The folder id is a MailMoose id for the Outlook folder the message sits in;
+The folder id is a Mammoth Mail id for the Outlook folder the message sits in;
 the label is an Outlook category. A category can be created but not renamed
 or deleted.
 
@@ -689,7 +706,7 @@ omitted, not replaced by invented values. A known boolean `false` is distinct
 from an absent/unknown boolean. Empty optional strings and arrays are omitted.
 
 `inbox_kind` identifies the owning inbox (`domain` or `standalone`). `provider`
-identifies the mailbox implementation: `mailmoose` for a domain inbox, or
+identifies the mailbox implementation: `mammothmail` for a domain inbox, or
 `imap`, `google`, `microsoft`, or `one` for a connected inbox. These are
 informational metadata, not schema switches. `message_transport` names the
 message's receive/send transport for a domain inbox (for example `cloudflare`,
@@ -708,7 +725,7 @@ received/sent timestamps survive every projection. Unknown delivery `status`,
 `is_spam`, or `created_at` remain absent. `created_at` is not synthesized from
 receipt or indexing time; `indexed_at` can advance on a remote header refresh.
 
-`folder_id` is the message's canonical location: one stable MailMoose folder id
+`folder_id` is the message's canonical location: one stable Mammoth Mail folder id
 (`fld_...`) from `GET /v1/inboxes/{id}/folders`, or `null` when the message has
 no canonical folder. It is always present, and it uses the same projection on
 every inbox kind and route. A folder id is never a label id.
@@ -812,12 +829,20 @@ not a percentage. Sync rows have no action ID and cannot be retried/dismissed vi
 action endpoints. Metadata sync progress is safe state only; status reads do not
 fetch provider mail or expose credentials.
 
-Add `?wait=true` to wait up to 30 seconds. Successful PATCH/restore returns the
-updated message; delete/purge returns `204`; seen returns `{id,seen}`.
-A wait timeout returns `504` with the action handle; it does not cancel the job.
-Failed or uncertain actions return `409` with their action record. Submission
-checks mailbox scope and roles before enqueueing; purge still requires Trash.
-Clients that previously depended on immediate mutation must add `?wait=true`.
+A mutation answers synchronously when its action settles quickly: the request
+waits up to about five seconds and returns the settled body — the updated message
+for PATCH/move/restore, `204` for delete/purge, `{id,seen}` for seen. A provider
+call slower than that answers `202` with the durable action and its `Location`,
+so a slow IMAP move never holds the request open for the provider's own latency.
+Re-issuing the same move while it is still in flight returns that action instead
+of queueing a second one.
+
+Add `?wait=true` to wait up to 30 seconds instead. A wait timeout returns `504`
+with the action handle; it does not cancel the job. Failed or uncertain actions
+return `409` with their action record. Submission checks mailbox scope and roles
+before enqueueing; purge still requires Trash. The web UI always submits
+asynchronously and follows the queue.
+
 Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) starts a durable parent action
 that discovers Trash targets and purges them in background batches without a
 total batch cap. IMAP/Outlook enumerate provider-side Trash, not only the cache;
@@ -856,12 +881,24 @@ include_spam
 trashed
 ```
 
-`folder` scopes the listing to one canonical folder using the stable MailMoose
+`folder` scopes the listing to one canonical folder using the stable Mammoth Mail
 ID returned by the Folders API. The ID also scopes an account-wide query to its
-owning inbox. Legacy standalone folder paths remain accepted for compatibility.
-On the account-wide route it applies to the inbox named by `inbox=`; without that
-scope it narrows the connected (standalone) inboxes by folder path and leaves the
-local store unfiltered.
+owning inbox. Legacy folder paths remain accepted for compatibility and resolve
+to the same folder as the ID form wherever one inbox is named — directly, or on
+the account-wide route when exactly one inbox holds a folder of that path. A
+path several inboxes share (every mailbox has a `Spam`) cannot name a single
+inbox, so the account-wide form keeps its compatibility behaviour: it narrows
+the connected (standalone) inboxes by folder path and selects nothing from the
+local store.
+
+A listing with no `folder` spans **every folder of the mailbox**, not the Inbox
+alone: an Outlook or IMAP user-created folder and a Gmail view are included on
+the same terms as the system folders. The exceptions are `spam` and Trash, which
+are excluded by default (see below) unless `spam=true`/`include_spam=true` or
+`trashed=true` selects them. An explicit `folder` always stays the location, and
+a role filter then narrows it, so `folder=<fld_id>&trashed=true` selects that
+folder's trashed mail (usually none) rather than the mailbox's Trash. An unknown
+folder id selects nothing.
 
 `spam=true` lists only Spam; `include_spam=true` includes Spam and non-Spam.
 By default (neither set) Spam is excluded from ordinary reads. `trashed=true`
@@ -902,7 +939,7 @@ Normalized message:
   "id": "msg_01K...",
   "thread_id": "thr_01K...",
   "direction": "inbound",
-  "provider": "mailmoose",
+  "provider": "mammothmail",
   "message_transport": "mx",
   "snippet": "Hi...",
   "inbox_id": "in_01K...",
@@ -1201,9 +1238,9 @@ GET  /v1/send-requests?inbox={id}&active=true
   `draft.notification_sent`, `draft.notification_failed`.
 
 The inbox's **authoring mode** decides how a request is handled (snapshotted at
-creation). **MailMoose approvals** (domain default) is the workflow above.
+creation). **Mammoth Mail approvals** (domain default) is the workflow above.
 **Remote draft** (standalone default) just places the draft in the connected
-mailbox's remote Drafts folder: MailMoose never sends it, sends no notification
+mailbox's remote Drafts folder: Mammoth Mail never sends it, sends no notification
 email, and never involves an approver (switching a standalone inbox to
 `remote_draft` clears any approver). The handoff events are
 `draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`
@@ -1491,7 +1528,7 @@ POST /internal/ingest/postmark
 ```
 
 Each adapter authenticates the provider (Mailgun HMAC signature; Cloudflare
-bearer plus `X-MailMoose-Recipient`; Resend Svix signature headers;
+bearer plus `X-Mail-Recipient`; Resend Svix signature headers;
 Postmark HTTP Basic authentication)
 before parsing or persisting MIME, then converts delivery to the canonical
 `InboundMessage` with an explicit authenticated binding. Resend webhooks carry
@@ -1501,7 +1538,7 @@ verification. The legacy `/internal/ingest/mailgun` alias has been removed;
 
 Delivery idempotency is scoped to `(account_id, provider, canonical original
 envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated
-webhook `token`; Cloudflare uses `X-MailMoose-Delivery-ID` or a SHA-256 hash of
+webhook `token`; Cloudflare uses `X-Mail-Delivery-ID` or a SHA-256 hash of
 the raw MIME; Resend uses `data.email_id`. Unknown recipients route to the
 domain catch-all when configured; otherwise the endpoint returns `406`. Missing
 receiving configuration, unknown domains, and bad authentication return `401`.
@@ -1664,18 +1701,18 @@ accepts `"regenerate_secret": true`. Provider schemas:
   `mx: {"helo"}` (self-hosted only; one envelope recipient per message).
   (`security` is `starttls`, `tls`, or `plain`; `port` defaults to `587`).
 - receiving — `mailgun: {"signing_key"}`;
-  `cloudflare: {"webhook_secret"}` (generated by MailMoose);
+  `cloudflare: {"webhook_secret"}` (generated by Mammoth Mail);
   `resend: {"api_key","webhook_secret","api_base?"}`;
-  `postmark: {"username","password"}` (both generated by MailMoose);
+  `postmark: {"username","password"}` (both generated by Mammoth Mail);
   `sendgrid: {"public_key"}` (the base64 public key of the SendGrid Inbound
   Parse security policy);
   `remotemx: {}` (no config — the receiver's URL and bearer key are
   account-scoped and set through the account's Remote MX settings, not per
   domain);
   `dialmx: {"service?","contact_email?","receiver_urls?","enforcement?"}` —
-  `service` is `antler` (the zero-config Antler MX shared relay, the default) or
-  `custom`. Antler requires a valid `contact_email` and resolves the hosted
-  receiver set; supplying `receiver_urls` for Antler is a `400`, because the
+  `service` is `antler` (the zero-config Tusk MX shared relay, the default) or
+  `custom`. Tusk requires a valid `contact_email` and resolves the hosted
+  receiver set; supplying `receiver_urls` for Tusk is a `400`, because the
   receiver set is never caller-controlled. Custom requires one or more HTTPS
   `receiver_urls` and ignores `contact_email`. `receiver_urls` is a **string**,
   not an array: a comma-separated list of up to eight HTTPS base URLs, with no
@@ -1690,9 +1727,9 @@ interface shows:
 
 | `provider` value | Interface label | Direction |
 | --- | --- | --- |
-| `dialmx` | Antler MX (Dial MX for a custom receiver) | receiving |
+| `dialmx` | Tusk MX (Dial MX for a custom receiver) | receiving |
 | `mx` | Direct MX | receiving and sending |
-| `remotemx` | Remote MailMoose MX | receiving |
+| `remotemx` | Remote Mammoth Mail MX | receiving |
 | `cloudflare` | Cloudflare | receiving |
 | `mailgun` | Mailgun (Mailgun API when sending) | receiving and sending |
 | `postmark` | Postmark | receiving |
@@ -1701,11 +1738,11 @@ interface shows:
 | `brevo` | Brevo API | sending |
 | `smtp` | SMTP | sending |
 
-`dialmx` carries two services: `"service": "antler"` (the hosted Antler MX
+`dialmx` carries two services: `"service": "antler"` (the hosted Tusk MX
 relay, the default) and `"service": "custom"` (a receiver you run yourself,
 shared by many domains — the Dial MX option in
 [Remote SMTP receiving](REMOTE_MX.md)). The picker shows a longer description
-for Antler MX and Remote MX, and Direct MX's own description already names the
+for Tusk MX and Remote MX, and Direct MX's own description already names the
 bundled receiver; the name is the same in every case.
 
 A name is accepted only in its own direction — `remotemx` is a receiving
@@ -1715,7 +1752,7 @@ direction being saved is refused with a `400`.
 A blank secret on a same-provider save keeps the stored value; changing provider
 never reuses old fields or secrets. Non-secret fields are whole-config values:
 an omitted field takes the provider default or is a required-field error, never a
-merge. Saving performs no network or DNS validation, except that an Antler MX
+merge. Saving performs no network or DNS validation, except that a Tusk MX
 save resolves the endpoint manifest (with cached and embedded fallbacks).
 
 `GET` on an unconfigured slot returns
@@ -1727,10 +1764,10 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
 - `status[]` — per-receiver state learned over the core's outbound session:
   `receiver_url`, `state` (`ready`, `rejected`, `connecting`, `unavailable`, …),
   bounded `reason`, advertised `smtp_hostname` and `expires_at`. A receiver is
-  `ready` only once it has proved both domain authority (its `_mailmoose-mx` TXT
+  `ready` only once it has proved both domain authority (its `_mail-proof` TXT
   key) and routing (its own SMTP hostname is published in the domain's MX
   records). A receiver that is authorized but not routed reports
-  `rejected`/`not_mx`. For an Antler MX setup an unreachable receiver reports no
+  `rejected`/`not_mx`. For a Tusk MX setup an unreachable receiver reports no
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
   connector. `http_code` is the HTTP status the receiver URL answered the
@@ -1740,7 +1777,7 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   absent when the attempt was never answered.
 - `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
   `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
-  (published MX hostnames that are not Antler receivers), `state` (`ok`,
+  (published MX hostnames that are not Tusk receivers), `state` (`ok`,
   `not_found`, `mismatch`, `dns_error`) and a short `reason`. The checks are
   computed by a background watcher
   (bounded by a four-second timeout per lookup), so every read is an in-memory
@@ -1764,13 +1801,13 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   record table and the status view's fix prompts; the extra-MX verdict itself is
   surfaced separately as the top-level `unexpected_mx[]` (see below), and routing is
   the receiver's `status[]` verdict, not a second core-side decision.
-- `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
+- `instructions` — for Tusk MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email, the
   current `enforcement` policy and, for a domain that inherits its setup,
   `inherited_from`. It is omitted entirely for a domain with
   no copy-ready records.
 - `unexpected_mx[]` — published MX hostnames that are not one of the domain's
-  configured Antler receivers. It is a **top-level** field, independent of
+  configured Tusk receivers. It is a **top-level** field, independent of
   `instructions`, and is the shared verdict behind both the dashboard's amber light
   and the status dialog's "additional MX servers" warning, so the two surfaces
   cannot disagree. It is the `unexpected` list of the `mx` check in `dns[]`, owned
@@ -1840,18 +1877,18 @@ push destination. It has two payload modes:
 Every delivery carries the durable event headers:
 
 ```text
-X-MailMoose-Event:      message.received | message.spam_state_changed
-X-MailMoose-Delivery:   <client_id>:<cursor>
-X-MailMoose-Message-Id: <message_id>
-X-MailMoose-Cursor:     evt_<n>
+X-Mail-Event:      message.received | message.spam_state_changed
+X-Mail-Delivery:   <client_id>:<cursor>
+X-Mail-Message-Id: <message_id>
+X-Mail-Cursor:     evt_<n>
 ```
 
 A forward delivery additionally carries the original transport envelope
 metadata, read from the persisted message and therefore identical on retries:
 
 ```text
-X-MailMoose-Envelope-From: <percent-encoded original envelope sender, or empty>
-X-MailMoose-Envelope-To:   <percent-encoded canonical original envelope recipient>
+X-Mail-Envelope-From: <percent-encoded original envelope sender, or empty>
+X-Mail-Envelope-To:   <percent-encoded canonical original envelope recipient>
 ```
 
 - Values are **percent-encoded UTF-8 using RFC 3986 escaping**: a space is
@@ -1871,7 +1908,7 @@ Authentication is chosen per client:
 
 - **bearer** — `Authorization: Bearer <secret>` (the same generated token shown
   once at creation/rotation).
-- **signature** — `X-MailMoose-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over
+- **signature** — `X-Mail-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over
   `t + "." + body` with the client secret.
 
 Delivery is durable and inbox-ordered: HTTP 2xx acknowledges and advances the
@@ -1879,7 +1916,7 @@ cursor; failures retry with capped exponential backoff and a delivery not
 succeeded within the retry window is marked failed with the cursor advanced.
 Mail that is currently Spam, internal, or has since been deleted is terminally
 **skipped** (no request) with the cursor advanced, so it cannot block the queue.
-An empty `X-MailMoose-Envelope-From` means the transport supplied no envelope
+An empty `X-Mail-Envelope-From` means the transport supplied no envelope
 sender; it never reflects the MIME header.
 
 ## 13. Hermes Relay
@@ -1954,7 +1991,7 @@ DELETE /v1/identities/{address}
 
 Compatibility should translate into the canonical model.
 
-MailMoose native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
+Mammoth Mail native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
 
 Compatibility behaviour requires explicit contract tests.
 
@@ -2030,9 +2067,9 @@ Generated from `internal/apispec`; do not edit by hand.
 | POST | /v1/actions/{id} | Retry or dismiss a mailbox action | assistant |
 | GET | /v1/messages/{id} | Get a message | read |
 | PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
-| DELETE | /v1/messages/{id} | Queue a move to Trash (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id} | Move a message to Trash (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
-| DELETE | /v1/messages/{id}/purge | Queue permanent deletion of a trashed message (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
 
 ### Attachments

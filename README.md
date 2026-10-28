@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="assets/mailmoose-logo-horizontal-1200x400.png" alt="MailMoose logo" width="500">
+<img src="assets/mammothmail-logo-horizontal-1200x400.png" alt="Mammoth Mail logo" width="500">
 
-# MailMoose
+# Mammoth Mail
 
 **Self-hosted email for AI agents and automations. Your inboxes, your infrastructure, your control.**
 
-MailMoose brings email into one self-hosted platform for AI agents, automations, and applications. Create inboxes on your own domains or connect existing Gmail, Outlook, and IMAP mailboxes, all through a single web interface and API.
+Mammoth Mail brings email into one self-hosted platform for AI agents, automations, and applications. Create inboxes on your own domains or connect existing Gmail, Outlook, and IMAP mailboxes, all through a single web interface and API.
 
 Give agents and automations scoped access to read, search, draft, and send email, with optional human approval before messages go out.
 
@@ -18,11 +18,11 @@ Deploy in a single Docker container, bring your own email providers, and integra
 
 [![CI](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-<img src="assets/mailmoose-dashboard.png" alt="The MailMoose dashboard, listing inboxes, clients and domains" width="1000">
+<img src="assets/mammothmail-dashboard.png" alt="The Mammoth Mail dashboard, listing inboxes, clients and domains, with provider connectors shown per inbox and domain" width="1000">
 
 </div>
 
-## Why MailMoose?
+## Why Mammoth Mail?
 
 ### 1. Your email, your infrastructure, your way
 
@@ -43,23 +43,23 @@ Keep sending subject to your approval, or give trusted agents direct sending per
 Choose how you review and send agent-generated emails:
 
 - **Drafts folder:** Agents place drafts in your mailbox, ready for you to review, edit, and send.
-- **Email approval:** Receive an approval request by email. Approve or reject, and MailMoose automatically sends approved messages.
+- **Email approval:** Receive an approval request by email. Approve or reject, and Mammoth Mail automatically sends approved messages.
 
 ### 4. Receive email on your own domain, without opening ports
 
-**Antler MX** receives email for your domain and forwards it to MailMoose without opening inbound SMTP ports.
+**Tusk MX** receives email for your domain and forwards it to Mammoth Mail without opening inbound SMTP ports.
 
 Simply configure your DNS records and start receiving. Or use your own MX receiver or third-party provider.
 
 ## Receive email your way
 
-MailMoose supports multiple receiving methods, giving you the flexibility to use existing infrastructure or start from scratch.
+Mammoth Mail supports multiple receiving methods, giving you the flexibility to use existing infrastructure or start from scratch.
 
 | Receiving option | Best for |
 | --- | --- |
-| **Antler MX** | Receive email for your own domain without opening inbound SMTP ports |
+| **Tusk MX** | Receive email for your own domain without opening inbound SMTP ports |
 | **Mailgun, Cloudflare Email Routing, Resend, Postmark** | Connect existing inbound email providers |
-| **Direct MX** | Receive email directly into MailMoose over SMTP |
+| **Direct MX** | Receive email directly into Mammoth Mail over SMTP |
 | **Remote MX / Dial MX** | Run your own separate or shared receiving server |
 | **Gmail, Outlook, IMAP** | Connect existing mailboxes without moving your email |
 
@@ -69,14 +69,14 @@ See the [email providers guide](docs/EMAIL_PROVIDERS.md).
 
 ## Quickstart
 
-Run MailMoose with **one Docker Compose file**. No repository checkout or separate `.env` file required.
+Run Mammoth Mail with **one Docker Compose file**. No repository checkout or separate `.env` file required.
 
 **1. Create `docker-compose.yml`:**
 
 ```yaml
 services:
-  mailmoose:
-    image: ghcr.io/dellarb/mailmoose:latest
+  mammothmail:
+    image: ghcr.io/dellarb/mammothmail:latest
     restart: unless-stopped
     environment:
       ADMIN_EMAIL: "admin@example.com"
@@ -87,7 +87,7 @@ services:
       # APP_ENCRYPTION_KEY: "paste-generated-key-here"
 
       #Optional but strongly recommended to configure a proper URL behind reverse proxy.
-      #Many sender settings depend on this value - it must be real URL you use to access mailmoose.
+      #Many sender settings depend on this value - it must be real URL you use to access mammothmail.
       #BASE_URL: "https://mail.example.com"
     volumes:
       - ./data:/data
@@ -97,21 +97,25 @@ services:
 
 Set your administrator credentials and change `BASE_URL` to the address you'll use. For local-only testing without a reverse proxy, use `http://localhost:8081`.
 
-`APP_ENCRYPTION_KEY` is optional: when omitted, MailMoose creates one automatically at `./data/encryption_key`. If you supply a key, **back it up separately from `./data`** and keep it unchanged after connecting providers. Whichever key is in use must be retained to decrypt saved provider credentials.
+`APP_ENCRYPTION_KEY` is optional: when omitted, Mammoth Mail creates one automatically at `./data/encryption_key`. If you supply a key, **back it up separately from `./data`** and keep it unchanged after connecting providers. Whichever key is in use must be retained to decrypt saved provider credentials.
 
-**2. Start MailMoose:**
+**2. Start Mammoth Mail:**
 
 ```bash
-docker compose up -d
+MAIL_BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
+
+`MAIL_BUILD` stamps the deployed commit into the binary; `GET /healthz` and
+`/.well-known/mail-api` report it as `build`. When it is omitted the image
+records its build time instead.
 
 Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
 
-For external access, place MailMoose behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup in UI. See the [self-hosting guide](docs/SELFHOSTING.md).
+For external access, place Mammoth Mail behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup in UI. See the [self-hosting guide](docs/SELFHOSTING.md).
 
 ## Connect your agent
 
-MailMoose works with AI agents, automations, and applications through multiple integration methods.
+Mammoth Mail works with AI agents, automations, and applications through multiple integration methods.
 
 - **Hermes Relay:** Connect Hermes agents through an authenticated, outbound WebSocket connection. Receive events in real time without exposing the agent to the internet.
 - **OpenClaw:** Connect OpenClaw using the included relay-based channel plugin.
@@ -120,10 +124,10 @@ MailMoose works with AI agents, automations, and applications through multiple i
 
 ### Agent-friendly by design
 
-Give your agent a MailMoose URL and API key. MailMoose provides built-in discovery, setup instructions, permission information, and a machine-readable API.
+Give your agent a Mammoth Mail URL and API key. Mammoth Mail provides built-in discovery, setup instructions, permission information, and a machine-readable API.
 
 ```text
-/.well-known/mailmoose   Agent discovery
+/.well-known/mail-api   Agent discovery
 /agent                   Agent setup guide
 /v1/bootstrap            API key permissions
 /openapi.json            OpenAPI specification
@@ -146,16 +150,16 @@ for deliberate provider limits, including remote body availability and deletion.
 | [Email providers](docs/EMAIL_PROVIDERS.md) | Inbound, outbound and standalone mailbox configuration |
 | [Agent connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
 | [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
-| [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
+| [Remote MX](docs/REMOTE_MX.md) | Tusk MX, Dial MX and separate receivers |
 | [API](docs/API.md) | Endpoints, permissions, drafts and events |
 | [Decisions](docs/DECISIONS.md) | Architecture decisions and their rationale (maintainers) |
 
 ## Contributing
 
-MailMoose is open source. Contributions, bug reports and documentation improvements are welcome.
+Mammoth Mail is open source. Contributions, bug reports and documentation improvements are welcome.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
-MailMoose is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+Mammoth Mail is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.

@@ -38,7 +38,7 @@ type InboundMessage struct {
 	// authenticated binding and, for single-recipient providers, as the only
 	// delivery target.
 	Recipient string
-	// Recipients lists every MailMoose-controlled recipient the provider
+	// Recipients lists every MammothMail-controlled recipient the provider
 	// addressed. It is used by providers (Resend) whose events carry all
 	// recipients and must fan a single delivery out to each distinct inbox.
 	// When empty, Recipient is the sole target.
@@ -63,7 +63,7 @@ type InboundMessage struct {
 	// Without it, the core must not apply authentication-based Spam policy.
 	TrustedAuth bool
 	// Source is the human label the domain log shows for where the message was
-	// received, for example the concrete Antler receiver or the webhook
+	// received, for example the concrete Tusk receiver or the webhook
 	// provider's name. It is composed by the core at ingest and snapshotted on
 	// the activity row. Empty for adapters that do not set it; the core falls
 	// back to the provider's display name.

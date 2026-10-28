@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestStableFolderIDScopesAccountWideRoutes(t *testing.T) {
@@ -138,4 +140,137 @@ func TestFolderlessUnlabelledDomainMessageStaysAccessible(t *testing.T) {
 		t.Fatalf("folderless thread: %d %s", thread.Code, thread.Body.String())
 	}
 	assertMembership(messages[0])
+}
+
+// TestSentFolderFilesCompletedSend proves a completed send is filed in the Sent
+// folder that the message reports, so folder=<Sent> lists it. The system folder
+// set is seeded on demand by the send path, because an inbox can complete its
+// first send before anything has listed its folder tree.
+func TestSentFolderFilesCompletedSend(t *testing.T) {
+	t.Parallel()
+	svc, handler, user, _, inbox := httpFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, user)
+	before, err := svc.Store.ListFolders(ctx, user.AccountID, inbox.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("fixture expected an unseeded folder tree, got %d folders", len(before))
+	}
+	message, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: inbox, Provider: "smtp", RFCMessageID: "<sent-folder@test>",
+		From: model.Address{Address: inbox.Address}, To: []string{"recipient@example.test"},
+		Subject: "Sent folder", Text: "body", RawPath: "messages/sent-folder.eml", SizeBytes: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Store.MarkSent(ctx, user.AccountID, message.ID, "<wire-sent@test>", "smtp", ""); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := svc.Store.GetSystemFolder(ctx, user.AccountID, inbox.ID, model.FolderRoleSent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filed, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: user.AccountID, Admin: true}, message.ID)
+	if err != nil || filed.MailboxID != sent.ID {
+		t.Fatalf("completed send mailbox = %q, want the Sent folder %q (err %v)", filed.MailboxID, sent.ID, err)
+	}
+	for _, route := range []string{
+		"/v1/inboxes/" + inbox.ID + "/messages?folder=" + sent.ID,
+		"/v1/messages?inbox=" + inbox.ID + "&folder=" + sent.ID,
+	} {
+		var page struct {
+			Items []struct{ ID string } `json:"items"`
+		}
+		result := apiGet(t, handler, route, key)
+		if result.Code != http.StatusOK || json.Unmarshal(result.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", route, result.Code, result.Body.String())
+		}
+		if len(page.Items) != 1 || page.Items[0].ID != message.ID {
+			t.Fatalf("%s returned %s, want only %s", route, result.Body.String(), message.ID)
+		}
+	}
+}
+
+// TestSentFolderListsUnfiledCompletedSend proves folder=<Sent id> selects the
+// Sent folder's membership rule, not the exact placement: a completed send
+// predating explicit filing (mailbox_id NULL — the shape every Sent row
+// carries before the send path began filing placements) is the Sent folder's
+// member on every route that filters by folder. It also pins the role
+// narrowing: trashed=true on the Sent folder answers nothing.
+func TestSentFolderListsUnfiledCompletedSend(t *testing.T) {
+	t.Parallel()
+	svc, handler, user, _, inbox := httpFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, user)
+	message, _, err := svc.Store.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: inbox, Provider: "smtp", RFCMessageID: "<unfiled-sent@test>",
+		From: model.Address{Address: inbox.Address}, To: []string{"recipient@example.test"},
+		Subject: "Unfiled send", Text: "body", RawPath: "messages/unfiled-send.eml", SizeBytes: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Store.MarkSent(ctx, user.AccountID, message.ID, "<wire-unfiled@test>", "smtp", ""); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := svc.Store.GetSystemFolder(ctx, user.AccountID, inbox.ID, model.FolderRoleSent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The send path only began filing placements with the listing-contract
+	// commit, so a send completed before the upgrade keeps the implicit NULL
+	// mailbox_id. The projection and the store clause must both accept it.
+	db, err := sql.Open("sqlite3", svc.Store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE messages SET mailbox_id=NULL WHERE id=?`, message.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{
+		"/v1/inboxes/" + inbox.ID + "/messages?folder=" + sent.ID,
+		"/v1/messages?inbox=" + inbox.ID + "&folder=" + sent.ID,
+		"/v1/inboxes/" + inbox.ID + "/messages?folder=" + sent.ID + "&direction=outbound",
+		"/v1/inboxes/" + inbox.ID + "/search?q=body&folder=" + sent.ID,
+		"/v1/search?inbox=" + inbox.ID + "&q=body&folder=" + sent.ID,
+		"/v1/threads?inbox=" + inbox.ID + "&folder=" + sent.ID,
+	} {
+		var page struct {
+			Items []struct {
+				ID       string  `json:"id"`
+				FolderID *string `json:"folder_id"`
+			} `json:"items"`
+		}
+		result := apiGet(t, handler, route, key)
+		if result.Code != http.StatusOK || json.Unmarshal(result.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", route, result.Code, result.Body.String())
+		}
+		wantID := message.ID
+		if strings.Contains(route, "/threads") {
+			// Thread listings return thread keys, not message ids.
+			wantID = message.ThreadID
+		}
+		if len(page.Items) != 1 || page.Items[0].ID != wantID {
+			t.Fatalf("%s returned %s, want only %s", route, result.Body.String(), wantID)
+		}
+		if page.Items[0].FolderID != nil && *page.Items[0].FolderID != sent.ID {
+			t.Fatalf("%s projects folder %q, want the Sent folder %q", route, *page.Items[0].FolderID, sent.ID)
+		}
+	}
+	// A role filter the folder does not carry selects nothing: the Sent folder
+	// is not Trash, so trashed=true narrows it empty rather than widening.
+	narrowed := apiGet(t, handler, "/v1/inboxes/"+inbox.ID+"/messages?folder="+sent.ID+"&trashed=true", key)
+	var empty struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if narrowed.Code != http.StatusOK || json.Unmarshal(narrowed.Body.Bytes(), &empty) != nil {
+		t.Fatalf("trashed narrow: %d %s", narrowed.Code, narrowed.Body.String())
+	}
+	if len(empty.Items) != 0 {
+		t.Fatalf("trashed=true on the Sent folder returned %s, want nothing", narrowed.Body.String())
+	}
 }

@@ -202,15 +202,15 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 		// sender and recipient without parsing the raw MIME. An empty sender is
 		// still emitted as an empty header, so a consumer that requires one
 		// fails closed rather than falling back to the MIME From header.
-		req.Header.Set(HeaderEnvelopeFrom, percentEncodeHeaderValue(m.EnvelopeFrom))
-		req.Header.Set(HeaderEnvelopeTo, percentEncodeHeaderValue(m.EnvelopeRecipient))
+		setWebhookHeader(req.Header, HeaderEnvelopeFrom, percentEncodeHeaderValue(m.EnvelopeFrom))
+		setWebhookHeader(req.Header, HeaderEnvelopeTo, percentEncodeHeaderValue(m.EnvelopeRecipient))
 	} else {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("X-MailMoose-Event", d.Type)
-	req.Header.Set("X-MailMoose-Delivery", d.Client.ID+":"+d.Cursor)
-	req.Header.Set("X-MailMoose-Message-Id", d.EntityID)
-	req.Header.Set("X-MailMoose-Cursor", d.Cursor)
+	setWebhookHeader(req.Header, "X-Mail-Event", d.Type)
+	setWebhookHeader(req.Header, "X-Mail-Delivery", d.Client.ID+":"+d.Cursor)
+	setWebhookHeader(req.Header, "X-Mail-Message-Id", d.EntityID)
+	setWebhookHeader(req.Header, "X-Mail-Cursor", d.Cursor)
 	if d.Client.AuthMode == "bearer" {
 		req.Header.Set("Authorization", "Bearer "+string(secret))
 	} else {
@@ -218,7 +218,7 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 		mac := hmac.New(sha256.New, secret)
 		_, _ = mac.Write([]byte(ts + "."))
 		_, _ = mac.Write(body)
-		req.Header.Set("X-MailMoose-Signature", "t="+ts+",v1="+hex.EncodeToString(mac.Sum(nil)))
+		setWebhookHeader(req.Header, "X-Mail-Signature", "t="+ts+",v1="+hex.EncodeToString(mac.Sum(nil)))
 	}
 	// Reserve the pass's remaining budget for other clients and persist the
 	// outcome independently of a cancelled network attempt.
@@ -287,6 +287,15 @@ func webhookBackoff(previous int, clientID string, eventID int64) time.Duration 
 	return jittered
 }
 
+// legacyWebhookPrefix is the pre-rename header prefix. Every webhook header is
+// sent under both names so consumers that predate the rename keep working.
+const legacyWebhookPrefix = "X-MailMoose-"
+
+func setWebhookHeader(h http.Header, name, value string) {
+	h.Set(name, value)
+	h.Set(legacyWebhookPrefix+strings.TrimPrefix(name, "X-Mail-"), value)
+}
+
 // HeaderEnvelopeFrom and HeaderEnvelopeTo are the exact shared outbound forward
 // webhook envelope-metadata contract. Values are percent-encoded UTF-8 using
 // RFC 3986 escaping, so a space is %20, a literal plus is %2B and @ is %40 (not
@@ -294,8 +303,8 @@ func webhookBackoff(previous int, clientID string, eventID int64) time.Duration 
 // strictly and must treat a missing header as "no envelope metadata" rather
 // than falling back to the MIME headers.
 const (
-	HeaderEnvelopeFrom = "X-MailMoose-Envelope-From"
-	HeaderEnvelopeTo   = "X-MailMoose-Envelope-To"
+	HeaderEnvelopeFrom = "X-Mail-Envelope-From"
+	HeaderEnvelopeTo   = "X-Mail-Envelope-To"
 
 	// maxEncodedEnvelopeHeader bounds the encoded header value. A well-formed
 	// address is at most 254 octets (RFC 5321), and percent-encoding every byte

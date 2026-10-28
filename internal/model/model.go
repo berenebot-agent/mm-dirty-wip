@@ -354,7 +354,7 @@ func NormalizeLabel(raw string) (string, bool) {
 
 // NormalizeProviderLabel validates a provider-owned label name (a Gmail user
 // label or an Outlook category). Providers allow hierarchical names such as
-// "Projects/2026", so the path-separator rule that protects MailMoose-native
+// "Projects/2026", so the path-separator rule that protects MammothMail-native
 // label URLs does not apply. Control characters, empty names and over-long names
 // are still rejected, and the returned name is what the provider stores.
 func NormalizeProviderLabel(raw string) (string, bool) {
@@ -405,7 +405,7 @@ type Message struct {
 	// the denormalized snapshot of the API key / Hermes credential that sent it,
 	// empty for sends with no credential (for example an email-approved send).
 	// For inbound mail it is the receiving source, for example
-	// "Antler: antler1.hgolabs.com" or the webhook provider's name.
+	// "Tusk: tusk1.hgolabs.com" or the webhook provider's name.
 	Source   string `json:"source,omitempty"`
 	ClientID string `json:"-"`
 	// Internal marks workflow mail (an approval-request email carrying a
@@ -637,7 +637,7 @@ const EventMessageStateChanged = "message.state_changed"
 const EventMXHealthChanged = "mx.health_changed"
 
 // EventMXDNSChanged is a transient, non-persisted notification that a domain's
-// published-record verdict changed: the `_mailmoose-mx` TXT check and/or the MX
+// published-record verdict changed: the `_mail-proof` TXT check and/or the MX
 // routing check (including the "extra MX" hosts). It carries the full verdict in
 // its payload. The dashboard light and an open status dialog both read it, so a
 // domain's DNS problems are surfaced per check — and stay in sync — without

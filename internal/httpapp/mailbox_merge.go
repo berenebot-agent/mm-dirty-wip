@@ -68,6 +68,19 @@ func decodeCommonCursor(raw string) (commonCursor, bool) {
 	return c, c.Min != "" || len(c.From) > 0 || len(c.Scan) > 0
 }
 
+// clampMergeLimit bounds a caller-supplied page size before it sizes any
+// allocation. limitQuery only enforces a floor, so without this a request such
+// as limit=100000000 would reserve gigabytes up front.
+func clampMergeLimit(limit int) int {
+	if limit <= 0 {
+		return 1
+	}
+	if limit > limits.PageSizeMaxList {
+		return limits.PageSizeMaxList
+	}
+	return limit
+}
+
 // pageLookahead avoids the store resetting an over-ceiling limit to its default.
 func pageLookahead(limit int) int {
 	if limit >= limits.PageSizeMaxList {
@@ -155,17 +168,24 @@ type mergedItem struct {
 // A remote source failure is recorded as a per-inbox failure and never fails the
 // whole page; that source's cursor is left unadvanced so a retry re-reads it.
 func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.MessageFilter, folder string, cur commonCursor, limit int) ([]model.Message, string, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	entries := make([]mergedItem, 0, limit+1)
 	var failures []model.InboxFailure
 
 	// Local source.
 	localFilter := f
 	if folder != "" && !localFilter.FolderScoped {
-		localFilter.FolderScoped = true
-		localFilter.MailboxID = folder
+		// A domain inbox resolves the folder to its canonical membership rule
+		// through the same mapping the inbox-scoped route applies, so one query
+		// means one answer on every route; other kinds scope to the exact id.
+		if box, err := s.Service.Store.GetInboxInternal(ctx, p.AccountID, localFilter.InboxID); err == nil && box.Kind == model.InboxKindDomain {
+			if err := s.applyLocalFolder(ctx, p, localFilter.InboxID, folder, &localFilter); err != nil {
+				return nil, "", nil, err
+			}
+		} else {
+			localFilter.FolderScoped = true
+			localFilter.MailboxID = folder
+		}
 	}
 	// Preserve the independent folder selector in account-wide queries.
 	localFilter.Before = cur.sourceCursor("local")
@@ -410,9 +430,7 @@ func (s *Server) labelFilteredRemoteThreads(ctx context.Context, p model.Princip
 // (last_message_at, id) ordering), so a merged page never loses a thread that
 // sorts below the global key, and the per-source progress travels in the cursor.
 func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder string, labels labelFilter, cur commonCursor, limit int) ([]model.Thread, string, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	type tentry struct {
 		th  model.Thread
 		key string
@@ -531,9 +549,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 // later page resumes the server search instead of re-reading the newest window.
 // Completeness describes source coverage, independently of pagination.
 func (s *Server) mergeSearch(ctx context.Context, p model.Principal, inboxID, q string, folder, from, to, subject string, labels labelFilter, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
-	if limit <= 0 {
-		limit = 1
-	}
+	limit = clampMergeLimit(limit)
 	localFilter := store.MessageFilter{
 		InboxID:       inboxID,
 		From:          from,
@@ -766,6 +782,16 @@ func matchMessageFilter(m model.Message, f store.MessageFilter) bool {
 	return true
 }
 
+// remoteFilterFolder resolves the remote folder a common listing reads. A role
+// filter (trashed, spam, direction) selects the folder mapped to that role only
+// when the caller named no folder; an explicit folder always wins and a role
+// then narrows it, so trashed=true on a folder outside Trash selects nothing and
+// folder=Sent&direction=outbound is Sent. A standalone folder is named by its
+// stable Mammoth Mail id or by its provider path: the id is resolved to the
+// provider path, because a provider does not know our ids (Microsoft's path is
+// the Graph folder id, so passing a fld_ id through reads the whole mailbox).
+// The bool reports whether anything can match. An unknown path is passed
+// through so the backend's own scope check answers 404 rather than an empty 200.
 func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, folder string, f store.MessageFilter) (string, bool) {
 	role := ""
 	switch {
@@ -776,11 +802,31 @@ func (s *Server) remoteFilterFolder(ctx context.Context, accountID, inboxID, fol
 	case f.Direction == "outbound":
 		role = model.FolderRoleSent
 	}
-	if role == "" {
+	mapped, hasMapped := model.Folder{}, false
+	if role != "" {
+		mapped, hasMapped = s.remoteRoleFolder(ctx, accountID, inboxID, role)
+	}
+	if folder == "" {
+		if role != "" && !hasMapped {
+			return "", false
+		}
+		return mapped.Path, true
+	}
+	// A standalone folder is named by its stable Mammoth Mail id or by its provider
+	// path. A folder this inbox does not know keeps the caller's value so the
+	// backend's own scope check answers "not in this mailbox's scope" (404)
+	// instead of silently turning it into a whole-mailbox read.
+	known, err := s.Service.Store.GetFolderDestination(ctx, accountID, inboxID, folder)
+	if err != nil {
 		return folder, true
 	}
-	mapped, ok := s.remoteRoleFolder(ctx, accountID, inboxID, role)
-	return mapped.Path, ok
+	path := known.Path
+	// A role the mapped folder does not carry selects nothing: Trash narrowed to
+	// Inbox is empty, not Inbox's rows.
+	if role != "" && (mapped.Path == "" || mapped.Path != path) {
+		return "", false
+	}
+	return path, true
 }
 
 // decodeCursorOrLegacy parses an opaque merged cursor, falling back to treating a

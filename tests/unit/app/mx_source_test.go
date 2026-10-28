@@ -16,7 +16,7 @@ import (
 
 // TestMXSourceLabelPerFamily locks in the activity-log source label each MX
 // receiving family is stamped with: the short provider name for Direct MX and
-// Remote MX, and "Antler: <host>" for an Antler Dial MX receiver (resolved from
+// Remote MX, and "Tusk: <host>" for a Tusk Dial MX receiver (resolved from
 // the saved receiver snapshot, not hard-coded).
 func TestMXSourceLabelPerFamily(t *testing.T) {
 	t.Parallel()
@@ -31,8 +31,8 @@ func TestMXSourceLabelPerFamily(t *testing.T) {
 		}, false); err != nil {
 			t.Fatal(err)
 		}
-		src := ingestDialMX(t, svc, box, "https://antler2.example.test")
-		if src != "Antler: antler2.example.test" {
+		src := ingestDialMX(t, svc, box, "https://tusk2.example.test")
+		if src != "Tusk: tusk2.example.test" {
 			t.Fatalf("antler source = %q", src)
 		}
 	})

@@ -10,7 +10,7 @@ import (
 
 const (
 	Provider = "dialmx"
-	// ServiceAntler and ServiceCustom select between the Antler MX hosted relay
+	// ServiceAntler and ServiceCustom select between the Tusk MX hosted relay
 	// (endpoints resolved from the live manifest and snapshotted at save) and
 	// operator-supplied receiver URLs.
 	ServiceAntler = "antler"
@@ -35,22 +35,22 @@ func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string { return Provider }
 func (Transport) Description() string {
-	// The short label. The receiving provider selector shows the long Antler MX
+	// The short label. The receiving provider selector shows the long Tusk MX
 	// label via selectLabel in the HTTP layer.
-	return "Antler MX"
+	return "Tusk MX"
 }
 
 // SelectLabel is the longer provider-picker label (transport.SelectLabelProvider).
-// The Dial MX provider offers the zero-config Antler MX shared relay, so its
-// selector entry states that plainly while the short Description stays "Antler
+// The Dial MX provider offers the zero-config Tusk MX shared relay, so its
+// selector entry states that plainly while the short Description stays "Tusk
 // MX" in the domain row and provider box.
 func (Transport) SelectLabel() string {
-	return "Antler MX (Free SMTP Relay - no port forwards required)"
+	return "Tusk MX (Free SMTP Relay - no port forwards required)"
 }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
 		{Name: "service", Label: "Service", Type: "select", Default: ServiceAntler, Options: []transport.ConfigOption{
-			{Value: ServiceAntler, Label: "Antler MX (Free SMTP Relay - no port forwards required)"},
+			{Value: ServiceAntler, Label: "Tusk MX (Free SMTP Relay - no port forwards required)"},
 			{Value: ServiceCustom, Label: "Custom receiver URLs"},
 		}},
 		{Name: "contact_email", Label: "Contact email — used for important service messages only, no marketing", Type: "text", Placeholder: "you@example.com"},

@@ -239,9 +239,9 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 		return out.Domains[domain.ID].Light
 	}
 
-	// Only the Antler receiver is published: green.
+	// Only the Tusk receiver is published: green.
 	if got := light(); got != "ok" {
-		t.Fatalf("light with only the Antler receiver = %q, want ok", got)
+		t.Fatalf("light with only the Tusk receiver = %q, want ok", got)
 	}
 	// An extra MX record appears and the watcher republishes: amber.
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}}, nil)

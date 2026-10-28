@@ -20,7 +20,7 @@ func TestDomainLogSourceLabelsBothDirections(t *testing.T) {
 	box := b[0]
 
 	received := inbound(box, "src-recv", "<recv@test>", "", nil, "hello", "body")
-	received.Source = "Antler: antler1.hgolabs.com"
+	received.Source = "Tusk: tusk1.hgolabs.com"
 	if _, _, _, err := s.CommitInbound(ctx, received); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestDomainLogSourceLabelsBothDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"received": "Antler: antler1.hgolabs.com",
+		"received": "Tusk: tusk1.hgolabs.com",
 		"blocked":  "Direct MX",
 		"approval": "Remote MX",
 		"sent":     "My API key",

@@ -43,7 +43,7 @@ func TestFutureAdditiveMigrationAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, actual := testDB(t)
-	registered := []migration{{"001", Baseline, BaselineHash}, {"002", FolderLabelMapping, FolderLabelMappingHash}, {"003", ddl, hash}}
+	registered := append(migrations(), migration{"005", ddl, hash})
 	if err := migrate(ctx, actual, registered); err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +54,14 @@ func TestFutureAdditiveMigrationAndRollback(t *testing.T) {
 		t.Fatal("older binary accepted a newer public database")
 	}
 	_, failed := testDB(t)
-	broken := []migration{{"001", Baseline, BaselineHash}, {"002", FolderLabelMapping, FolderLabelMappingHash}, {"003", ddl + ` SELECT * FROM nonexistent_table;`, hash}}
+	broken := append(migrations(), migration{"005", ddl + ` SELECT * FROM nonexistent_table;`, hash})
 	if err := migrate(ctx, failed, broken); err == nil {
 		t.Fatal("failed migration accepted")
 	}
 	if err := Validate(ctx, failed); err != nil {
 		t.Fatal("failed additive migration changed baseline or marker", err)
 	}
-	broken[2] = migration{"003", ddl, strings.Repeat("0", 64)}
+	broken[4] = migration{"005", ddl, strings.Repeat("0", 64)}
 	if err := migrate(ctx, failed, broken); err == nil {
 		t.Fatal("incorrect target schema hash accepted")
 	}

@@ -234,3 +234,224 @@ func TestImplicitInboxFolderFilterAcrossAPIAndUI(t *testing.T) {
 		}
 	}
 }
+
+// TestSpamFolderFilterUsesSpamClassification proves the Spam folder selector
+// answers the same set as the spam role shorthand. Marking a message Spam does
+// not file it in the Spam folder, so a message that carries only is_spam (no
+// placement row) must still list under folder=<Spam id>; before the fix the
+// exact-placement match returned an empty folder while spam=true found it.
+func TestSpamFolderFilterUsesSpamClassification(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleSpam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := seedInbound(t, svc, box, "spam-folder-classified", "<spam-folder-classified@test>", "Marked spam needle", "needle")
+	// The classification alone: no move, so mailbox_id is not the Spam folder.
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, flagged.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	filed := seedInbound(t, svc, box, "spam-folder-moved", "<spam-folder-moved@test>", "Moved spam needle", "needle")
+	// A classify move files the message AND marks it Spam; a plain move only
+	// files it, so it is not in Spam.
+	if _, err := svc.Store.ClassifyMessage(ctx, p, filed.ID, spam.ID); err != nil {
+		t.Fatal(err)
+	}
+	seedInbound(t, svc, box, "spam-folder-clean", "<spam-folder-clean@test>", "Clean needle", "needle")
+	key := adminKey(t, svc, u)
+	param := "folder=" + url.QueryEscape(spam.ID)
+	for _, path := range []string{
+		"/v1/inboxes/" + box.ID + "/messages?" + param,
+		"/v1/messages?inbox=" + box.ID + "&" + param,
+		"/v1/messages?" + param,
+		"/v1/inboxes/" + box.ID + "/search?q=needle&" + param,
+		"/v1/search?inbox=" + box.ID + "&q=needle&" + param,
+		"/v1/search?q=needle&" + param,
+	} {
+		rr := apiGet(t, h, path, key)
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		seen := map[string]bool{}
+		for _, item := range page.Items {
+			seen[item.ID] = true
+		}
+		if len(page.Items) != 2 || !seen[flagged.ID] || !seen[filed.ID] {
+			t.Fatalf("%s: got %v, want both Spam messages (%s and %s)", path, seen, flagged.ID, filed.ID)
+		}
+	}
+	// The same folder id with the role shorthand agrees.
+	rr := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages?spam=true", key)
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("spam=true: %d %s", rr.Code, rr.Body.String())
+	}
+	// The reader's Folder tab lists the same set as the API.
+	session, _ := uiSession(t, svc, u.ID)
+	rr = uiGet(t, h, session, "/ui/inboxes/"+box.ID+"/folder?folder="+url.QueryEscape(spam.ID))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("folder tab: %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, m := range []model.Message{flagged, filed} {
+		if !strings.Contains(body, m.Subject) {
+			t.Fatalf("folder tab missing %q", m.Subject)
+		}
+	}
+	if strings.Contains(body, "Clean needle") {
+		t.Fatal("folder tab lists a message that is not Spam")
+	}
+}
+
+// TestLegacySpamFolderPathMatchesIDForm proves the legacy folder path form
+// reaches the same folder and the same membership rule as the stable id form:
+// a caller selecting the Spam folder by its path ("Spam") lists the same two
+// Spam messages the id form lists, on every route the id form answers, and the
+// reader's Folder tab resolves the path too. Before the path lookup existed
+// the listing left an exact-placement filter the classified rows never
+// satisfy, so the folder read as empty while the id form found the mail.
+func TestLegacySpamFolderPathMatchesIDForm(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	spam, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleSpam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := seedInbound(t, svc, box, "spam-path-classified", "<spam-path-classified@test>", "Marked spam path", "needle")
+	if _, _, err := svc.Store.SetMessageSpam(ctx, p, flagged.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	filed := seedInbound(t, svc, box, "spam-path-moved", "<spam-path-moved@test>", "Moved spam path", "needle")
+	if _, err := svc.Store.ClassifyMessage(ctx, p, filed.ID, spam.ID); err != nil {
+		t.Fatal(err)
+	}
+	seedInbound(t, svc, box, "spam-path-clean", "<spam-path-clean@test>", "Clean path", "needle")
+	key := adminKey(t, svc, u)
+	// The fixture has exactly one inbox, so the account-wide routes can resolve
+	// the shared system path without ambiguity.
+	inboxRoute := "/v1/inboxes/" + box.ID + "/messages?folder=Spam"
+	for _, path := range []string{
+		inboxRoute,
+		"/v1/messages?inbox=" + box.ID + "&folder=Spam",
+		"/v1/messages?folder=Spam",
+		"/v1/inboxes/" + box.ID + "/search?q=needle&folder=Spam",
+		"/v1/search?inbox=" + box.ID + "&q=needle&folder=Spam",
+		"/v1/search?q=needle&folder=Spam",
+		"/v1/inboxes/" + box.ID + "/threads?folder=Spam",
+		"/v1/threads?inbox=" + box.ID + "&folder=Spam",
+	} {
+		rr := apiGet(t, h, path, key)
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &page) != nil {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		seen := map[string]bool{}
+		for _, item := range page.Items {
+			seen[item.ID] = true
+		}
+		want := []string{flagged.ID, filed.ID}
+		if strings.Contains(path, "/threads") {
+			// Thread listings return thread keys, not message ids.
+			want = []string{flagged.ThreadID, filed.ThreadID}
+		}
+		if len(page.Items) != 2 || !seen[want[0]] || !seen[want[1]] {
+			t.Fatalf("%s: got %v, want both Spam messages (%s and %s)", path, seen, want[0], want[1])
+		}
+	}
+	// The reader's Folder tab resolves the legacy path and lists the same set.
+	session, _ := uiSession(t, svc, u.ID)
+	rr := uiGet(t, h, session, "/ui/inboxes/"+box.ID+"/folder?folder=Spam")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("folder tab by path: %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, flagged.Subject) || !strings.Contains(body, filed.Subject) {
+		t.Fatalf("folder tab by path missing the Spam mail: %s", body)
+	}
+	if strings.Contains(body, "Clean path") {
+		t.Fatal("folder tab by path lists a message that is not Spam")
+	}
+}
+
+// TestLegacyFolderPathMatchesIDFormOnEveryRoute proves a domain inbox's legacy
+// folder= path form selects exactly what the id form selects. The path used to
+// be compared against the message's folder id, so the path form silently
+// selected nothing on every route that reads the local store.
+func TestLegacyFolderPathMatchesIDFormOnEveryRoute(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	filed := seedInbound(t, svc, box, "legacy-path-inbox", "<legacy-path-inbox@test>", "Filed inbox", "needle")
+	inboxFolder, err := svc.Store.GetSystemFolder(ctx, u.AccountID, box.ID, model.FolderRoleInbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(inboxFolder.Path, "Inbox") {
+		t.Fatalf("seeded Inbox folder path = %q, the legacy form below assumes Inbox", inboxFolder.Path)
+	}
+	key := adminKey(t, svc, u)
+	// The fixture has one inbox, so the account-wide routes resolve the path
+	// without ambiguity.
+	for _, route := range []struct {
+		prefix, suffix string
+	}{
+		{"/v1/inboxes/" + box.ID + "/messages?", ""},
+		{"/v1/messages?inbox=" + box.ID + "&", ""},
+		{"/v1/messages?", ""},
+		{"/v1/inboxes/" + box.ID + "/search?", "q=needle&"},
+		{"/v1/search?inbox=" + box.ID + "&", "q=needle&"},
+		{"/v1/search?", "q=needle&"},
+		{"/v1/inboxes/" + box.ID + "/threads?", ""},
+		{"/v1/threads?inbox=" + box.ID + "&", ""},
+	} {
+		byPath := apiGet(t, h, route.prefix+route.suffix+"folder=Inbox", key)
+		byID := apiGet(t, h, route.prefix+route.suffix+"folder="+url.QueryEscape(inboxFolder.ID), key)
+		if byPath.Code != http.StatusOK || byID.Code != http.StatusOK {
+			t.Fatalf("%s: path %d %s / id %d %s", route.prefix, byPath.Code, byPath.Body.String(), byID.Code, byID.Body.String())
+		}
+		var pathPage, idPage struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(byPath.Body.Bytes(), &pathPage); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(byID.Body.Bytes(), &idPage); err != nil {
+			t.Fatal(err)
+		}
+		if len(idPage.Items) == 0 {
+			t.Fatalf("%s: the id form is empty, the fixture is wrong", route.prefix)
+		}
+		if len(pathPage.Items) != len(idPage.Items) {
+			t.Fatalf("%s: path form returned %d rows, id form %d", route.prefix, len(pathPage.Items), len(idPage.Items))
+		}
+		found := false
+		for _, item := range pathPage.Items {
+			if item.ID == filed.ID || item.ID == filed.ThreadID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: the path form did not select the Inbox message %s", route.prefix, filed.ID)
+		}
+	}
+}

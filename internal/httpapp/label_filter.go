@@ -53,20 +53,38 @@ func (labels labelFilter) applyLocal(f *store.MessageFilter) {
 	}
 	switch labels.Role {
 	case model.FolderRoleInbox:
-		f.FolderScoped, f.MailboxID = true, labels.FolderID
+		// The folder stays the location and the role narrows it: an Inbox-role
+		// view is the Inbox bucket, not every inbound message in the mailbox.
+		f.FolderScoped, f.MailboxID, f.InboxRole = true, labels.FolderID, model.FolderRoleInbox
 	case model.FolderRoleSpam:
+		// Spam membership is the message's own classification (is_spam), not a
+		// placement: marking mail Spam does not file it, so an exact placement
+		// match would empty the folder. Apply the same rule the role shorthand
+		// and the reader use.
 		f.SpamOnly = true
 	case model.FolderRoleTrash:
+		// The Trash folder's membership is deleted_at set; the folder selection
+		// alone cannot express it, so the visibility rule is applied on that
+		// folder (where spam keeps its mail visible, as the Trash view does).
 		f.Trashed, f.IncludeSpam = true, true
 	case model.FolderRoleSent:
-		f.Direction = "outbound"
-		f.SentOnly = true
+		// The Sent folder's membership is completed outbound mail, not a
+		// placement: sends completed before explicit filing live in the implicit
+		// mailbox_id NULL bucket, so the clause widens to the role like the
+		// Inbox view does.
+		f.Direction, f.SentOnly = "outbound", true
 		f.FolderScoped, f.InboxRole = true, model.FolderRoleSent
 	default:
 		f.FolderScoped, f.MailboxID = true, labels.FolderID
 	}
 }
 
+// applyLocalFolder scopes a domain read to one canonical folder. An explicit
+// folder always stays the location: a role filter then narrows it, so
+// folder=Inbox&trashed=true selects nothing and folder=Sent&direction=outbound
+// lists Sent — the meaning every other inbox kind gives those filters. The bare
+// role shorthand (trashed, spam or direction with no folder) keeps its
+// system-folder mapping in labelFilter.
 func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox, folder string, f *store.MessageFilter) error {
 	if folder == "" {
 		return nil
@@ -75,25 +93,60 @@ func (s *Server) applyLocalFolder(ctx context.Context, p model.Principal, inbox,
 	if inbox == "" {
 		return nil
 	}
-	item, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, inbox, folder)
+	// A legacy path form must reach the same role mapping as the id form, so
+	// the lookup accepts either (ids are unique and are never a valid path).
+	item, err := s.Service.Store.GetFolderDestination(ctx, p.AccountID, inbox, folder)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	// The filter binds a folder id, never the caller's raw selector: a legacy
+	// path resolves to its folder here, so the path and id forms select the same
+	// mail instead of the path form silently selecting nothing.
+	f.MailboxID = item.ID
 	switch item.Role {
 	case model.FolderRoleInbox, model.FolderRoleSent, model.FolderRoleSpam, model.FolderRoleTrash:
-		f.FolderScoped, f.MailboxID = false, ""
-		(labelFilter{FolderID: item.ID, Role: item.Role}).applyLocal(f)
+		// The folder is the location and its role is its membership rule, exactly
+		// as the role shorthand applies it: Spam is spam-flagged mail, Trash is
+		// trashed mail, Sent is completed outbound. A role filter the folder does
+		// not carry (trashed on Inbox, outbound on Inbox) selects nothing rather
+		// than another folder, so the answer matches every other inbox kind.
+		matches := (!f.Trashed || item.Role == model.FolderRoleTrash) &&
+			(!f.SpamOnly || item.Role == model.FolderRoleSpam) &&
+			(f.Direction != "outbound" || item.Role == model.FolderRoleSent)
+		if !matches {
+			f.MailboxID = "unsupported:" + item.ID
+			return nil
+		}
+		f.Direction, f.SentOnly, f.SpamOnly = "", false, false
+		switch item.Role {
+		case model.FolderRoleSpam:
+			f.FolderScoped, f.MailboxID = false, ""
+			f.SpamOnly = true
+		case model.FolderRoleTrash:
+			f.FolderScoped, f.MailboxID = false, ""
+			f.Trashed, f.IncludeSpam = true, true
+		case model.FolderRoleSent:
+			// The Sent folder's membership is completed outbound mail, not a
+			// folder placement: sends completed before explicit filing live in
+			// the implicit mailbox_id NULL bucket, so the clause widens to the
+			// role rather than matching the exact id.
+			f.FolderScoped, f.MailboxID, f.InboxRole = true, "", model.FolderRoleSent
+			f.Direction, f.SentOnly = "outbound", true
+		}
 	default:
 		// Legacy domain custom folders and Archive have no canonical location.
-		f.MailboxID = "unsupported:" + folder
+		f.MailboxID = "unsupported:" + item.ID
 	}
 	return nil
 }
 
-// A stable folder ID already identifies its inbox, including on account-wide routes.
+// A stable folder ID or a legacy path already identifies its inbox, including
+// on account-wide routes. A path is ambiguous when several inboxes hold a
+// folder of that name (every mailbox has a "Spam"), so only a unique match
+// scopes the query; anything else keeps the caller's unscoped value.
 func (s *Server) folderInboxScope(ctx context.Context, p model.Principal, inbox, folder string) (string, error) {
 	if inbox != "" || folder == "" {
 		return inbox, nil
@@ -102,12 +155,18 @@ func (s *Server) folderInboxScope(ctx context.Context, p model.Principal, inbox,
 	if err != nil {
 		return "", err
 	}
+	matches := 0
+	owner := ""
 	for _, box := range boxes {
-		if _, err := s.Service.Store.GetFolderByID(ctx, p.AccountID, box.ID, folder); err == nil {
-			return box.ID, nil
+		if _, err := s.Service.Store.GetFolderDestination(ctx, p.AccountID, box.ID, folder); err == nil {
+			matches++
+			owner = box.ID
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return "", err
 		}
+	}
+	if matches == 1 {
+		return owner, nil
 	}
 	return "", nil
 }

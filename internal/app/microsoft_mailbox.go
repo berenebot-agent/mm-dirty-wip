@@ -132,7 +132,10 @@ func (m *RemoteMailboxService) cacheMicrosoft(ctx context.Context, account, inbo
 }
 func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, inbox, t, mailbox string) ([]model.Folder, error) {
 	roles := map[string]string{}
-	for well, role := range map[string]string{"inbox": model.FolderRoleInbox, "sentitems": model.FolderRoleSent, "drafts": model.FolderRoleDrafts, "deleteditems": model.FolderRoleTrash, "junkemail": model.FolderRoleSpam, "archive": model.FolderRoleArchive, "outbox": model.FolderRoleOutbox} {
+	// Only the folders Graph defines as well known. It answers "archive" with
+	// whatever folder fits, which invented an Archive that Outlook has no
+	// equivalent of; a real Outlook archive folder arrives as a custom folder.
+	for well, role := range map[string]string{"inbox": model.FolderRoleInbox, "sentitems": model.FolderRoleSent, "drafts": model.FolderRoleDrafts, "deleteditems": model.FolderRoleTrash, "junkemail": model.FolderRoleSpam, "outbox": model.FolderRoleOutbox} {
 		f, e := m.Microsoft.Folder(ctx, t, mailbox, well)
 		if e != nil {
 			var mb *model.MailboxError
@@ -625,14 +628,16 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	case status.Status != store.RemoteIndexComplete:
 		m.ScheduleRefresh(p.AccountID, inbox)
 	}
+	// One filter, so the store orders and pages in a single pass. An unscoped read
+	// spans the whole mailbox, like every other inbox kind and the documented
+	// contract: Spam and Trash are excluded by default and nothing else is,
+	// including user-created folders. (A message whose provider folder is
+	// unknown is still listed: the exclusion only names mirrored role folders.)
+	filter := store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before}
 	if folder == "" {
-		f, e := m.Service.Store.GetSystemFolder(ctx, p.AccountID, inbox, model.FolderRoleInbox)
-		if e != nil {
-			return RemoteListResult{Items: []RemoteMessageView{}, Completeness: model.CompletenessPartial}, nil
-		}
-		folder = f.Path
+		filter.ExcludeSpam, filter.ExcludeTrash = true, true
 	}
-	rows, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, store.RemoteMessageFilter{FolderPath: folder, Limit: limit, Before: before})
+	rows, e := m.Service.Store.ListRemoteMessagesFiltered(ctx, p.AccountID, inbox, filter)
 	if e != nil {
 		return RemoteListResult{}, e
 	}
@@ -643,7 +648,12 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	}
 	for _, r := range rows {
 		v := m.remoteView(ctx, r)
-		v.FolderPath = folder
+		// The row's folder is its provider membership, projected as the stable
+		// Mammoth Mail folder id by the response layer. The cached folder_path is
+		// not the Microsoft location once a read spans folders.
+		if path, me := m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inbox, r.ID); me == nil {
+			v.FolderPath = path
+		}
 		v.Labels, _ = m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inbox, r.ID)
 		out.Items = append(out.Items, v)
 	}
@@ -745,11 +755,21 @@ func (m *RemoteMailboxService) microsoftFolderMutation(ctx context.Context, p mo
 			path = ""
 		}
 		if path != "" {
-			parent, e := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, path)
-			if e != nil {
-				return model.Folder{}, e
+			// path is a folder id (the UI sends an empty path, or a name with no
+			// name field). Resolve it so an unknown id fails here as "not found"
+			// rather than as a provider rejection of a bogus childFolders route.
+			parent, pe := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, path)
+			if pe != nil {
+				return model.Folder{}, mapStoreError(pe)
 			}
+			// The row's path is the Graph folder id; a name is all Graph would see
+			// as an id otherwise.
 			path = parent.Path
+			if path == "" || path == parent.Name {
+				// A row with no provider id (local-only) has no folder to nest
+				// under, so root is the only meaningful target.
+				path = ""
+			}
 		}
 		f, e = m.Microsoft.CreateFolder(ctx, t, c.Mailbox, path, name)
 	} else {
@@ -775,16 +795,29 @@ func (m *RemoteMailboxService) microsoftFolderMutation(ctx context.Context, p mo
 		} else {
 			live, le := m.Microsoft.Folder(ctx, t, c.Mailbox, target.Path)
 			if le != nil {
-				return model.Folder{}, le
+				var mb *model.MailboxError
+				if !errors.As(le, &mb) || mb.Kind != model.ErrKindNotFound {
+					return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, le)
+				}
+				// Graph no longer has the folder, so the delete already landed and
+				// only the cached row is stale.
+				m.forgetRemoteFolder(p.AccountID, inbox, target.Path)
+				return model.Folder{}, nil
 			}
 			if live.TotalItemCount > 0 || live.ChildFolderCount > 0 {
 				return model.Folder{}, model.NewMailboxError(model.ErrKindConflict, "Folder is not empty", false, nil)
 			}
-			e = m.Microsoft.DeleteFolder(ctx, t, c.Mailbox, target.Path)
-			if e == nil {
-				e = m.Service.Store.DeleteRemoteFolderRow(ctx, p.AccountID, inbox, target.Path)
+			if e = m.Microsoft.DeleteFolder(ctx, t, c.Mailbox, target.Path); e != nil {
+				var mb *model.MailboxError
+				if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+					e = nil
+				}
 			}
-			return model.Folder{}, e
+			if e != nil {
+				return model.Folder{}, m.folderWriteFailed(p.AccountID, inbox, e)
+			}
+			m.forgetRemoteFolder(p.AccountID, inbox, target.Path)
+			return model.Folder{}, nil
 		}
 	}
 	if e != nil {

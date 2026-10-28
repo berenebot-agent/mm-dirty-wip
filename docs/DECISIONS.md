@@ -61,7 +61,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D053: Proxy-chain trust and canonical HTTPS redirect](#d053-proxy-chain-trust-and-canonical-https-redirect)
 - [D054: Operator MX edge secrets require 256 bits](#d054-operator-mx-edge-secrets-require-256-bits)
 - [D055: Operator password reset (superseded in part by D060)](#d055-operator-password-reset-superseded-in-part-by-d060)
-- [D056: Product rename to MailMoose](#d056-product-rename-to-mailmoose)
+- [D056: Product rename to Mammoth Mail](#d056-product-rename-to-mammoth-mail)
 - [D057: Self-hosted Direct MX outbound delivery](#d057-self-hosted-direct-mx-outbound-delivery)
 - [D058: Strix security review remediation](#d058-strix-security-review-remediation)
 - [D059: Unattested inbound envelope senders: extended acceptance and containment](#d059-unattested-inbound-envelope-senders-extended-acceptance-and-containment)
@@ -85,7 +85,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D079: Per-inbox storage quotas](#d079-per-inbox-storage-quotas)
 - [D080: Configurable HTTP receiver listener and public origin](#d080-configurable-http-receiver-listener-and-public-origin)
 - [D081: Delivery auto-actions default to the `all` trigger](#d081-delivery-auto-actions-default-to-the-all-trigger)
-- [D082: Antler MX: a named shared receiver service with live endpoint discovery](#d082-antler-mx-a-named-shared-receiver-service-with-live-endpoint-discovery)
+- [D082: Tusk MX: a named shared receiver service with live endpoint discovery](#d082-tusk-mx-a-named-shared-receiver-service-with-live-endpoint-discovery)
 - [D083: Cleartext shared-mode sessions from a trusted TLS-terminating proxy](#d083-cleartext-shared-mode-sessions-from-a-trusted-tls-terminating-proxy)
 - [D084: Remote MX: an account-owned single-mode receiver](#d084-remote-mx-an-account-owned-single-mode-receiver)
 - [D085: First-run HTTP setup wizard (supersedes D055 in part)](#d085-first-run-http-setup-wizard-supersedes-d055-in-part)
@@ -116,7 +116,7 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D110: Useful common message metadata, internal-only IMAP locators, and safe direction inference](#d110-useful-common-message-metadata-internal-only-imap-locators-and-safe-direction-inference)
 - [D130: Microsoft push callbacks are silent fetch hints](#d130-microsoft-push-callbacks-are-silent-fetch-hints)
 - [D111: Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule](#d111-local-dns-checks-distinguish-absent-from-unknown-and-share-the-receivers-mm1-rule)
-- [D112: Antler setup keeps its receiver snapshot, and its settings are editable in place](#d112-antler-setup-keeps-its-receiver-snapshot-and-its-settings-are-editable-in-place)
+- [D112: Tusk setup keeps its receiver snapshot, and its settings are editable in place](#d112-tusk-setup-keeps-its-receiver-snapshot-and-its-settings-are-editable-in-place)
 - [D069: DKIM signing on the Direct MX outbound path](#d069-dkim-signing-on-the-direct-mx-outbound-path)
 - [D113: DKIM published-record indicator on the Direct MX sending side](#d113-dkim-published-record-indicator-on-the-direct-mx-sending-side)
 - [D114: Review remediation: partial fan-out acknowledgement, account-settings scope, and config honesty](#d114-review-remediation-partial-fan-out-acknowledgement-account-settings-scope-and-config-honesty)
@@ -155,6 +155,8 @@ Earlier decisions are left in place for context. Where a decision has been super
 - [D149: Direct MX stays in Receiving; Remote MX is a separate provider](#d149--direct-mx-stays-in-receiving-remote-mx-is-a-separate-provider)
 - [D150: One native mailbox pagination and discovery contract](#d150--one-native-mailbox-pagination-and-discovery-contract)
 - [D153: Forwarding and a common outbound API response](#d153--forwarding-and-a-common-outbound-api-response)
+- [D158: A bounded synchronous answer for message mutations, and a build identity](#d158--a-bounded-synchronous-answer-for-message-mutations-and-a-build-identity)
+- [D159: A remote folder keeps its id across a rename](#d159--a-remote-folder-keeps-its-id-across-a-rename)
 
 ---
 
@@ -257,7 +259,7 @@ A domain with no credential is valid: mail is still accepted and queued as `pend
 
 **Reason:** Familiar integration and easier migration.
 
-**Boundary:** Native MailMoose models remain authoritative for richer features.
+**Boundary:** Native Mammoth Mail models remain authoritative for richer features.
 
 ## D012 — Lightweight web UI
 
@@ -465,9 +467,9 @@ invalidates an approval. Draft bytes stay charged until send consumes them.
 ## D026 — External email approval for draft sends
 
 **Decision:** Phase 2 lets an external person authorize a draft send entirely
-by email, with no MailMoose account. An inbox may configure one optional
+by email, with no Mammoth Mail account. An inbox may configure one optional
 `approver_email` (Owner/Admin via `PATCH /v1/inboxes/{id}`). A configured
-approver makes `request-send` external automatically: MailMoose freezes the
+approver makes `request-send` external automatically: Mammoth Mail freezes the
 draft, records a request carrying the approver, a hashed one-time token and an
 expiry, and queues an approval email from the agent inbox through the existing
 outbound path in the same transaction. The optional `{"external": true}` flag
@@ -479,7 +481,7 @@ to the inbox; nothing happens until the approver sends that reply.
 **Trigger:** External approval is a property of the inbox, not the request. An
 agent that simply calls `request-send` gets approval by email whenever the
 inbox has an approver configured; it never has to know the transport. An inbox
-with an approver cannot create a MailMoose-only request (the owner can still
+with an approver cannot create a Mammoth Mail-only request (the owner can still
 approve or reject in the UI).
 
 An inbound message whose decoded subject contains exactly one strict
@@ -526,7 +528,7 @@ primitive; a valid reject stores optional feedback and returns the draft to
 request keeps the approver it was created with.
 
 **Requirement:** The product rule is that an agent expresses intent but cannot
-self-authorize, and that a nominated human approves without needing a MailMoose
+self-authorize, and that a nominated human approves without needing a Mammoth Mail
 account. Email is the lowest-friction transport, but a bare subject token is
 weak: it can be guessed, replayed, forwarded or forged. The design therefore
 pairs the secret token with a nominated sender address, enforces single use at
@@ -612,7 +614,7 @@ private or link-local IP literal. The shared `netutil` client validates inside
 redirects, and bypasses the proxy environment while enforcement is active;
 enforcement off restores the default transport and proxy behaviour.
 
-**Reason:** MailMoose is self-hosted (D064). Blocking private destinations by
+**Reason:** Mammoth Mail is self-hosted (D064). Blocking private destinations by
 default breaks legitimate private gateways, local relays and LAN receivers.
 An operator may still restrict outbound reachability, including provider bases
 that would otherwise reach local services or cloud metadata endpoints. The guard
@@ -886,7 +888,7 @@ across the approval boundary, MX edge, outbound queue, crypto and UI:
   email and the UI review page now show Bcc (which the generated MIME never
   carries) and both the text and HTML body alternatives. The HTML alternative
   is included as escaped source in the email and never rendered inside
-  MailMoose's own approval mail; only the sandboxed UI view renders it.
+  Mammoth Mail's own approval mail; only the sandboxed UI view renders it.
 - **Approval/rejection processing is retry-safe.** A transient store failure
   while recording a decision is returned, so the webhook provider re-delivers
   and the MX edge answers a temporary SMTP failure; only terminal outcomes
@@ -994,7 +996,7 @@ upload is kept for incremental uploads.
 ## D037 — External sending aliases (migration 028)
 
 **Decision:** An inbox may carry one or more **external sending aliases**: full
-email addresses on domains MailMoose does not manage, used only as outbound
+email addresses on domains Mammoth Mail does not manage, used only as outbound
 identities. Each external alias owns its own sending connector (any existing
 outbound provider, encrypted with `APP_ENCRYPTION_KEY`) and an optional sender
 display name. External aliases are strictly send-only: they never participate in
@@ -1057,7 +1059,7 @@ never claims one.
 (`internal/httpapp/external_alias_api.go`). No new dependency or runtime service.
 
 **Deferrals:** an external alias may not be used for inbound or for a per-alias
-DKIM/SPF identity MailMoose cannot prove; address immutability avoids migration
+DKIM/SPF identity Mammoth Mail cannot prove; address immutability avoids migration
 of queued attribution.
 
 **UI:** the inbox Aliases tab presents managed and external aliases as two
@@ -1453,15 +1455,15 @@ server-side reset covers lost access without depending on outbound email. API
 keys are treated as independent machine integrations, so they are not torn down
 by a human password reset.
 
-## D056 — Product rename to MailMoose
+## D056 — Product rename to Mammoth Mail
 
 **Decision:** Rename the product, Go module (`github.com/dellarb/mailmoose`),
 binaries (`mailmoose`, `mailmoose-mx`), env prefix (`MAILMOOSE_*`), HTTP
 headers (`X-Mailmoose-*`), discovery path (`/.well-known/mailmoose`), API key
 prefix (`mmm_`), cookies (`mmm_csrf`, `mmm_session`), and embedded brand
-assets to MailMoose. No compatibility shims for the old names.
+assets to Mammoth Mail. No compatibility shims for the old names.
 
-**Reason:** The product launches under the MailMoose name with its own logo
+**Reason:** The product launches under the Mammoth Mail name with its own logo
 pack. A breaking rename before first deployment avoids carrying two brands.
 
 ## D057 — Self-hosted Direct MX outbound delivery
@@ -1483,7 +1485,7 @@ forward and reverse DNS for the HELO identity, SPF, DMARC alignment, and IP
 reputation. A future extension may add durable per-recipient delivery state and
 signing support.
 
-> **Update (`D069`):** DKIM signing is now implemented for this path. MailMoose
+> **Update (`D069`):** DKIM signing is now implemented for this path. Mammoth Mail
 > generates an RSA-2048 signing key by default (an operator may paste their own
 > RSA key instead) and signs each queued message at queue time. The
 > operator-arranges-DKIM wording above is superseded for the signing key; the
@@ -1787,7 +1789,7 @@ secret is needed per subdomain. (Cloudflare documents the catch-all as
 apex-only and the "match every address" selector lists only apex domains; the
 observed behaviour that an onboarded subdomain is still delivered to that Worker
 is relied on, but Cloudflare's documentation does not state it explicitly, so a
-future change is a risk to watch.) MailMoose's model, however, required every
+future change is a risk to watch.) Mammoth Mail's model, however, required every
 recipient domain to have its own `domains` row with its own receiving config, so
 routing `foo@agent.example.com` needed a second domain row and a second receiver
 config/secret — even though Cloudflare already delivered it to the same Worker.
@@ -1870,7 +1872,7 @@ multi-tenant implementation was explored on a separate branch and then
 abandoned; it is archived outside this repository. The project is published as
 free, open-source, self-hosted software.
 
-**Decision:** MailMoose is self-hosted-only. `MODE` accepts only `selfhosted`.
+**Decision:** Mammoth Mail is self-hosted-only. `MODE` accepts only `selfhosted`.
 The hosted branches are removed from the codebase:
 
 - the `SelfHostedOnlyProvider` transport gate and the `OutboundAllowed` helper;
@@ -1943,7 +1945,7 @@ failure as a failure would itself cause duplicate delivery.
 
 ## D066 — Persist the transport envelope sender; forward envelope metadata; terminal webhook skips
 
-**Context:** Two gaps surfaced while wiring MailMoose to an agent that consumes
+**Context:** Two gaps surfaced while wiring Mammoth Mail to an agent that consumes
 forwarded inbound mail:
 
 1. Inbound messages persisted the canonical original envelope recipient
@@ -2300,8 +2302,8 @@ table rebuild in migration 039 carries every row over unchanged.
 ## D074 — OpenClaw is a second relay connector kind over the same transport
 
 **Decision:** OpenClaw is an inbox-level outbound relay connector, exactly like
-Hermes: the OpenClaw host dials an authenticated WebSocket out to MailMoose, no
-inbound port or webhook is required, MailMoose remains the durable source of
+Hermes: the OpenClaw host dials an authenticated WebSocket out to Mammoth Mail, no
+inbound port or webhook is required, Mammoth Mail remains the durable source of
 truth, unacknowledged email is replayed after a reconnect, and replies return
 over the same socket through the normal send path. OpenClaw is nevertheless a
 distinct connector kind in the product model (`clients.type = 'openclaw'`), not
@@ -2317,7 +2319,7 @@ a Hermes alias.
   setup code remembers which connector it creates. Existing rows default to
   `hermes`.
 - One-time setup codes reuse `POST /relay/enroll`. The code is an authority, not
-  an address: the claimant supplies the MailMoose URL. The connector UI shows
+  an address: the claimant supplies the Mammoth Mail URL. The connector UI shows
   `openclaw channels add --channel mailmoose --code <setup-url>`, where the URL
   origin is the base URL and the `#fragment` carries the code; a manual
   `channels.mailmoose` JSON5 block is the air-gapped fallback. The code expires
@@ -2330,7 +2332,7 @@ a Hermes alias.
 - Outbound authority reuses the relay role semantics: `owner` sends directly,
   `assistant` creates an approval-required draft. Sender provenance is
   deliberately untrusted on the connector side: the OpenClaw plugin dispatches
-  email as external, unauthenticated input and the MailMoose inbox allow list is
+  email as external, unauthenticated input and the Mammoth Mail inbox allow list is
   the primary sender gate (the same accepted risk as D058).
 
 **Reason:** The existing relay already provides every mechanic OpenClaw needs.
@@ -2342,7 +2344,7 @@ the small-runtime constraint: one process, one container, one store.
 **Complexity:** One migration rebuild, a kind discriminator on the existing
 relay rows, connector-specific admin routes and UI parity, and a small external
 OpenClaw channel plugin. No new runtime service or dependency is added to
-MailMoose.
+Mammoth Mail.
 
 ## D075 — Passkey backup flags, sysadmin break-glass, and atomic auth-method changes
 
@@ -2628,7 +2630,7 @@ no new migration.
 also fixes its returned `model.Inbox` reporting no trigger at all), two blank-form
 defaults, four preselected options, one JavaScript fallback, and doc/spec text.
 
-## D082 — Antler MX: a named shared receiver service with live endpoint discovery
+## D082 — Tusk MX: a named shared receiver service with live endpoint discovery
 
 **Requirement:** Give a self-hoster a zero-config direct-SMTP option that needs no
 public inbound port on the core and no receiver of their own: select a named
@@ -2639,15 +2641,17 @@ messages) to account for usage.
 **Decision:** Extend the per-domain Dial MX receiving provider (`dialmx`) with a
 `service` choice:
 
-- `antler` (default) — Antler MX, the hosted shared relay. The core resolves the
+- `antler` (default) — Tusk MX, the hosted shared relay. The service name is
+  unchanged when the display name became Tusk MX; it is a stored provider value,
+  not a label. The core resolves the
   receiver set from a versioned JSON manifest, snapshots it into the domain's
   encrypted receiving configuration, generates the domain's exact Ed25519 key,
   and shows the MX and `_mailmoose-mx.<domain>` TXT records to publish.
 - `custom` — the pre-existing manual `receiver_urls` behaviour, unchanged. A
-  legacy save with only `receiver_urls` is never silently treated as Antler.
+  legacy save with only `receiver_urls` is never silently treated as Tusk.
 
-The manifest is compiled in (`internal/transport/mxdial/antler-endpoints.json`)
-and fetched live from the project repository at setup-save time, with a
+The manifest is compiled in (`internal/transport/mxdial/endpoints.json`) and
+fetched live from the project repository at setup-save time, with a
 ten-minute cache, a last-known-good fallback and the embedded copy as the final
 fallback, so a hosting outage never blocks setup. It carries both the HTTPS
 session origins and the SMTP MX hostnames/priorities. The manifest decoder
@@ -2663,7 +2667,7 @@ Registration metadata travels per domain: `DomainAuth` gains optional
 malformed value is dropped rather than failing the proof. The receiver logs both
 on the `dialmx domain auth` registration/renewal summary and on the per-recipient
 resolve and handoff records, so usage (contact, setup, domains, messages) can be
-read or exported from the receiver's structured logs. Antler MX does not
+read or exported from the receiver's structured logs. Tusk MX does not
 introduce an account tie-in, an operator dashboard, a receiver database or a
 durable queue.
 
@@ -2697,14 +2701,15 @@ later addition requiring no rework.
 
 **Consequences:**
 
-- The Dial MX provider selector reads **Antler MX (Free SMTP Relay - no port
-  forwards required)**; the short label stays **Antler MX**.
+- The Dial MX provider selector reads **Tusk MX (Free SMTP Relay - no port
+  forwards required)**; the short label stays **Tusk MX**. The service was
+  displayed as Antler MX until the rename; only the label changed.
 - `DomainAuth` metadata is an optional field on the strict mx-v2 contract:
   a receiver or core built before it rejects the frame as malformed when it
   receives the fields, so **upgrade the shared receiver first, then cores** —
   the same coordinated-release pattern as D072. Custom cores send no metadata
   and are unaffected.
-- Antler MX endpoints are public-only regardless of a self-hosted operator's
+- Tusk MX endpoints are public-only regardless of a self-hosted operator's
   outbound opt-out: the hosted service must never resolve to a private
   destination.
 - No new dependency, service or runtime component is added to the core; the
@@ -2779,7 +2784,7 @@ own standalone Dial MX receiver and point their domains at it without a system
 administrator and without exposing a public inbound port on the core.
 
 **Decision:** Add **Remote MX** (`remotemx`), a third direct-SMTP receiving
-provider alongside Direct MX (`mx`, installation) and Antler MX (`dialmx`
+provider alongside Direct MX (`mx`, installation) and Tusk MX (`dialmx`
 service `antler`, shared DNS relay). It is Dial MX in **single mode only**: the
 core dials the account's receiver outbound over HTTPS/2 (or cleartext h2c for an
 explicitly-private receiver) and authenticates with a shared bearer key. There
@@ -2824,9 +2829,9 @@ database engine.
 **Consequences:**
 
 - The domain Receiving provider menu now offers three direct-SMTP paths:
-  **Direct MX** (installation, system administrator), **Antler MX** (shared,
+  **Direct MX** (installation, system administrator), **Tusk MX** (shared,
   DNS-authenticated, zero-config) and **Remote MX** (account, single-mode
-  bearer). DNS-authenticated shared receivers remain Antler MX / per-domain Dial
+  bearer). DNS-authenticated shared receivers remain Tusk MX / per-domain Dial
   MX custom; Remote MX does not do DNS auth.
 - The receiver and the `mxdial` wire/dialer code are unchanged; the provider
   slug `remotemx` carries no `ConfigField`s (the receiver is account-scoped) and
@@ -3034,7 +3039,7 @@ management and API-key endpoints are unchanged.
 "Recent messages" table) label every row's origin in a single **Source** column,
 renamed from **Client**. For outbound mail the source is unchanged — the API
 key / Hermes credential that sent it. For inbound mail it now names the
-concrete receiver: `Antler: <smtp_hostname>` for a hosted Antler MX shared
+concrete receiver: `Tusk: <smtp_hostname>` for a hosted Tusk MX shared
 receiver (resolved from the domain's saved receiver snapshot by matching the
 session URL, never hard-coded), `Dial MX: <host>` for a custom Dial MX receiver,
 `Direct MX` for the installation receiver, `Remote MX` for an account receiver,
@@ -3055,7 +3060,7 @@ composes the label. No `mxwire` protocol change and no receiver rollout is
 required.
 
 **Reason:** an operator could previously see only "mx" for all three MX families
-and had no way to tell which Antler receiver delivered a message. The receiver
+and had no way to tell which Tusk receiver delivered a message. The receiver
 is known at receive time, so labelling it there is both cheaper and more
 accurate than reconstructing it later.
 
@@ -3300,7 +3305,7 @@ could be shown "ready" while the core's MX check said it was not routed, and the
 operator had two sources of truth to reconcile. The receiver is the only party
 that can authoritatively say "I am a delivery target for this domain".
 
-**Decision (2026-10-10):** A shared-mode Dial MX receiver (Antler MX and custom
+**Decision (2026-10-10):** A shared-mode Dial MX receiver (Tusk MX and custom
 Dial MX) verifies routing itself and reports it on its own status light, so each
 receiver is one traffic light and the core no longer independently decides
 routing. The authorization proof becomes two ordered gates:
@@ -3336,7 +3341,7 @@ Consequences on the core side:
 - The receiving dialog's per-receiver table collapses from
   `Connector | Connection status | MX status` to `Connector | Status` (one light).
 - No protocol version bump and no capability negotiation: `AuthResult.Reason` is
-  already a free string, and the Antler fleet is upgraded in place, so an old
+  already a free string, and the Tusk fleet is upgraded in place, so an old
   receiver's `ready` cannot be mistaken for a routed one by a new core only if the
   fleet is not mixed — the fleet is upgraded together.
 
@@ -3363,7 +3368,7 @@ docs.
 inbound pipeline, without a new outbound adapter.
 
 **Decision (2026-10-10):** Postmark authenticates using HTTP Basic credentials
-generated by MailMoose per domain. It extracts the JSON `RawEmail` value
+generated by Mammoth Mail per domain. It extracts the JSON `RawEmail` value
 byte-for-byte and stages it as raw MIME, retaining binary attachments.
 Postmark does not sign inbound webhooks, so the envelope sender is not attested.
 
@@ -3589,7 +3594,7 @@ immutable provider IDs and per-folder change cursors.
 Quick Connect uses a deployment-configured public-client Entra app ID, supplied
 at rollout; advanced self-hosters can configure their own client ID and tenant.
 Authorization-code + PKCE uses the registered `http://localhost` redirect, pasted
-by the human into MailMoose. No secret, callback relay or token broker. Existing
+by the human into Mammoth Mail. No secret, callback relay or token broker. Existing
 connections retain their app ID/tenant. Reconnect preserves identity/mailbox.
 
 **Amendment to Phase 2 planning:** Start with delta polling for both personal and
@@ -3884,14 +3889,14 @@ change is needed. No new dependency or service. See `docs/EMAIL_PROVIDERS.md#one
 
 **Date:** 2026-10-12. **Approved by:** Ben.
 
-**Requirement:** The saved Antler MX status dialog polled its setup GET every
+**Requirement:** The saved Tusk MX status dialog polled its setup GET every
 10 seconds with a **Check now** button and a countdown, and every poll ran the
 bounded published-record (`checkMX`/`checkTXT`) resolver lookups — even though
 the status page rendered only the receivers' self-reported `status[]`. Separately,
-a domain with a ready Antler receiver could still publish MX records pointing
+a domain with a ready Tusk receiver could still publish MX records pointing
 elsewhere (a leftover Google Workspace record, an auto-added backup MX, a `*`
 wildcard inherited by a subdomain) with nothing surfacing that mail might not route
-via Antler; and a domain whose TXT *and* MX were both wrong showed only the TXT
+via Tusk; and a domain whose TXT *and* MX were both wrong showed only the TXT
 prompt, because the receiver stops at its first failing gate and reports a single
 reason.
 
@@ -3910,10 +3915,10 @@ top-level `unexpected_mx[]` from the watcher's cache for every read; nothing
 resolves DNS on a render. (4) The aggregate dashboard light keeps green/amber/red:
 green when at least one receiver is ready and no rogue MX records are published;
 amber when at least one receiver is ready but the domain publishes MX hostnames that
-are not Antler receivers; red otherwise. (5) The status view's fix prompts are
+are not Tusk receivers; red otherwise. (5) The status view's fix prompts are
 driven by the **per-check DNS verdict**, not the receiver's single reason, so a
 domain with both TXT and MX wrong shows **both** prompts; each receiver row shows
-its specific Antler reason (`not in MX`, `key unavailable`, `authentication
+its specific Tusk reason (`not in MX`, `key unavailable`, `authentication
 failed`, `receiver unreachable`, …) inline next to its light. The form embeds the
 DNS verdict, the copy-ready records and the extra-MX list so the dialog opens
 complete and updates live.
@@ -3932,7 +3937,7 @@ reason cannot.
 **Complexity:** No new dependency, service, table or migration. The check logic
 moves to `internal/app` (one resolver-bounded implementation); a new
 `internal/app` watcher (`ExtraMXWatcher`, reusing the store, the Dial MX manager
-status and the Antler receiver snapshot) owns the verdict and publishes
+status and the Tusk receiver snapshot) owns the verdict and publishes
 `mx.dns_changed`; `dialMXHealth` takes the verdict; `domainInboundLight` and the
 dashboard render read it via `Service.DNSState`/`ExtraMXState` (no DNS); the
 receiving response exposes `dns[]` and `unexpected_mx`; the dialog's JS renders the
@@ -4146,11 +4151,11 @@ existing last-verdict map; and a net deletion of `txtMatches`/`parseMM1`. One
 imported helper (`mxwire.ParseDomainTXT`) already used by the receiver. No new
 dependency, service, table or migration. See `docs/REMOTE_MX.md`, `docs/API.md`.
 
-## D112 — Antler setup keeps its receiver snapshot, and its settings are editable in place
+## D112 — Tusk setup keeps its receiver snapshot, and its settings are editable in place
 
 **Date:** 2026-10-12. **Approved by:** Ben.
 
-**Requirement:** Two problems with editing a saved Antler MX setup. (1) Every save
+**Requirement:** Two problems with editing a saved Tusk MX setup. (1) Every save
 re-resolved the live receiver manifest, so the wizard — which saves the
 configuration more than once while an operator works through its steps — could
 select a different receiver set at Finish from the one whose DNS records the
@@ -4187,7 +4192,7 @@ dependency or service. See `docs/REMOTE_MX.md`, `docs/API.md`.
 
 ## D069 — DKIM signing on the Direct MX outbound path
 
-**Decision:** MailMoose signs outbound messages with DKIM on the Direct MX
+**Decision:** Mammoth Mail signs outbound messages with DKIM on the Direct MX
 sending path, and only there. `internal/dkimsign` wraps
 `github.com/emersion/go-msgauth/dkim` (already approved under `D031`) and applies
 `relaxed/relaxed` canonicalisation, SHA-256, and an explicit header list that
@@ -4206,19 +4211,19 @@ The configuration is a single on/off choice on the Direct MX sending tab:
 - `dkim_selector` / `dkim_domain` / `dkim_public_key` — derived and stored, but
   not operator-editable.
 
-**MailMoose generates the RSA-2048 keypair.** There is no bring-your-own-key path:
+**Mammoth Mail generates the RSA-2048 keypair.** There is no bring-your-own-key path:
 the selector is a fixed label and the signing domain is the domain mail is sent
 from, so enabling signing is the whole configuration. Turning signing off deletes
 the stored key material.
 
 The public key is never accepted from a caller and is never stored as an
 independent value: it is derived from the stored private key, so a displayed
-public key can never disagree with what MailMoose signs with, and the private key
+public key can never disagree with what Mammoth Mail signs with, and the private key
 never appears in a config response. A key posted to the hidden field is discarded
 rather than used: the only trusted source is the stored key.
 
 The record to publish is shown **inline in the sending editor**, in the same
-record-table style as the Antler MX setup screen, and appears as soon as signing
+record-table style as the Tusk MX setup screen, and appears as soon as signing
 is switched on. The private key is available on demand behind a "Show private
 key" disclosure whose reveal is a CSRF-protected POST carrying a one-time,
 single-use flash; it is never rendered on the page.
@@ -4231,7 +4236,7 @@ that publishes `p=quarantine` or `p=reject` is effectively unachievable without 
 aligned signature, so the gap made Direct MX unusable for many domains.
 
 This deliberately departs from `D057`'s stated rationale, which assigned key
-arrangement to the operator: **MailMoose generates the keypair and owns the record
+arrangement to the operator: **Mammoth Mail generates the keypair and owns the record
 name.** A self-hosted operator should not need `openssl` and a hand-assembled DNS
 record to send aligned mail, and a bring-your-own-key path plus operator-chosen
 selector and signing domain turned one decision into five. `D057`'s other
@@ -4284,7 +4289,7 @@ lookup.
 The states map onto the existing `dns-light` vocabulary with one addition:
 
 - **green** (`ok`) — a record is published and its `p=` value equals the key
-  MailMoose signs with;
+  Mammoth Mail signs with;
 - **red** (`danger`) — a record is published but the key differs (a stale record
   from a rotated key, or another operator's record on the same name);
 - **grey** (`grey`, new token) — not yet published, or the lookup could not be
@@ -4305,7 +4310,7 @@ check calls green is one a verifier accepts.
 **Reason:** `D069` shipped DKIM signing but explicitly deferred "DKIM DNS
 validation and a published-record indicator". Without it an operator who enabled
 signing had no way to see whether the record they were told to publish had
-propagated, whether it matched the key MailMoose actually signs with, or whether
+propagated, whether it matched the key Mammoth Mail actually signs with, or whether
 a key rotation had left a stale record behind — the exact failure modes the
 signing feature's value depends on. The receiving side already answers the
 equivalent question ("will mail arrive?") with a watcher-owned traffic light, so
@@ -4321,12 +4326,12 @@ the sending side is the obvious and symmetric gap to close.
   is already grey, so `grey` is an explicit alias for a state that is neither a
   settled pass nor a settled failure.
 - The sending dialog polls the record light while open
-  (`GET /ui/domains/{id}/sending/dkim/status`), mirroring the Antler status poll,
+  (`GET /ui/domains/{id}/sending/dkim/status`), mirroring the Tusk status poll,
   so an operator watching DNS propagate sees the dot turn green without
   reopening. The endpoint reads the watcher's cached verdict and asks for a
   stale-triggered re-check, so a poll never blocks on a lookup.
 - Only Direct MX is affected; every other outbound provider signs with its own
-  key, so it has no MailMoose-published record to check.
+  key, so it has no Mammoth Mail-published record to check.
 
 **Complexity:** One new `CheckDKIM` in `internal/app`, one parser in
 `internal/dkimsign`, one store query (`ListDirectMXSendingDomains`), a union in
@@ -4414,7 +4419,7 @@ mailbox as a bounce, which is visible without a dashboard.
 
 - **Terminal failures only.** On a terminal outbound failure — a permanent
   provider error, an ambiguous send, or an exhausted retry budget
-  (`MarkFailed`/`MarkWorkflowFailed` with `maxAttempts` reached) — MailMoose
+  (`MarkFailed`/`MarkWorkflowFailed` with `maxAttempts` reached) — Mammoth Mail
   writes a delivery-failure notice. A retryable failure that is rescheduled is
   untouched: no notice, no event, message stays queued.
 - **The notice is a real inbound message, generated locally.** It is written
@@ -4966,7 +4971,7 @@ account-wide folder-addressed IDs remain unchanged.
 
 > **Superseded in part by D151 (2026-10-22, human approved).** The unified
 > membership projection described in this amendment is replaced: a message's
-> location is `folder_id` (one stable MailMoose folder id, or `null`) and
+> location is `folder_id` (one stable Mammoth Mail folder id, or `null`) and
 > `label_ids` carries additive labels only (`tag:Name`, empty for IMAP). The
 > `folder:<id>` identity, the exclusive/system label classification and the
 > catalogue's `role` are gone. The route, role and filter-resolution decisions
@@ -5012,7 +5017,7 @@ The catalogue reports `capabilities` (`can_create`, `create_kind`,
 describes the inbox. One descriptor projection serves both create and list so
 they cannot drift. Provider-owned label names (Gmail user labels, Outlook
 categories) are validated by a provider rule that allows hierarchical names; the
-MailMoose-native rule still rejects path separators. The action queue records
+Mammoth Mail-native rule still rejects path separators. The action queue records
 which rule applied. OpenAPI declares the alternate `202` queued-action response
 on async-default mutations and documents the label filter parameters.
 
@@ -5083,12 +5088,12 @@ never uses an approver, and the notification email was pure noise.
   the notification-address field. The legacy `notify_address` /
   `notify_overridden` values remain in the API and store but have no effect.
 
-**Scope:** draft mode (`remote_draft`) only. The MailMoose approval flow
+**Scope:** draft mode (`remote_draft`) only. The Mammoth Mail approval flow
 (`mailmoose_approval`) — approver, approval emails, the "Draft send requests"
 card, `draft_send_requests`, and its notification state machine — is unchanged.
 
 **Consequences:** A `remote_draft` request to send places the draft and nothing
-else; the operator sees an ordinary draft that disappears from MailMoose once the
+else; the operator sees an ordinary draft that disappears from Mammoth Mail once the
 append is confirmed and appears in their own client's Drafts folder. The
 `assistant_handling_requests` table keeps its `notification_status` /
 `notification_message_id` columns (unused, scanned for backward compatibility);
@@ -5109,7 +5114,7 @@ and the affected tests. No new dependency.
 
 **Context:** A standalone inbox in `remote_draft` mode appends a frozen draft to
 its connected mailbox's Drafts folder, and a standalone send appends a copy to its
-Sent folder. The MailMoose read model for those folders is the cached remote index
+Sent folder. The Mammoth Mail read model for those folders is the cached remote index
 (`inbox_remote_messages`), which was only refreshed by the whole-inbox deep
 reconcile (`ReconcileRemote`) on the worker's full-sync cadence or an explicit
 `POST /v1/inboxes/{id}/remote/refresh`. A read reconciles on demand only when a
@@ -5200,8 +5205,8 @@ the two shells).
 
 **Date:** 2026-10-15. **Approved by:** Ben.
 
-**Antler UI update (2026-10-21, approved by Ben):** The local-DNS hard-gate
-presentation below is superseded for Antler setup and status. A current receiver
+**Tusk UI update (2026-10-21, approved by Ben):** The local-DNS hard-gate
+presentation below is superseded for Tusk setup and status. A current receiver
 grant proves TXT authority and that receiver's MX routing; an independently cached
 negative DNS result must not contradict it. DNS-step record lights follow receiver
 proofs, and repair prompts follow explicit receiver refusals (`not_mx` or
@@ -5212,7 +5217,7 @@ gates are unchanged. Busy refresh requests are coalesced, stale snapshots get a
 bounded retry, and successful setup Finish saves and closes the dialog; reopening
 shows status. Rotation retains its separate completion flow.
 
-**Requirement:** On a brand-new domain in Antler MX mode the MX check read
+**Requirement:** On a brand-new domain in Tusk MX mode the MX check read
 `mismatch` while the TXT check reported `pending`, which the operator read as
 "the work is underway" — but nothing was pending. Two problems sat behind that.
 (1) The state vocabulary lied: `pending` is a temporally-loaded word that implies
@@ -5358,7 +5363,7 @@ flight", because a pre-upgrade row cannot have a send started by the new code.
 A send that was in flight across the upgrade is therefore not detected; it
 degrades to the pre-existing behaviour for exactly those rows and no worse.
 
-**Reason:** Email is not idempotent at the provider for the transports MailMoose
+**Reason:** Email is not idempotent at the provider for the transports Mammoth Mail
 speaks, so "maybe already delivered" must fail closed. Making the in-flight
 marker part of the queued row — written before the provider call and cleared only
 by a definitive outcome or an explicit operator action — is the smallest change
@@ -5413,7 +5418,7 @@ the operator is no longer asked to re-enter a key that still works. A genuine
 ## D128 — The root encryption key is generated when the operator does not supply one
 
 **Decision:** `APP_ENCRYPTION_KEY` is optional. When it is unset, startup uses
-`<DATA_DIR>/encryption_key`; when that file does not exist, MailMoose generates
+`<DATA_DIR>/encryption_key`; when that file does not exist, Mammoth Mail generates
 32 random bytes, writes them as 64 lowercase hex characters (the
 `openssl rand -hex 32` shape) with mode 0600, and logs the path at WARN so the
 operator can back it up or supply their own. A supplied `APP_ENCRYPTION_KEY`
@@ -5458,7 +5463,7 @@ version names; this decision supersedes those names for the current protocol.
 **Consequences:** Core and receiver must be rebuilt and updated together.
 Pre-release v2 peers are incompatible; there is no alias, negotiation or fallback.
 Message storage, encrypted domain keys, DNS `MM1` proofs, `mxfp-v1` retry receipts,
-the Antler manifest schema and the separate `/v1` agent API do not change. No data
+the Tusk manifest schema and the separate `/v1` agent API do not change. No data
 migration is required, and existing domain keys need not be rotated.
 
 **Complexity:** Rename protocol identifiers, session types and source/test files;
@@ -5516,7 +5521,7 @@ decision deliberately tightens that policy rather than calling it undocumented.
   mailbox access. An unauthorized approval may nevertheless disclose the draft's
   existing content/attachments to its existing recipients. No provenance flag or
   changed acceptance behavior is introduced in this work.
-- **Private outbound stays enabled by default.** MailMoose is self-hosted-only
+- **Private outbound stays enabled by default.** Mammoth Mail is self-hosted-only
   (D064), and `ALLOW_PRIVATE_OUTBOUND=true` remains intentional. D062's blanket
   private-webhook prohibition is corrected to describe the existing conditional
   guard. No network-policy change or extra webhook switch is introduced.
@@ -5531,7 +5536,7 @@ service, destination-binding schema, token format or approval protocol.
 **Requirement:** A receiver the core can reach but that will not take the session
 must read as a settled failure. An incompatible receiver build answers `404` for
 the session path this core posts (`D132` renumbered it to `/mx/v1/session`), and
-`failureState` collapsed every such answer into `disconnected`, which the Antler
+`failureState` collapsed every such answer into `disconnected`, which the Tusk
 status dialog and the account Remote MX panel render as "Reconnecting" — forever,
 because the condition never clears on its own and the retry loop keeps running.
 The operator saw a session still in progress where the receiver had in fact
@@ -5552,7 +5557,7 @@ answered and declined.
 - Unchanged: a receiver that has never answered is `unreachable` (DNS, TLS, a
   refused connection, and every timeout), and one that was reached and dropped is
   `disconnected`.
-- All four status surfaces follow the state so they cannot disagree: the Antler
+- All four status surfaces follow the state so they cannot disagree: the Tusk
   status dialog rows, the server-rendered setup panel, the account Remote MX pill
   (previously "connecting" for every non-ready state), and the installation
   Direct MX panel. Each refusal reason gets its own operator-facing phrase, and a
@@ -5565,7 +5570,7 @@ operator can fix it. Retrying is still correct — a redeployed receiver recover
 without a core restart — so the fix is the reported state, not the loop. One
 message covers every refused code because at this layer a `401` (a proxy in front
 of the receiver) and a `404` (an older build) are both "the receiver is not
-serving this core", not a credential the operator edits in MailMoose.
+serving this core", not a credential the operator edits in Mammoth Mail.
 
 **Complexity:** One classification function, one error type carrying the HTTP
 status, three reason tokens and the state mapping in `mxdial`; label and mapping
@@ -6152,7 +6157,7 @@ surface.
 
 **Requirement:** Keep receiver setup with domain Receiving, remove the duplicate
 Admin settings surface and make the UI distinguish direct delivery to the
-MailMoose core from a separately operated receiver.
+Mammoth Mail core from a separately operated receiver.
 
 **Decision (2026-10-21, human approved):** Direct MX means delivery to the
 receiver bundled with the core. Its shared receiver controls remain in the
@@ -6164,7 +6169,7 @@ network/timeouts and STARTTLS controls. The dialog widens when Direct MX is
 selected. There is no Included/Remote selector in the Direct MX UI.
 
 Remote MX remains a distinct receiving provider for an operator-run receiver:
-MailMoose connects outbound over HTTP/2, and the receiver URL/key are configured
+Mammoth Mail connects outbound over HTTP/2, and the receiver URL/key are configured
 in the account's Remote MX settings surfaced from Receiving. The UI links to the
 Remote SMTP receiving guide and does not present that receiver as the core's
 internal listener.
@@ -6204,7 +6209,7 @@ Search may omit q for filter-only reads; advanced FTS5/provider syntax is not
 claimed to be portable.
 
 Message/search merging advances source-native cursors without reordering a
-provider's window by MailMoose IDs: provider search order can break ties
+provider's window by Mammoth Mail IDs: provider search order can break ties
 differently, and reordering then resuming a native cursor loses results. The
 merger chooses among source heads; source progress, not a global-ID cutoff,
 prevents duplicates. Local message/search keysets use received time (creation
@@ -6236,18 +6241,18 @@ meant two different things, and the behaviour differed per provider (IMAP
 labels were folders, Outlook folders were exclusive labels, Gmail had
 overlapping system labels with no canonical one). Operators also had no
 single place that said what a mailbox supports: "create a label" meant a
-MailMoose tag on one provider, a Gmail user label on another and a remote
+Mammoth Mail tag on one provider, a Gmail user label on another and a remote
 folder on a third.
 
 **Decision (2026-10-22, human approved — API Beta 3, intentional contract
 change):** A message has two independent classifications and they are never
 mixed.
 
-- `folder_id` is the canonical location: one stable MailMoose folder id
+- `folder_id` is the canonical location: one stable Mammoth Mail folder id
   (`fld_...`, the ids `GET /v1/inboxes/{id}/folders` returns) or `null`. It is
   always present. A folder id is never a label id, and the `folder:<id>`
   catalogue identity is removed.
-- `label_ids` carries **additive labels only** (`tag:Name`): MailMoose tags
+- `label_ids` carries **additive labels only** (`tag:Name`): Mammoth Mail tags
   for a domain inbox, Gmail user labels, Outlook categories. It is always
   present and empty for an IMAP inbox, which has no canonical labels and
   refuses every label operation. The exclusive/system label classification
@@ -6312,7 +6317,7 @@ migration preserves existing folder and label data rather than rewriting it.
 **Requirement:** D151 makes an Outlook category the mailbox's additive label.
 Creating one has to write to the mailbox, and Graph only offers that through
 `POST /users/{mailbox}/outlook/masterCategories`, which is guarded by the
-`MailboxSettings.ReadWrite` delegated permission. Without it MailMoose could
+`MailboxSettings.ReadWrite` delegated permission. Without it Mammoth Mail could
 only remember a category name locally, which is not a category the mailbox
 knows about.
 
@@ -6321,7 +6326,7 @@ knows about.
 `Mail.Send` and `offline_access` (plus the shared-mailbox permissions for a
 shared connection). Category creation calls the native master-category
 endpoint, and a defined-label cache entry is written **only after Graph has
-accepted the category**, so a failed creation never leaves MailMoose claiming
+accepted the category**, so a failed creation never leaves Mammoth Mail claiming
 a category the mailbox does not have. Categories stay read-only for rename
 and delete: `rename_labels` and `delete_labels` remain false, while native
 category add/remove on a message keeps working.
@@ -6480,3 +6485,170 @@ carrying it in that inbox. No opaque tag-ID migration is introduced.
 capabilities, routes and event types. Clients ignore unknown response fields/events
 and preserve opaque references. Breaking contract changes require a new API
 version. No new service, dependency or database migration is needed here.
+
+## D157 — Outlook categories are renamed and deleted natively
+
+**Requirement:** D152 made an Outlook category Mammoth Mail's additive label and
+created it natively, but refused rename and delete (`rename_labels` and
+`delete_labels` false), attributing the gap to the provider. Graph has always
+supported both: `PATCH` and `DELETE` on
+`/users/{mailbox}/outlook/masterCategories/{id}`. A category created through
+Mammoth Mail could therefore never be removed through it, which UAT found when a
+test category could not be cleaned up.
+
+**Decision (2026-10-24):** The Microsoft connector implements category rename
+and delete against the native endpoint, addressed by the master-category id
+Graph assigned the name (a display name is matched case-insensitively and an
+unknown name is not found rather than guessed at). The provider is changed
+first, so a client is never told a category changed when only a local copy did;
+the local label catalogue then follows, and a local failure is logged rather
+than reported as a failed rename or delete that already happened. Deleting a
+category also removes it from every message carrying it, which Graph does.
+
+`rename_labels` and `delete_labels` are therefore true for an Outlook inbox,
+matching the already-contracted capability fields. No route, field or status
+code changes; `DELETE` and `PATCH` on a category already existed and previously
+answered 409 `unsupported_operation`. This supersedes the last sentence of
+D152's decision paragraph only; its permission and creation rules stand.
+
+**Complexity:** Two client calls, two service methods and one capability flag
+flip. No new dependency, service, secret handling or schema change; the
+`MailboxSettings.ReadWrite` grant D152 added already covers both calls.
+
+## D158 — A bounded synchronous answer for message mutations, and a build identity
+
+**Requirement:** UAT on a live connected mailbox found a move answering `202`
+while the provider took up to 31 s, so a client that read back immediately saw
+the old folder and could take the move for failed (and re-issue it). The same
+run could not confirm which build was deployed: no surface reported a version,
+so "not fixed" and "not deployed" were indistinguishable.
+
+**Decision (2026-10-24):** A message mutation still enqueues its durable action
+(the durable order, retry and ambiguity handling do not change), but the REST
+submission now waits up to five seconds for it and returns the settled body when
+it lands: the message for patch/move/restore, `204` for delete/purge, `{id,seen}`
+for seen. A provider slower than that returns the existing `202` with the action
+and its `Location`. `?wait=true` keeps its 30-second bound. The web UI keeps
+submitting asynchronously and following the queue. A provider call is never
+moved onto the request goroutine unbounded, so a slow IMAP move cannot turn into
+a gateway timeout. Re-issuing an identical move/classify action while one is
+pending or running returns that action instead of queueing a second one.
+
+**Explicitly approved API shape change (Ben, 2026-10-24):** message mutation
+routes (PATCH, move, labels, restore, delete, purge, seen) now answer `200`/`204`
+when they settle within the grace, where they previously always answered `202`
+unless `?wait=true`. `200`/`204` were already documented outcomes of those
+routes, so the status set is unchanged; only the default is now "settle if fast".
+The `POST /v1/inboxes/{id}/trash/empty` parent operation stays `202`.
+
+`GET /healthz` and `GET /.well-known/mailmoose` gain a `build` field naming the
+running binary (commit stamped at build time, otherwise the build timestamp).
+The Dockerfile accepts `MAILMOOSE_BUILD` for that stamp. No `/version` route.
+
+**Explicitly approved API shape change (Ben, 2026-10-24):** the new `build`
+field on the health and discovery responses. It is additive and needs no
+credential.
+
+**Complexity:** One grace constant, one wait already available in the app layer,
+one duplicate-action lookup, one build string threaded through config. No new
+dependency, service or table.
+
+## D159 — A remote folder keeps its id across a rename
+
+**Context:** Renaming a parent folder on a connected mailbox silently re-minted
+the `fld_...` id of every folder beneath it. The rename itself answered `200` and
+the tree stayed correct, but a client holding a child id then got `404 folder not
+found`. `docs/API.md` promised the ids were stable, and the local path already
+kept them (`Store.RenameFolder` rewrites the subtree's paths and preserves every
+row's id), so the remote path was the inconsistent one.
+
+The cause was that `Store.ReconcileRemoteFolders` keys a folder by `path` and
+mints a fresh `idgen.New("fld")` for any path it has not seen. A remote rename is
+applied by re-discovering the whole tree, so every descendant arrived at an
+unfamiliar path and became a new row.
+
+**Decision (2026-10-24):** A folder id is an address; its name is data. Both
+remote paths now keep ids the way the local path already did.
+
+- A provider with its own rename-stable folder identity passes it as
+  `RemoteFolderSync.StableID`: the Gmail label id and the Graph folder entry id,
+  both of which are already what the `path` column holds. When the reconcile
+  finds no row at the discovered path, it looks the row up by that identity and
+  moves it to the new path in place, keeping its id.
+- IMAP has no entity id at all (its path *is* the mailbox name), which is why the
+  protocol itself keys cache invalidation on `UIDVALIDITY` rather than a stable
+  handle. A rename there hands the old and new path to
+  `Store.RenameRemoteFolderPaths`, which rewrites the renamed folder and every
+  descendant before the reconcile — the same subtree rewrite the local path uses.
+
+A global or account-wide folder id was considered and rejected: it would not
+have fixed the symptom (the id was re-minted per path, not colliding per inbox),
+it changes an id format nothing depends on, and inbox scoping in
+`GetFolderByID` is a security boundary that a global id would invite callers to
+drop.
+
+**Not a shape change:** no route, field, type, status or error code moves. The
+`id` a response carries is the same field; it now keeps its value the way the
+contract already said it would. `StableID` is internal to `store` and is never
+serialised. No migration: no column or table is added, and the anchor is a
+column that already exists.
+
+**Trade-off:** the rename response still carries only the renamed folder.
+Descendant *paths* change even though their ids do not, so a client displaying
+child paths re-reads `GET /v1/inboxes/{id}/folders`. Documented in `API.md`.
+
+**Complexity:** One field on the reconcile input, one id-preserving lookup in
+`ReconcileRemoteFolders`, one subtree-rewrite method, one provider check. No new
+dependency, service, table or column.
+
+## D161 — Brand-free client contracts (headers, discovery path, realm, images)
+
+**Context:** The MailMoose name is no longer available for this product, so it
+is renamed **Mammoth Mail**. Renaming the brand exposed four client-facing names
+still carrying it. The brand does not belong in a protocol contract: these names
+outlive any product name, and renaming them later is expensive. Pre-launch is
+the cheapest time to make them neutral.
+
+**Decision (2026-10-28), each an explicitly approved API change:**
+
+- **The rename carries the local workflow with it.** Display name **Mammoth
+  Mail**, code and file identifiers `mammothmail` / `MAMMOTHMAIL_`, Go and
+  JavaScript identifiers `MammothMail`, client configuration path
+  `~/.mammothmail/client.json`, and the OpenClaw plugin package
+  `@mammothmail/openclaw`. The approval mode `mailmoose_approval` named the
+  product rather than the behaviour, so it becomes **`local_approval`** with the
+  same meaning: a domain inbox is preset to it and a standalone inbox may select
+  it. **Migration 004 is data-only** — it rewrites `inboxes.authoring_mode` and
+  `assistant_handling_requests.mode` from `mailmoose_approval` to
+  `local_approval`; the pinned schema hash does not move. Event payloads already
+  written with the old value are history and are not rewritten.
+- **Webhook and forward headers are `X-Mail-*`** (was `X-MailMoose-*`):
+  `X-Mail-Event`, `X-Mail-Delivery`, `X-Mail-Message-Id`, `X-Mail-Cursor`,
+  `X-Mail-Signature`, `X-Mail-Envelope-From`, `X-Mail-Envelope-To`. Every
+  webhook header is sent under **both** names for a transition period;
+  removing the old names is a later, separately approved change.
+- **Cloudflare Worker inbound headers are `X-Mail-*`** (was `X-MailMoose-*`):
+  `X-Mail-Recipient`, `X-Mail-Envelope-From`, `X-Mail-Delivery-ID`,
+  `X-Mail-Received-At`. The server accepts either name, so a Worker still on the
+  old names keeps delivering. `transport/cloudflare.HeaderEnvelopeTo` was
+  misnamed (it held the envelope-**from** header); it is now
+  `HeaderEnvelopeFrom`.
+- **Discovery is `GET /.well-known/mail-api`** (was `/.well-known/mailmoose`).
+  The old path stays as a permanent alias.
+- **Auth realm is `mail-api`** (was `mailmoose-api`).
+- **GHCR images are `mammothmail` and `mammothmail-remote-mx`** (was
+  `dirty-wip-mailmoose*`); the `dirty-wip-` dev prefix is dropped. The brand is
+  kept here because operators choose the image by name.
+
+**Now brand-free too:** the MX wire label is `mail-mx-v1`
+(was `mailmoose-mx-v1`), the evaluator tag is `mail-mx/1`, the DNS proof record
+is `_mail-proof.<domain>`, and environment/script variables are `MAIL_*` (was
+`MAMMOTHMAIL_*` / `MAILMOOSE_*`).
+
+**The RemoteDraft handoff header** is `X-Mail-Handoff-ID` (was
+`X-MailMoose-Handoff-ID`). The header written on a draft already appended to a
+remote server cannot be rewritten, so ambiguity recovery must keep accepting
+the old spelling; new handoffs use the new one.
+
+**Not changed:** the Go module and repository path
+`github.com/dellarb/mailmoose`, which follow the repository name, not the brand.

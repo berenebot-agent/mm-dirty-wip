@@ -4,7 +4,7 @@
 // Postmark POSTs a JSON document describing the message and, when "Include raw
 // email content in JSON payload" is enabled, the original MIME source under
 // RawEmail. Postmark does not sign inbound webhooks, so the endpoint is protected
-// with HTTP Basic authentication: MailMoose generates a per-domain username and
+// with HTTP Basic authentication: Mammoth Mail generates a per-domain username and
 // password, stores them encrypted, and the operator embeds them in the webhook
 // URL registered with Postmark.
 //
