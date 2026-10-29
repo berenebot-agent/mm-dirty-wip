@@ -54,11 +54,11 @@ type domainConfigResponse struct {
 	// verdict. The status dialog uses it to re-read instead of showing a stale
 	// "additional MX servers" warning until its next poll.
 	DNSStale bool `json:"dns_stale,omitempty"`
-	// AntlerManifest is where the domain's snapshotted Tusk MX receiver set came
+	// ReceiverManifest is where the domain's snapshotted Tusk MX receiver set came
 	// from (Dial MX Tusk only): github, cache or embedded, with the fetch time.
 	// The setup dialog states it so an operator can tell a live GitHub fetch from
 	// the built-in defaults.
-	AntlerManifest *antlerManifestView `json:"antler_manifest,omitempty"`
+	ReceiverManifest *antlerManifestView `json:"receiver_manifest,omitempty"`
 }
 
 // mxdialStatusView mirrors mxdial.Status for JSON without importing its shape
@@ -100,7 +100,7 @@ type domainDNSView struct {
 // TXT verification record; for a custom service it lists the TXT record and
 // leaves the MX hostnames to the operator.
 type dialMXDNSInstructions struct {
-	Service       string                `json:"service"` // "antler" | "custom"
+	Service       string                `json:"service"` // "hosted" | "custom"
 	Contact       string                `json:"contact_email,omitempty"`
 	Enforcement   string                `json:"enforcement,omitempty"`
 	InheritedFrom string                `json:"inherited_from,omitempty"`
@@ -418,7 +418,7 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 			resp.DNS = s.dialMXDNS(domainID)
 			resp.Instructions = view.instructionView()
 			resp.UnexpectedMX = s.dialMXExtraMX(domainID)
-			resp.AntlerManifest = view.Manifest
+			resp.ReceiverManifest = view.Manifest
 		}
 	}
 	return resp, nil

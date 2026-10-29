@@ -170,7 +170,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 
 	instr, _ := body["instructions"].(map[string]any)
-	if instr == nil || instr["service"] != "antler" || instr["contact_email"] != "ops@example.test" {
+	if instr == nil || instr["service"] != "hosted" || instr["contact_email"] != "ops@example.test" {
 		t.Fatalf("instructions missing Tusk metadata: %v", body["instructions"])
 	}
 	mx, _ := instr["mx"].([]any)
@@ -185,12 +185,12 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 	// The response says where the receiver set came from, so the wizard can state
 	// whether setup used the live GitHub manifest or the built-in defaults.
-	manifest, _ := body["antler_manifest"].(map[string]any)
+	manifest, _ := body["receiver_manifest"].(map[string]any)
 	if manifest == nil || manifest["source"] != string(mxdial.AntlerSourceGitHub) {
-		t.Fatalf("antler_manifest = %v, want the github source", body["antler_manifest"])
+		t.Fatalf("receiver_manifest = %v, want the github source", body["receiver_manifest"])
 	}
 	if manifest["at"] != "2026-10-18T05:12:03Z" {
-		t.Fatalf("antler_manifest fetch time = %v", manifest["at"])
+		t.Fatalf("receiver_manifest fetch time = %v", manifest["at"])
 	}
 
 	lights := dnsLights(t, body)
@@ -658,7 +658,7 @@ func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
 
 // The browser uses session-scoped setup routes; saves require the existing
 // CSRF guard, and reads require a browser session.
-func TestAntlerWizardSessionSetup(t *testing.T) {
+func TestTuskWizardSessionSetup(t *testing.T) {
 	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -667,7 +667,7 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 	cookie, csrf := uiSession(t, svc, u.ID)
 	path := "/ui/domains/" + domain.ID + "/receiving/setup"
 	do := func(method, token string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"antler","contact_email":"ops@example.test","enforcement":"moderate"}}`))
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"hosted","contact_email":"ops@example.test","enforcement":"moderate"}}`))
 		req.AddCookie(cookie)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-CSRF-Token", token)
@@ -790,10 +790,10 @@ func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
 	}
 }
 
-// TestDialMXAntlerAPIRejectsReceiverURLs proves the receiving API refuses a
+// TestDialMXHostedAPIRejectsReceiverURLs proves the receiving API refuses a
 // client-supplied receiver_urls for the Tusk service, so a crafted request
 // cannot point the domain at an arbitrary receiver.
-func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
+func TestDialMXHostedAPIRejectsReceiverURLs(t *testing.T) {
 	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -807,13 +807,13 @@ func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := "/v1/admin/domains/" + domain.ID + "/receiving"
-	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"antler","contact_email":"ops@example.test","receiver_urls":"https://evil.example.test"}}`))
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"hosted","contact_email":"ops@example.test","receiver_urls":"https://evil.example.test"}}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Tusk MX") {
-		t.Fatalf("injected receiver_urls for antler: %d %s", rr.Code, rr.Body.String())
+		t.Fatalf("injected receiver_urls for hosted Tusk MX: %d %s", rr.Code, rr.Body.String())
 	}
 	// The rejected save must not have replaced the fixture's existing provider
 	// nor stored the injected URL.

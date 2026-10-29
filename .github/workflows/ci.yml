@@ -70,7 +70,7 @@ jobs:
         run: |
           set -o pipefail
           {
-            node tests/antler-wizard-check.cjs
+            node tests/tusk-wizard-check.cjs
             node tests/receiver-settings-check.cjs
             node tests/empty-trash-check.cjs
             node tests/release-config-check.cjs

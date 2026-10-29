@@ -1710,7 +1710,7 @@ accepts `"regenerate_secret": true`. Provider schemas:
   account-scoped and set through the account's Remote MX settings, not per
   domain);
   `dialmx: {"service?","contact_email?","receiver_urls?","enforcement?"}` —
-  `service` is `antler` (the zero-config Tusk MX shared relay, the default) or
+  `service` is `hosted` (the zero-config Tusk MX shared relay, the default) or
   `custom`. Tusk requires a valid `contact_email` and resolves the hosted
   receiver set; supplying `receiver_urls` for Tusk is a `400`, because the
   receiver set is never caller-controlled. Custom requires one or more HTTPS
@@ -1738,12 +1738,16 @@ interface shows:
 | `brevo` | Brevo API | sending |
 | `smtp` | SMTP | sending |
 
-`dialmx` carries two services: `"service": "antler"` (the hosted Tusk MX
+`dialmx` carries two services: `"service": "hosted"` (the hosted Tusk MX
 relay, the default) and `"service": "custom"` (a receiver you run yourself,
 shared by many domains — the Dial MX option in
 [Remote SMTP receiving](REMOTE_MX.md)). The picker shows a longer description
 for Tusk MX and Remote MX, and Direct MX's own description already names the
 bundled receiver; the name is the same in every case.
+
+For Tusk MX, the receiving configuration response includes `receiver_manifest`
+with `source` (`github`, `cache`, or `embedded`) and optional `at` timestamp.
+The former `antler_manifest` field is no longer emitted.
 
 A name is accepted only in its own direction — `remotemx` is a receiving
 provider and `brevo` a sending one — and a name that is not registered for the

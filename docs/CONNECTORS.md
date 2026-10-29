@@ -178,7 +178,7 @@ Each delivery carries `X-Mail-Event`, `X-Mail-Delivery`, and `X-Mail-Cursor`. Fo
 
 Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-Mail-Signature`. Verify it at your endpoint.
 
-During the transition every webhook header is also sent under its pre-rename `X-MailMoose-*` name (for example `X-MailMoose-Signature`) with the same value. Move to the `X-Mail-*` names; the old names will be removed in a later release, announced in the CHANGELOG.
+Outbound webhooks now emit only the brand-neutral `X-Mail-*` headers (for example `X-Mail-Signature`). The old `X-MailMoose-*` header aliases are no longer sent.
 
 ### Verify the signature
 

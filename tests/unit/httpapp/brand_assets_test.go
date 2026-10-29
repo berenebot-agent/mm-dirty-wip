@@ -21,7 +21,6 @@ func TestBrandAssetsServed(t *testing.T) {
 		{"/favicon-32x32.png", "image/png"},
 		{"/apple-touch-icon.png", "image/png"},
 		{"/assets/logo-horizontal.png", "image/png"},
-		{"/assets/antler-mx-diagram.svg", "image/svg+xml"},
 		{"/assets/tusk-mx-diagram.svg", "image/svg+xml"},
 	} {
 		rr := httptest.NewRecorder()
@@ -38,7 +37,7 @@ func TestBrandAssetsServed(t *testing.T) {
 // The Tusk MX setup wizard opens with a short service intro and the mail-flow
 // diagram, mirroring docs/EMAIL_PROVIDERS.md. The wizard markup is built in
 // app.js, so assert the intro and its asset reference survive there.
-func TestAntlerWizardIntro(t *testing.T) {
+func TestTuskWizardIntro(t *testing.T) {
 	t.Parallel()
 	bundle := string(httpapp.AppJS())
 	for _, want := range []string{

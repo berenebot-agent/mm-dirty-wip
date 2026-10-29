@@ -71,13 +71,11 @@ var bashClient []byte
 //go:embed assets/curl-cookbook.txt
 var curlCookbook []byte
 
-// The Tusk MX mail-flow diagram shown in the receiving wizard. Kept in step
-// with the docs copy at assets/tusk-mx-diagram.svg (docs/EMAIL_PROVIDERS.md).
-// The embed name and the antler-mx-diagram.svg route keep the pre-rename
-// spelling so installed UIs and long-lived caches keep working.
+// The Tusk MX mail-flow diagram shown in the receiving wizard. The asset is
+// identical to assets/tusk-mx-diagram.svg in the docs.
 //
-//go:embed assets/antler-mx-diagram.svg
-var antlerMXDiagramSVG []byte
+//go:embed assets/tusk-mx-diagram.svg
+var tuskMXDiagramSVG []byte
 
 type Server struct {
 	Service         *app.Service
@@ -192,8 +190,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /assets/logo-horizontal.png", s.showLogo)
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
-	m.HandleFunc("GET /assets/antler-mx-diagram.svg", s.showAntlerMXDiagram)
-	m.HandleFunc("GET /assets/tusk-mx-diagram.svg", s.showAntlerMXDiagram)
+	m.HandleFunc("GET /assets/tusk-mx-diagram.svg", s.showTuskMXDiagram)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
 	m.HandleFunc("GET /favicon-16x16.png", s.showFavicon16)
 	m.HandleFunc("GET /favicon-32x32.png", s.showFavicon32)
@@ -377,7 +374,6 @@ func (s *Server) Handler() http.Handler {
 
 	// Discovery.
 	m.HandleFunc("GET /.well-known/mail-api", s.discovery)
-	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
 	m.HandleFunc("GET /robots.txt", s.robotstxt)
@@ -707,8 +703,8 @@ func (s *Server) showHermesConnectorIcon(w http.ResponseWriter, r *http.Request)
 func (s *Server) showOpenClawConnectorIcon(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/png", "public, max-age=86400", openClawConnectorPNG)
 }
-func (s *Server) showAntlerMXDiagram(w http.ResponseWriter, r *http.Request) {
-	serveBlob(w, "image/svg+xml", "public, max-age=31536000, immutable", antlerMXDiagramSVG)
+func (s *Server) showTuskMXDiagram(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/svg+xml", "public, max-age=31536000, immutable", tuskMXDiagramSVG)
 }
 func (s *Server) showFaviconICO(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/x-icon", "public, max-age=86400", faviconICO)

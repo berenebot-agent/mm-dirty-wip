@@ -44,11 +44,11 @@ type antlerManifestView struct {
 // decrypted receiving config. A config with no record (one saved before this
 // field existed) returns nil rather than inventing a source.
 func antlerManifestViewFromConfig(values map[string]any) *antlerManifestView {
-	source, _ := values["antler_manifest_source"].(string)
+	source, _ := values["receiver_manifest_source"].(string)
 	if source == "" {
 		return nil
 	}
-	at, _ := values["antler_manifest_at"].(string)
+	at, _ := values["receiver_manifest_at"].(string)
 	return &antlerManifestView{Source: source, At: at}
 }
 
@@ -69,8 +69,8 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	if keyID != "" && len(publicKey) > 0 {
 		view.TXTValue = mxwire.DomainTXT(keyID, publicKey)
 	}
-	if dialMXService(values) == mxdial.ServiceAntler {
-		view.Service = mxdial.ServiceAntler
+	if dialMXService(values) == mxdial.ServiceHosted {
+		view.Service = mxdial.ServiceHosted
 		view.ContactEmail, _ = values["contact_email"].(string)
 		view.Enforcement, _ = values["enforcement"].(string)
 		view.Manifest = antlerManifestViewFromConfig(values)
@@ -89,7 +89,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 				continue
 			}
 			hostname := st.SMTPHostname
-			if view.Service == mxdial.ServiceAntler {
+			if view.Service == mxdial.ServiceHosted {
 				configured := false
 				for _, receiver := range antlerReceivers {
 					if receiver.SessionURL == st.ReceiverURL {
@@ -119,7 +119,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	}
 	// Include receivers that have not reported a domain status yet, so setup
 	// always shows the complete saved Tusk receiver set.
-	if view.Service == mxdial.ServiceAntler {
+	if view.Service == mxdial.ServiceHosted {
 		for _, receiver := range app.AntlerReceiversFromConfig(values) {
 			found := false
 			for _, status := range view.Statuses {
@@ -311,8 +311,8 @@ func (s *Server) dialMXCustomService(ctx context.Context, accountID, domainID st
 // Tusk MX relay or a custom receiver set. The two spellings live here so the
 // live view and the dashboard label cannot disagree about which one a domain is.
 func dialMXService(values map[string]any) string {
-	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
-		return mxdial.ServiceAntler
+	if service, _ := values["service"].(string); service == mxdial.ServiceHosted {
+		return mxdial.ServiceHosted
 	}
 	return mxdial.ServiceCustom
 }

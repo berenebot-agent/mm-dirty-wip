@@ -2178,7 +2178,7 @@ EMAIL_HOME_ADDRESS_NAME=Your Agent Name</pre></li>
 </section>{{end}}
 </form>
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
-<h3 class="section-head">{{if eq .Service "antler"}}Tusk MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
+<h3 class="section-head">{{if eq .Service "hosted"}}Tusk MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
 {{if .ContactEmail}}<p class="muted small">Contact email: <code>{{.ContactEmail}}</code></p>{{end}}
 {{if .ReceiverURLs}}<p class="muted small">Receiver URLs: <code>{{.ReceiverURLs}}</code></p>{{end}}
 {{if .MX}}<p><b>Publish these MX records for <code>{{$d.Name}}</code>:</b></p>
