@@ -37,7 +37,7 @@ func TestBrandAssetsServed(t *testing.T) {
 // The Tusk MX setup wizard opens with a short service intro and the mail-flow
 // diagram, mirroring docs/EMAIL_PROVIDERS.md. The wizard markup is built in
 // app.js, so assert the intro and its asset reference survive there.
-func TestAntlerWizardIntro(t *testing.T) {
+func TestTuskWizardIntro(t *testing.T) {
 	t.Parallel()
 	bundle := string(httpapp.AppJS())
 	for _, want := range []string{

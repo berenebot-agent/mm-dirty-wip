@@ -21,7 +21,7 @@
 #   vet      Go static analysis (vet ./...)
 #   fmt      gofmt gate (gofmt -l cmd internal tests dialmx, fail on output)
 #   lint     dead-code gate (staticcheck -checks U1000 ./...)
-#   js       Tusk dialog interaction checks (node tests/antler-wizard-check.cjs)
+#   js       Tusk dialog interaction checks (node tests/tusk-wizard-check.cjs)
 #   smoke    slow gated tests (MAIL_SMOKE=1): the process-level receiver
 #            binary smoke. Deliberately NOT part of the default preset.
 #
@@ -237,7 +237,7 @@ for t in "${SELECTED[@]}"; do
             # cannot (timers, SSE listeners, clipboard writes, WebAuthn
             # ceremonies, and feedback). Node is required on the host.
             if [ "$rc" -eq 0 ]; then
-                node tests/antler-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+                node tests/tusk-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
                 node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
