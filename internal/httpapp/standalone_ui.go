@@ -3,6 +3,8 @@ package httpapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -972,6 +974,7 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 		StandaloneConfigured: box.RemoteConfigured && box.Remote != nil,
 		StandalonePlain:      box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain,
 		Notice:               r.URL.Query().Get("notice"),
+		Error:                r.URL.Query().Get("error"),
 	}
 	if folders, lerr := s.Service.Store.ListFolders(r.Context(), p.AccountID, id); lerr == nil {
 		items := make([]folderListResponse, 0, len(folders))
@@ -982,6 +985,43 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	data.RoleMappings = s.buildRoleMappings(r.Context(), p.AccountID, id)
 	s.render(w, r, remoteSettingsBody, data)
+}
+
+// remoteConnectionFailure reports only normalized diagnostics, never provider text.
+func (s *Server) remoteConnectionFailure(ctx context.Context, p model.Principal, id string, in store.StandaloneRemoteUpdate, err error) string {
+	protocol, host := "IMAP", strings.TrimSpace(in.Host)
+	var mb *model.MailboxError
+	if errors.As(err, &mb) && mb.Message == "the outbound SMTP server could not be validated" {
+		protocol, host = "SMTP", strings.TrimSpace(in.SMTPHost)
+	}
+	if host == "" {
+		if box, e := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id); e == nil && box.Remote != nil {
+			if protocol == "SMTP" && box.Remote.SMTP != nil {
+				host = box.Remote.SMTP.Host
+			} else if protocol == "IMAP" {
+				host = box.Remote.Host
+			}
+		}
+	}
+	category, detail := "internal", "the connection could not be validated"
+	if mb != nil {
+		switch mb.Kind {
+		case model.ErrKindAuth:
+			category, detail = "auth", "the server rejected the credentials"
+		case model.ErrKindUnavailable, model.ErrKindRetryable:
+			category, detail = mb.Kind, "the server could not be validated or reached"
+		case model.ErrKindInvalid:
+			category, detail = "invalid", "the connection settings are invalid"
+		case model.ErrKindForbidden:
+			category, detail = "forbidden", "the server refused access"
+		}
+	}
+	s.Log.Warn("remote connection validation failed", "protocol", protocol, "host", host, "category", category)
+	message := fmt.Sprintf("%s server %s: %s.", protocol, host, detail)
+	if protocol == "IMAP" && strings.EqualFold(host, "imap.gmail.com") && category == "auth" {
+		message += " Gmail app passwords must be entered without spaces; check that the app password belongs to this Google account."
+	}
+	return message
 }
 
 // uiInboxRemoteRoleCreate maps a special folder role either by creating its
@@ -1052,7 +1092,13 @@ func (s *Server) uiInboxRemoteSettingsSave(w http.ResponseWriter, r *http.Reques
 	}
 	// A connector must authenticate before it is saved as active.
 	if verr := s.verifyRemoteUpdate(r.Context(), p, id, in); verr != nil {
-		s.uiError(w, verr, 400)
+		message := s.remoteConnectionFailure(r.Context(), p, id, in, verr)
+		if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
+			w.Header().Set("X-Remote-Validation-Error", "1")
+			http.Error(w, message, http.StatusBadRequest)
+		} else {
+			http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(id)+"/remote?error="+url.QueryEscape(message), http.StatusSeeOther)
+		}
 		return
 	}
 	box, err := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, id, in)
@@ -1081,6 +1127,8 @@ func (s *Server) uiInboxRemoteSettingsSave(w http.ResponseWriter, r *http.Reques
 // missing role shows a prompt, not a fabricate
 const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}">← Back to inbox</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="error notice" role="alert">{{.Error}}</div>{{end}}
+<dialog id="remote-settings-error" aria-labelledby="remote-settings-error-title"><h2 id="remote-settings-error-title">Connection failed</h2><p id="remote-settings-error-message"></p><form method="dialog"><button>Close</button></form></dialog>
 <section class="card"><h1>Connection settings</h1>
 {{if .StandalonePlain}}<div class="banner warn">This inbox connects over plaintext (no transport security). TLS is the default and is never downgraded automatically; plain is an explicit choice for a self-hosted server.</div>{{end}}
 <form id="remote-settings-form" method="post" action="/ui/inboxes/{{.Inbox.ID}}/remote/settings" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}">

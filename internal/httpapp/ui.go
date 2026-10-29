@@ -3427,7 +3427,8 @@ func (s *Server) uiUpdateInbox(w http.ResponseWriter, r *http.Request) {
 		remoteChanged = standaloneRemoteChanged(inbox, remoteIn)
 		if remoteChanged {
 			if verr := s.verifyRemoteUpdate(r.Context(), p, id, remoteIn); verr != nil {
-				http.Redirect(w, r, "/?inbox="+id+"&inbox_tab=basic&error="+url.QueryEscape("IMAP connection failed: "+safeErrorMessage(verr, "the connector could not sign in")), 303)
+				message := s.remoteConnectionFailure(r.Context(), p, id, remoteIn, verr)
+				http.Redirect(w, r, "/?inbox="+id+"&inbox_tab=basic&error="+url.QueryEscape(message), 303)
 				return
 			}
 		}
