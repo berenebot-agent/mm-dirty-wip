@@ -1,4 +1,36 @@
 (function () {
+  var form = document.getElementById('remote-settings-form');
+  var dialog = document.getElementById('remote-settings-error');
+  if (!form || !dialog || !dialog.showModal) return;
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var button = document.querySelector('[form="remote-settings-form"][type="submit"]');
+    if (button) button.disabled = true;
+    fetch(form.action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: new URLSearchParams(new FormData(form))
+    }).then(function (response) {
+      if (response.redirected) {
+        window.location.assign(response.url);
+        return;
+      }
+      if (response.headers.get('X-Remote-Validation-Error') === '1') return response.text();
+      throw new Error('The connection settings could not be saved.');
+    }).then(function (message) {
+      if (!message) return;
+      document.getElementById('remote-settings-error-message').textContent = message;
+      dialog.showModal();
+    }).catch(function () {
+      document.getElementById('remote-settings-error-message').textContent = 'The connection settings could not be saved. Please try again.';
+      dialog.showModal();
+    }).finally(function () {
+      if (button) button.disabled = false;
+    });
+  });
+}());
+
+(function () {
   'use strict';
   // Global Live/Loading status flag in the header. It is only rendered on the
   // pages that hold an event stream (dashboard and inbox views), where it shows
@@ -5058,6 +5090,10 @@ function clearUrlParams(names) {
         dlg._resetTabs();
       }
       dlg.showModal();
+      var error = document.querySelector('.error.notice[role="alert"]');
+      if (error && new URLSearchParams(window.location.search).get('inbox') === editInboxID) {
+        dlg.querySelector('.inbox-settings-body').prepend(error);
+      }
     });
   });
 
