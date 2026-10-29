@@ -3057,7 +3057,7 @@ func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
 		t.Fatalf("remote save %d: %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.Contains(loc, "error=IMAP+connection+failed") || strings.Contains(loc, "notice=") {
+	if !strings.Contains(loc, "error=IMAP+server+") || strings.Contains(loc, "notice=") {
 		t.Fatalf("expected error redirect, got %q", loc)
 	}
 	box, err := svc.Store.GetInboxInternal(context.Background(), p.AccountID, standalone.ID)
@@ -3066,6 +3066,63 @@ func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
 	}
 	if box.Remote == nil || box.Remote.Host != "imap.remote.test" {
 		t.Fatalf("unverified host was persisted: %+v", box.Remote)
+	}
+}
+
+func TestRemoteSettingsTestsSubmittedPassword(t *testing.T) {
+	t.Parallel()
+	svc := newIsolatedService(t)
+	u := createAdmin(t, svc)
+	box := createStandalone(t, svc, u)
+	rm := app.NewRemoteMailboxService(svc)
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+	if _, err := rm.ConfigureStandaloneRemote(context.Background(), p, box.ID, store.StandaloneRemoteUpdate{IMAPPassword: "stored-password"}); err != nil {
+		t.Fatal(err)
+	}
+	var received string
+	rm.SetRemoteDialer(func(_ context.Context, cfg imap.Config) (app.RemoteSession, error) {
+		received = cfg.Password
+		return nil, model.NewMailboxError(model.ErrKindAuth, "remote server rejected the credentials", false, fmt.Errorf("provider included secret: %s", cfg.Password))
+	})
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	cookie, csrf := uiSession(t, svc, u.ID)
+	for _, tc := range []struct{ submitted, want string }{
+		{" new password ", " new password "},
+		{"", "stored-password"},
+	} {
+		form := url.Values{"_csrf": {csrf}, "host": {box.Remote.Host}, "port": {strconv.Itoa(box.Remote.Port)}, "username": {box.Remote.Username}, "security": {box.Remote.Security}, "imap_password": {tc.submitted}}
+		req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/remote/settings", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if received != tc.want {
+			t.Errorf("dialer received %q, want %q", received, tc.want)
+		}
+		if rr.Code != http.StatusBadRequest || rr.Header().Get("X-Remote-Validation-Error") != "1" || !strings.Contains(rr.Body.String(), "IMAP server "+box.Remote.Host) || strings.Contains(rr.Body.String(), tc.want) {
+			t.Errorf("unsafe or unexpected response: %d %q", rr.Code, rr.Body.String())
+		}
+	}
+	edit := url.Values{"_csrf": {csrf}, "display": {"Agent"}, "remote_host": {box.Remote.Host}, "remote_port": {strconv.Itoa(box.Remote.Port)}, "remote_username": {box.Remote.Username}, "remote_security": {box.Remote.Security}, "namespace": {box.Namespace}, "imap_password": {"replacement-password"}}
+	rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/edit", edit.Encode())
+	if received != "replacement-password" || rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "IMAP+server+") || strings.Contains(rr.Header().Get("Location"), "replacement-password") {
+		t.Fatalf("identity save did not safely test the submitted password: status %d, location %q", rr.Code, rr.Header().Get("Location"))
+	}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return nil, model.NewMailboxError(model.ErrKindUnavailable, "the outbound SMTP server could not be validated", true, fmt.Errorf("sensitive provider response"))
+	})
+	form := url.Values{"_csrf": {csrf}, "host": {box.Remote.Host}, "username": {box.Remote.Username}, "security": {box.Remote.Security}, "imap_password": {"new-password"}, "smtp_host": {"smtp.example.com"}, "smtp_username": {"user@example.com"}, "smtp_password": {"smtp-secret"}}
+	rr = uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/remote/settings", form.Encode())
+	location, err := url.QueryUnescape(rr.Header().Get("Location"))
+	if err != nil || rr.Code != http.StatusSeeOther || !strings.Contains(location, "SMTP server smtp.example.com") || strings.Contains(location, "sensitive") || strings.Contains(location, "smtp-secret") {
+		t.Fatalf("unsafe or misleading SMTP error: %d %q", rr.Code, location)
+	}
+	resolved, err := rm.ResolveRemote(context.Background(), u.AccountID, box.ID)
+	if err != nil || resolved.Secrets.IMAPPassword != "stored-password" {
+		t.Fatalf("failed validation changed stored password: %v", err)
 	}
 }
 
