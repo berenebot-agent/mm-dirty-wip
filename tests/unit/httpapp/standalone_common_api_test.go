@@ -1766,7 +1766,7 @@ func TestRemoteSettingsPageRenders(t *testing.T) {
 		t.Fatalf("remote settings %d: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Connection settings", "Inbound IMAP", "Outbound SMTP", "Special folders", "imap.remote.test"} {
+	for _, want := range []string{"Connection settings", "Inbound IMAP", "Outbound SMTP", "Advanced folder settings", "Sync root folder", "Special folders", "imap.remote.test"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("remote settings missing %q", want)
 		}
