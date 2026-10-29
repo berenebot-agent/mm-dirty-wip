@@ -24,8 +24,12 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
-    "openclaw": "2026.9.7",
+    "openclaw": "2026.10.8",
     "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "npm": "12.2.1",
+    "undici": "^8.12.2"
   },
   "peerDependencies": {
     "openclaw": ">=2026.9.7"

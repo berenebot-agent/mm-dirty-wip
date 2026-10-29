@@ -2580,12 +2580,17 @@
 })();
 
 (function () {
-  document.querySelectorAll('tr.row-link[data-href]').forEach(function (row) {
+  document.querySelectorAll('tr.row-link').forEach(function (row) {
     row.addEventListener('click', function (e) {
       if (e.target.closest('a,button,input,select,textarea,label,form')) {
         return;
       }
-      window.location.href = row.getAttribute('data-href');
+      // Follow the server-rendered row link rather than an attribute string, so
+      // the destination is the anchor's own same-origin href.
+      var link = row.querySelector('a[href]');
+      if (link) {
+        link.click();
+      }
     });
   });
 })();
@@ -3483,7 +3488,7 @@ function aliasNameByAddress(list) {
   document.querySelectorAll('.open-delete-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
       expected = btn.getAttribute('data-name') || '';
-      form.setAttribute('action', '/ui/domains/' + btn.getAttribute('data-domain') + '/delete');
+      form.setAttribute('action', '/ui/domains/' + encodeURIComponent(btn.getAttribute('data-domain') || '') + '/delete');
       nameEl.textContent = expected;
       dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
       renderInboxes(btn);
@@ -3521,7 +3526,7 @@ function aliasNameByAddress(list) {
   document.querySelectorAll('.open-delete-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
       expected = btn.getAttribute('data-address') || '';
-      form.setAttribute('action', '/ui/inboxes/' + btn.getAttribute('data-id') + '/delete');
+      form.setAttribute('action', '/ui/inboxes/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/delete');
       addressEl.textContent = expected;
       dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
       input.value = '';
@@ -3563,7 +3568,7 @@ function aliasNameByAddress(list) {
   function open(btn) {
     expected = btn.getAttribute('data-name') || '';
     var type = btn.getAttribute('data-type') || '';
-    form.setAttribute('action', '/ui/' + btn.getAttribute('data-kind') + '/' + btn.getAttribute('data-id') + '/delete');
+    form.setAttribute('action', '/ui/' + encodeURIComponent(btn.getAttribute('data-kind') || '') + '/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/delete');
     nameEl.textContent = expected;
     if (typeEl) {
       typeEl.textContent = type ? '(' + type + ')' : '';
@@ -7385,7 +7390,7 @@ function generateBearerSecret() {
   }
   document.querySelectorAll('.edit-operator').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      form.setAttribute('action', '/ui/account/operators/' + btn.getAttribute('data-id') + '/roles');
+      form.setAttribute('action', '/ui/account/operators/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/roles');
       email.value = btn.getAttribute('data-email') || '';
       email.readOnly = true;
       var owned = (btn.getAttribute('data-inboxes') || '').split(',');
@@ -7865,7 +7870,7 @@ function generateBearerSecret() {
     }
     if (asPill) {
       var a = el('a', 'pill pending-pill', String(value));
-      a.href = '/ui/inboxes/' + row.getAttribute('data-inbox-id') + '/drafts';
+      a.href = '/ui/inboxes/' + encodeURIComponent(row.getAttribute('data-inbox-id') || '') + '/drafts';
       a.title = 'Drafts awaiting approval to send';
       td.textContent = '';
       td.appendChild(a);
