@@ -74,8 +74,8 @@ func TestWebhookWorkerNotifySignsAndAcks(t *testing.T) {
 		gotSig = r.Header.Get("X-Mail-Signature")
 		gotEvent = r.Header.Get("X-Mail-Event")
 		gotCursor = r.Header.Get("X-Mail-Cursor")
-		if r.Header.Get("X-MailMoose-Signature") != gotSig || r.Header.Get("X-MailMoose-Event") != gotEvent || r.Header.Get("X-MailMoose-Cursor") != gotCursor {
-			t.Errorf("pre-rename headers not sent alongside the new names")
+		if r.Header.Get("X-MailMoose-Signature") != "" || r.Header.Get("X-MailMoose-Event") != "" || r.Header.Get("X-MailMoose-Cursor") != "" {
+			t.Errorf("outbound webhook sent obsolete X-MailMoose headers")
 		}
 		w.WriteHeader(http.StatusAccepted)
 	}))
