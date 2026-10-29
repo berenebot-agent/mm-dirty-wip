@@ -160,6 +160,18 @@ func retryKey(path string) string {
 	return "/users/" + rest
 }
 
+// target joins a Graph route onto the fixed API origin and refuses any result
+// that would leave it, so no route or cursor can aim the OAuth bearer at
+// another host.
+func (c *Client) target(raw string) (string, error) {
+	u, e := url.Parse(raw)
+	base, be := url.Parse(c.BaseURL)
+	if e != nil || be != nil || u.Scheme != base.Scheme || u.Host != base.Host {
+		return "", failure(model.ErrKindInvalid, "invalid request target", false)
+	}
+	return u.String(), nil
+}
+
 // continuation retains Microsoft's opaque query but never permits a different
 // origin, mailbox, operation, or query-supplied bearer destination.
 func (c *Client) continuation(raw, path string) (string, error) {
@@ -189,6 +201,10 @@ func (c *Client) request(ctx context.Context, t, method, path, cursor string, bo
 		if e != nil {
 			return e
 		}
+	}
+	u, e := c.target(u)
+	if e != nil {
+		return e
 	}
 	r, e := http.NewRequestWithContext(ctx, method, u, body)
 	if e != nil {
