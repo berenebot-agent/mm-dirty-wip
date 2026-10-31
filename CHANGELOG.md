@@ -8,6 +8,14 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **The browser tab icon no longer sits on a white tile.** The favicons and the
+  ICO carried the white background flattened into their pixels (a palette PNG
+  with every `tRNS` entry opaque), so the mammoth showed as a white chip on a
+  dark tab strip. They are regenerated from the transparent artwork with real
+  alpha and framed tighter, so the mark reads at 16 px, and the icon links
+  carry the build's asset version so a browser's favicon cache cannot keep
+  serving the old tile. The touch icon stays opaque, as iOS requires.
+
 - **The reader names system folders in sentence case.** The move chooser, the
   sidebar and the "Moved to …" notice show Inbox, Sent, Spam, Trash and the
   other system folders in our own wording, so an IMAP `INBOX` or an Outlook
