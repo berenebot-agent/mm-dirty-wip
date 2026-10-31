@@ -183,6 +183,14 @@ func (s *Server) assetURL(name string) string {
 	return "/assets/" + name + "?v=" + s.assetVersion
 }
 
+// staticURL returns a content-hashed path for a file served from the site root
+// rather than /assets/ — the favicons and the touch icon. Browsers cache
+// favicons far past normal asset lifetimes and ignore a plain reload, so
+// without the version query a fixed icon stays invisible after deploy.
+func (s *Server) staticURL(name string) string {
+	return "/" + name + "?v=" + s.assetVersion
+}
+
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	s.registerInbound(m)
