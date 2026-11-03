@@ -89,7 +89,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## golang.org/x/net v0.59.0
+## golang.org/x/net v0.62.0
 
 HTML tokenizer used by bluemonday, and the embedded Public Suffix List used by
 the MX edge (`internal/mxagent`) for DMARC organizational-domain alignment.
@@ -121,7 +121,7 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
-## golang.org/x/crypto v0.57.0
+## golang.org/x/crypto v0.58.0
 
 PBKDF2 key derivation (`golang.org/x/crypto/pbkdf2`) used by
 `internal/cryptox` to stretch a passphrase `APP_ENCRYPTION_KEY`. Licence:
@@ -511,10 +511,10 @@ Copyright (c) 2009,2014 Google Inc. All rights reserved.
 Licensed under the BSD-3-Clause licence; the full text is reproduced under
 github.com/go-webauthn/webauthn above.
 
-## golang.org/x/sys v0.48.0
+## golang.org/x/sys v0.49.0
 
 System-call and CPU feature support used indirectly by `golang.org/x/crypto/argon2`.
-Licence: BSD-3-Clause. Source: https://github.com/golang/sys/tree/v0.48.0
+Licence: BSD-3-Clause. Source: https://github.com/golang/sys/tree/v0.49.0
 
 Copyright 2009 The Go Authors.
 
