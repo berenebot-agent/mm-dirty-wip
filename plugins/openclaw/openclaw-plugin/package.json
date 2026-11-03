@@ -19,17 +19,18 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "ws": "8.21.3"
+    "ws": "8.22.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
-    "openclaw": "2026.10.8",
+    "openclaw": "2026.10.10",
     "typescript": "^5.9.2"
   },
   "overrides": {
     "npm": "12.2.1",
-    "undici": "^8.12.2"
+    "undici": "^8.12.2",
+    "zod": "^4.6.6"
   },
   "peerDependencies": {
     "openclaw": ">=2026.9.7"
