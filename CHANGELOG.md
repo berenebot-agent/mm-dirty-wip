@@ -6,6 +6,16 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- **A mailbox that keeps failing is no longer retried at full cadence.** After a
+  failed automatic detection pass the next attempt waits for the inbox's own
+  quick-poll interval, doubling per consecutive failure up to ten minutes, with a
+  stable per-inbox jitter so a fleet that broke together does not retry together.
+  One successful pass restores the configured cadence, and a manual sync still
+  runs immediately, so a flaky provider is not hammered and a recovered one is not
+  left idle.
+
 ### Fixed
 
 - **The browser tab icon no longer sits on a white tile.** The favicons and the

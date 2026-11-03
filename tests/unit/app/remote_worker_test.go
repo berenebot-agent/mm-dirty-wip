@@ -858,6 +858,9 @@ func TestRemoteWorkerReconnectNotSkip(t *testing.T) {
 	ctx := context.Background()
 	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
 	w.DetectInbox(ctx, inbox) // baseline
+	// A millisecond cadence makes the post-failure backoff (one cadence, see
+	// backoffDelay) expire almost immediately instead of after a real minute.
+	w.SetPollInterval(time.Millisecond)
 	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <s@remote>\r\n\r\nbody", "<s@remote>", "s")
 	// Install a dialer that fails, then succeeds.
 	var fail bool
@@ -888,6 +891,10 @@ func TestRemoteWorkerReconnectNotSkip(t *testing.T) {
 	mu.Lock()
 	fail = false
 	mu.Unlock()
+	// A short cadence keeps the automatic retry quick: the failed pass above
+	// starts a backoff at the inbox's poll interval, so the retry that would
+	// otherwise sit out a minute is allowed once that interval elapses.
+	time.Sleep(5 * time.Millisecond)
 	w.DetectInbox(ctx, inbox)
 	if evs := drainEvents(ch); len(evs) != 1 {
 		t.Fatalf("reconnect did not detect the message: %d events", len(evs))
@@ -1051,4 +1058,81 @@ func containsStr(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// failDialer installs a dialer that always refuses, counting attempts, so a test
+// can see whether a detection pass reached the server at all.
+func failDialer(t *testing.T, rm *app.RemoteMailboxService) func() int {
+	t.Helper()
+	var mu sync.Mutex
+	dials := 0
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return nil, errors.New("imap server unavailable")
+	})
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return dials
+	}
+}
+
+// TestDetectInboxBacksOffAfterRepeatedFailures proves a failing mailbox is not
+// retried at its poll cadence: the next automatic attempt is suppressed, the
+// wait doubles per consecutive failure, and one successful pass clears it.
+func TestDetectInboxBacksOffAfterRepeatedFailures(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	ctx := context.Background()
+	count := failDialer(t, rm)
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	// A short cadence keeps the test fast; the ladder is expressed in multiples
+	// of whatever cadence the inbox resolves to.
+	base := 100 * time.Millisecond
+	w.SetPollInterval(base)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w.DetectInbox(ctx, inbox)
+	failures, first := w.SyncBackoffForTest(inbox)
+	if failures != 1 {
+		t.Fatalf("recorded failures = %d, want 1", failures)
+	}
+	if first <= 0 || first > base {
+		t.Fatalf("first backoff = %s, want between 0 and the %s cadence", first, base)
+	}
+	// The retry a poll tick would attempt right away is suppressed.
+	w.DetectInbox(ctx, inbox)
+	if got := count(); got != 1 {
+		t.Fatalf("backed-off inbox dialled again: attempts = %d, want 1", got)
+	}
+
+	// Once the backoff elapses the next attempt runs and the wait doubles.
+	time.Sleep(first + 20*time.Millisecond)
+	w.DetectInbox(ctx, inbox)
+	failures, second := w.SyncBackoffForTest(inbox)
+	if failures != 2 {
+		t.Fatalf("recorded failures = %d, want 2", failures)
+	}
+	if second <= base || second > 2*base {
+		t.Fatalf("second backoff = %s, want above the %s first rung and at most %s", second, base, 2*base)
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("attempts before the second backoff = %d, want 2", got)
+	}
+
+	// A successful pass proves the endpoint is healthy and clears the ladder.
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	time.Sleep(second + 20*time.Millisecond)
+	w.DetectInbox(ctx, inbox)
+	if failures, remaining := w.SyncBackoffForTest(inbox); failures != 0 || remaining != 0 {
+		t.Fatalf("after recovery failures = %d remaining = %s, want both clear", failures, remaining)
+	}
 }
