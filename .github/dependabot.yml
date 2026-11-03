@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /plugins/openclaw/openclaw-plugin
+    schedule:
+      interval: weekly
+    # The dev tree carries accepted advisories inside npm's bundled
+    # dependencies (D163); keep its PR noise out of the security queue.
+    open-pull-requests-limit: 3
+    groups:
+      plugin:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /dialmx
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ['*']
