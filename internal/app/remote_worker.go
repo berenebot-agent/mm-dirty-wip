@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -105,6 +106,20 @@ type RemoteWorker struct {
 	// coalescing entirely (every demand pass runs), which tests use for
 	// determinism.
 	demandInterval time.Duration
+	// failureMu guards failures, the per-inbox tally of consecutive failed
+	// automatic detection passes and the instant the next automatic retry is
+	// allowed. It is process-local: a restart clears it, which is intentional,
+	// because a fresh process should try every mailbox once.
+	failureMu sync.Mutex
+	failures  map[string]remoteFailureState
+}
+
+// remoteFailureState is one inbox's automatic-retry backoff. failures counts
+// consecutive failed automatic passes (reset by any successful one) and retryAt
+// is the earliest instant the next automatic pass may run.
+type remoteFailureState struct {
+	failures int
+	retryAt  time.Time
 }
 
 // Defaults for the remote watcher.
@@ -113,6 +128,11 @@ const (
 	defaultRemotePollInterval   = 60 * time.Second
 	defaultRemoteWatchBackoff   = 5 * time.Second
 	defaultRemoteMaxConnections = 8
+	// defaultRemoteMaxBackoff caps how long a repeatedly failing mailbox is left
+	// alone before an automatic retry. It is deliberately well below the slowest
+	// full-sync cadence: backoff suppresses retries, it never replaces the
+	// periodic pass.
+	defaultRemoteMaxBackoff = 10 * time.Minute
 	// remoteArrivalPageLimit bounds how many header rows a single detection pass
 	// fetches, so a huge folder cannot exhaust memory; a folder larger than this
 	// is simply caught up over subsequent passes.
@@ -138,6 +158,7 @@ func NewRemoteWorker(svc *Service, rm *RemoteMailboxService, log *slog.Logger) *
 		watchBackoff:        defaultRemoteWatchBackoff,
 		detecting:           make(map[string]bool),
 		lastDemand:          make(map[string]time.Time),
+		failures:            make(map[string]remoteFailureState),
 	}
 }
 
@@ -172,6 +193,82 @@ func (w *RemoteWorker) WatchInboxForTest(ctx context.Context, inbox model.Inbox)
 // DemandIntervalForTest exposes the demand-coalescing cadence for tests.
 func (w *RemoteWorker) DemandIntervalForTest(inbox model.Inbox) time.Duration {
 	return w.demandIntervalFor(inbox)
+}
+
+// SyncBackoffForTest exposes one inbox's recorded consecutive failed automatic
+// passes and the time left before the next automatic retry is allowed, so a test
+// can assert the backoff ladder without waiting for real poll intervals.
+func (w *RemoteWorker) SyncBackoffForTest(inbox model.Inbox) (int, time.Duration) {
+	w.failureMu.Lock()
+	state := w.failures[inbox.AccountID+":"+inbox.ID]
+	w.failureMu.Unlock()
+	remaining := time.Until(state.retryAt)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return state.failures, remaining
+}
+
+// backoffRemaining reports how long an automatic pass for the inbox must wait.
+// Zero means it may run now.
+func (w *RemoteWorker) backoffRemaining(inbox model.Inbox) time.Duration {
+	w.failureMu.Lock()
+	state := w.failures[inbox.AccountID+":"+inbox.ID]
+	w.failureMu.Unlock()
+	if remaining := time.Until(state.retryAt); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+// noteDetectionResult folds one finished pass into the inbox's retry state: any
+// error escalates the backoff, any success clears it. Every automatic pass is
+// recorded, so a mailbox that is failing stops being retried at its configured
+// cadence and a mailbox that recovered returns to it immediately.
+func (w *RemoteWorker) noteDetectionResult(inbox model.Inbox, err error) {
+	key := inbox.AccountID + ":" + inbox.ID
+	w.failureMu.Lock()
+	defer w.failureMu.Unlock()
+	if err == nil {
+		delete(w.failures, key)
+		return
+	}
+	state := w.failures[key]
+	state.failures++
+	state.retryAt = time.Now().Add(w.backoffDelay(inbox, state.failures))
+	w.failures[key] = state
+}
+
+// backoffDelay is the wait before automatic retry number `failures`: the inbox's
+// own quick-poll cadence, doubling per consecutive failure, capped at
+// defaultRemoteMaxBackoff.
+//
+// The delay is shortened by a stable per-inbox fraction (up to 20%) rather than
+// lengthened. Retry instants therefore land just before the corresponding poll
+// tick: the ladder is honoured exactly, and mailboxes that started failing
+// together do not retry together.
+func (w *RemoteWorker) backoffDelay(inbox model.Inbox, failures int) time.Duration {
+	base := w.pollIntervalFor(inbox)
+	if base <= 0 {
+		base = defaultRemotePollInterval
+	}
+	delay := base
+	for i := 1; i < failures; i++ {
+		if delay >= defaultRemoteMaxBackoff/2 {
+			return defaultRemoteMaxBackoff
+		}
+		delay *= 2
+	}
+	if delay > defaultRemoteMaxBackoff {
+		delay = defaultRemoteMaxBackoff
+	}
+	spread := int64(delay / 5)
+	if spread <= 0 {
+		return delay
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(inbox.AccountID + ":" + inbox.ID))
+	return delay - time.Duration(h.Sum64()%uint64(spread))
 }
 
 // Start launches the worker. It returns immediately.
@@ -720,9 +817,20 @@ func (w *RemoteWorker) demandIntervalFor(inbox model.Inbox) time.Duration {
 // emits the operator-facing completion line for IMAP; Microsoft and Google have
 // dedicated passes that log their own completion. A connection failure returns
 // without touching the cursor.
+//
+// A mailbox whose last automatic pass failed is skipped until its backoff
+// expires, so a broken endpoint is not retried at the configured cadence. A pass
+// driven by an explicit user sync runs regardless, and its outcome still updates
+// the backoff: success clears it, failure holds it.
 func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	if w.stopping() {
 		return
+	}
+	if !remoteManualSync(ctx) {
+		if wait := w.backoffRemaining(inbox); wait > 0 {
+			w.log.Debug("remote sync backing off", "inbox_id", inbox.ID, "retry_in", wait.Round(time.Second))
+			return
+		}
 	}
 	key := inbox.AccountID + ":" + inbox.ID
 	w.detectionMu.Lock()
@@ -742,14 +850,15 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 
 	start := time.Now()
 	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
-		w.detectMicrosoft(ctx, inbox)
+		w.noteDetectionResult(inbox, w.detectMicrosoft(ctx, inbox))
 		return
 	}
 	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
-		w.detectGoogle(ctx, inbox)
+		w.noteDetectionResult(inbox, w.detectGoogle(ctx, inbox))
 		return
 	}
 	arrived, status, err := w.detectInboxIMAP(ctx, inbox)
+	w.noteDetectionResult(inbox, err)
 	result := remoteSyncResult{started: start, new: arrived, status: status, err: err}
 	if err != nil {
 		result.status = "error"
@@ -761,14 +870,16 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 // watcher paths use: the Inbox folder's delta from its stored cursor, with the
 // folder tree taken from the store (no Graph folder enumeration). The slower
 // whole-mailbox reconcile (every folder, prune, folder tree) runs on the
-// full-sync cadence instead. It logs its own completion line.
-func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) {
+// full-sync cadence instead. It logs its own completion line and returns the
+// pass error so the caller can record the inbox's retry backoff.
+func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) error {
 	_, err := w.remote.reconcileMicrosoftQuick(ctx, inbox.AccountID, inbox.ID)
 	// See detectGoogle: a rejected grant must read as disconnected before the
 	// next deep reconcile would record it.
 	if reconnectRequired(err) {
 		w.remote.recordReconnectVerdict(ctx, inbox.AccountID, inbox.ID)
 	}
+	return err
 }
 
 // detectInboxIMAP runs one durable IMAP detection pass for one inbox. It opens a

@@ -334,6 +334,26 @@ interval: at most one demand pass per inbox per interval, shared by all callers.
 A manual reload always runs. The stream's own tick is a coarse nudge, not a sync
 rate.
 
+### Failure backoff
+
+A failed automatic pass does not leave the mailbox retrying at its configured
+cadence. The worker keeps an in-memory per-inbox tally of consecutive failed
+automatic passes and the instant its next retry is allowed; the wait is the
+inbox's own quick-poll cadence, doubling per consecutive failure and capped at 10
+minutes, shortened by a stable per-inbox fraction of up to 20% so the retry lands
+just before the matching poll tick rather than a full interval after it. While
+that instant is in the future every automatic pass for the inbox is skipped — the
+poll tick, client demand, an IDLE or push wake-up — while an explicitly manual
+pass still runs. One successful pass clears the tally, and a successful manual
+pass counts, so a mailbox that recovers returns to its cadence immediately.
+
+The state is process-local on purpose: a restart clears it and tries every
+mailbox once. Nothing durable depends on it, and a failed pass leaves the fetch
+cursor untouched, so a delayed retry only delays discovery and never loses mail.
+A permanent failure (a rejected grant, a refused password) backs off the same way
+and is still surfaced by the connector's own disconnected state; the cap bounds
+how long that looks like silence.
+
 `POST /ui/inboxes/{id}/sync` is the toolbar's square reload button. It runs the
 fast new-mail detection/index, re-syncs the headers of the messages currently on
 screen (so read/flag changes show immediately), and redirects back to the same
