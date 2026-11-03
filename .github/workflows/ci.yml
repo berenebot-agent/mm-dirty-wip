@@ -66,6 +66,10 @@ jobs:
           npm ci
           npm run build
           npm test
+          # Gate the published surface only: the plugin ships ws alone, so prod
+          # audit must be clean. A full-tree audit can never pass while npm
+          # bundles undici 6.29.0 and overrides cannot reach bundled deps (D163).
+          npm audit --omit=dev --audit-level=high
       - name: js
         run: |
           set -o pipefail
