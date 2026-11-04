@@ -18,6 +18,14 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **A mailbox that has been failing for a long time is still retried off its own
+  schedule.** Once the remote-sync backoff reached its ten-minute ceiling the
+  delay was returned before the per-inbox jitter was applied, so every
+  long-failing mailbox retried at exactly the same instant even though the
+  shorter rungs were staggered. The cap is now a clamp the jitter runs through,
+  so a fleet that broke together stays spread out at the ceiling too; the wait
+  is the cap minus up to 20%, never above it.
+
 - **The browser tab icon no longer sits on a white tile.** The favicons and the
   ICO carried the white background flattened into their pixels (a palette PNG
   with every `tRNS` entry opaque), so the mammoth showed as a white chip on a

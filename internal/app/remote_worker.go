@@ -243,6 +243,12 @@ func (w *RemoteWorker) noteDetectionResult(inbox model.Inbox, err error) {
 // own quick-poll cadence, doubling per consecutive failure, capped at
 // defaultRemoteMaxBackoff.
 //
+// The cap is applied as a clamp inside the ladder, not as an early exit, so the
+// jitter below also covers a mailbox that has been failing long enough to reach
+// it. Returning the bare cap would collapse a fleet of long-failing mailboxes
+// onto one identical retry instant, which is exactly what the jitter exists to
+// prevent.
+//
 // The delay is shortened by a stable per-inbox fraction (up to 20%) rather than
 // lengthened. Retry instants therefore land just before the corresponding poll
 // tick: the ladder is honoured exactly, and mailboxes that started failing
@@ -253,9 +259,10 @@ func (w *RemoteWorker) backoffDelay(inbox model.Inbox, failures int) time.Durati
 		base = defaultRemotePollInterval
 	}
 	delay := base
-	for i := 1; i < failures; i++ {
-		if delay >= defaultRemoteMaxBackoff/2 {
-			return defaultRemoteMaxBackoff
+	for i := 1; i < failures && delay < defaultRemoteMaxBackoff; i++ {
+		if delay > defaultRemoteMaxBackoff/2 {
+			delay = defaultRemoteMaxBackoff
+			break
 		}
 		delay *= 2
 	}
