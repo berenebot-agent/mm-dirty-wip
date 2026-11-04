@@ -6677,3 +6677,23 @@ setup identity, receiver snapshot and credentials. Legacy webhook header output,
 `/.well-known/mailmoose` and the old Antler diagram URL no longer advertise
 the obsolete identity. Compatibility reads for existing Cloudflare requests,
 old handoff headers, passphrase keys and old receiver manifest URL remain.
+
+
+## D163 — npm's bundled dev dependencies are an accepted risk, not overrides (2026-11-03)
+
+The OpenClaw plugin's dev tree carries advisories inside `npm` itself. `npm`
+ships its dependency tree as `bundleDependencies`, so a package `overrides`
+entry cannot reach those copies — a nested override such as
+`{"npm": {"undici": "6.29.1"}}` resolves to the bundled version unchanged.
+Verified: the copy stays at 6.29.0, and no release of `npm` (12.2.1 is current)
+bundles undici ≥ 6.29.1 or a fixed `brace-expansion`/`postcss-selector-parser`.
+
+Residual after the dependency refresh is one high (`undici` 6.29.0 inside
+`node_modules/npm`) plus moderates, all inside npm's tarball. None ships: the
+published plugin has `ws` as its only runtime dependency, so
+`npm audit --omit=dev` is clean.
+
+CI therefore gates on `npm audit --omit=dev --audit-level=high` rather than a
+full-tree audit, which cannot pass by construction. A full-tree audit failing
+in future is expected; the fix is an `npm` release, not another override.
+Revisit when an npm release bundles undici ≥ 6.29.1, and drop this entry.

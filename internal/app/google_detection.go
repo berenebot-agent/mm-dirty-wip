@@ -11,7 +11,7 @@ import (
 	"github.com/dellarb/mammothmail/internal/transport/one"
 )
 
-func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) {
+func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) error {
 	start := time.Now()
 	arrived, status, err := w.detectGooglePass(ctx, inbox)
 	result := remoteSyncResult{started: start, new: arrived, status: status, err: err}
@@ -24,6 +24,7 @@ func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) {
 	if reconnectRequired(err) {
 		w.remote.recordReconnectVerdict(ctx, inbox.AccountID, inbox.ID)
 	}
+	return err
 }
 
 // detectGooglePass is the timed body of a Gmail history detection pass. status is

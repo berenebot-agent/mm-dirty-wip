@@ -1,4 +1,36 @@
 (function () {
+  var form = document.getElementById('remote-settings-form');
+  var dialog = document.getElementById('remote-settings-error');
+  if (!form || !dialog || !dialog.showModal) return;
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var button = document.querySelector('[form="remote-settings-form"][type="submit"]');
+    if (button) button.disabled = true;
+    fetch(form.action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: new URLSearchParams(new FormData(form))
+    }).then(function (response) {
+      if (response.redirected) {
+        window.location.assign(response.url);
+        return;
+      }
+      if (response.headers.get('X-Remote-Validation-Error') === '1') return response.text();
+      throw new Error('The connection settings could not be saved.');
+    }).then(function (message) {
+      if (!message) return;
+      document.getElementById('remote-settings-error-message').textContent = message;
+      dialog.showModal();
+    }).catch(function () {
+      document.getElementById('remote-settings-error-message').textContent = 'The connection settings could not be saved. Please try again.';
+      dialog.showModal();
+    }).finally(function () {
+      if (button) button.disabled = false;
+    });
+  });
+}());
+
+(function () {
   'use strict';
   // Global Live/Loading status flag in the header. It is only rendered on the
   // pages that hold an event stream (dashboard and inbox views), where it shows
@@ -2548,12 +2580,17 @@
 })();
 
 (function () {
-  document.querySelectorAll('tr.row-link[data-href]').forEach(function (row) {
+  document.querySelectorAll('tr.row-link').forEach(function (row) {
     row.addEventListener('click', function (e) {
       if (e.target.closest('a,button,input,select,textarea,label,form')) {
         return;
       }
-      window.location.href = row.getAttribute('data-href');
+      // Follow the server-rendered row link rather than an attribute string, so
+      // the destination is the anchor's own same-origin href.
+      var link = row.querySelector('a[href]');
+      if (link) {
+        link.click();
+      }
     });
   });
 })();
@@ -3451,7 +3488,7 @@ function aliasNameByAddress(list) {
   document.querySelectorAll('.open-delete-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
       expected = btn.getAttribute('data-name') || '';
-      form.setAttribute('action', '/ui/domains/' + btn.getAttribute('data-domain') + '/delete');
+      form.setAttribute('action', '/ui/domains/' + encodeURIComponent(btn.getAttribute('data-domain') || '') + '/delete');
       nameEl.textContent = expected;
       dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
       renderInboxes(btn);
@@ -3489,7 +3526,7 @@ function aliasNameByAddress(list) {
   document.querySelectorAll('.open-delete-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
       expected = btn.getAttribute('data-address') || '';
-      form.setAttribute('action', '/ui/inboxes/' + btn.getAttribute('data-id') + '/delete');
+      form.setAttribute('action', '/ui/inboxes/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/delete');
       addressEl.textContent = expected;
       dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
       input.value = '';
@@ -3531,7 +3568,7 @@ function aliasNameByAddress(list) {
   function open(btn) {
     expected = btn.getAttribute('data-name') || '';
     var type = btn.getAttribute('data-type') || '';
-    form.setAttribute('action', '/ui/' + btn.getAttribute('data-kind') + '/' + btn.getAttribute('data-id') + '/delete');
+    form.setAttribute('action', '/ui/' + encodeURIComponent(btn.getAttribute('data-kind') || '') + '/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/delete');
     nameEl.textContent = expected;
     if (typeEl) {
       typeEl.textContent = type ? '(' + type + ')' : '';
@@ -5058,6 +5095,10 @@ function clearUrlParams(names) {
         dlg._resetTabs();
       }
       dlg.showModal();
+      var error = document.querySelector('.error.notice[role="alert"]');
+      if (error && new URLSearchParams(window.location.search).get('inbox') === editInboxID) {
+        dlg.querySelector('.inbox-settings-body').prepend(error);
+      }
     });
   });
 
@@ -7349,7 +7390,7 @@ function generateBearerSecret() {
   }
   document.querySelectorAll('.edit-operator').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      form.setAttribute('action', '/ui/account/operators/' + btn.getAttribute('data-id') + '/roles');
+      form.setAttribute('action', '/ui/account/operators/' + encodeURIComponent(btn.getAttribute('data-id') || '') + '/roles');
       email.value = btn.getAttribute('data-email') || '';
       email.readOnly = true;
       var owned = (btn.getAttribute('data-inboxes') || '').split(',');
@@ -7829,7 +7870,7 @@ function generateBearerSecret() {
     }
     if (asPill) {
       var a = el('a', 'pill pending-pill', String(value));
-      a.href = '/ui/inboxes/' + row.getAttribute('data-inbox-id') + '/drafts';
+      a.href = '/ui/inboxes/' + encodeURIComponent(row.getAttribute('data-inbox-id') || '') + '/drafts';
       a.title = 'Drafts awaiting approval to send';
       td.textContent = '';
       td.appendChild(a);

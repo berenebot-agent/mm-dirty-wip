@@ -6,7 +6,33 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- **A mailbox that keeps failing is no longer retried at full cadence.** After a
+  failed automatic detection pass the next attempt waits for the inbox's own
+  quick-poll interval, doubling per consecutive failure up to ten minutes, with a
+  stable per-inbox jitter so a fleet that broke together does not retry together.
+  One successful pass restores the configured cadence, and a manual sync still
+  runs immediately, so a flaky provider is not hammered and a recovered one is not
+  left idle.
+
 ### Fixed
+
+- **A mailbox that has been failing for a long time is still retried off its own
+  schedule.** Once the remote-sync backoff reached its ten-minute ceiling the
+  delay was returned before the per-inbox jitter was applied, so every
+  long-failing mailbox retried at exactly the same instant even though the
+  shorter rungs were staggered. The cap is now a clamp the jitter runs through,
+  so a fleet that broke together stays spread out at the ceiling too; the wait
+  is the cap minus up to 20%, never above it.
+
+- **The browser tab icon no longer sits on a white tile.** The favicons and the
+  ICO carried the white background flattened into their pixels (a palette PNG
+  with every `tRNS` entry opaque), so the mammoth showed as a white chip on a
+  dark tab strip. They are regenerated from the transparent artwork with real
+  alpha and framed tighter, so the mark reads at 16 px, and the icon links
+  carry the build's asset version so a browser's favicon cache cannot keep
+  serving the old tile. The touch icon stays opaque, as iOS requires.
 
 - **The reader names system folders in sentence case.** The move chooser, the
   sidebar and the "Moved to …" notice show Inbox, Sent, Spam, Trash and the

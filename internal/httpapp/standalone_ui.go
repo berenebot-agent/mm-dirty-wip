@@ -3,6 +3,8 @@ package httpapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -972,6 +974,7 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 		StandaloneConfigured: box.RemoteConfigured && box.Remote != nil,
 		StandalonePlain:      box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain,
 		Notice:               r.URL.Query().Get("notice"),
+		Error:                r.URL.Query().Get("error"),
 	}
 	if folders, lerr := s.Service.Store.ListFolders(r.Context(), p.AccountID, id); lerr == nil {
 		items := make([]folderListResponse, 0, len(folders))
@@ -982,6 +985,43 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	data.RoleMappings = s.buildRoleMappings(r.Context(), p.AccountID, id)
 	s.render(w, r, remoteSettingsBody, data)
+}
+
+// remoteConnectionFailure reports only normalized diagnostics, never provider text.
+func (s *Server) remoteConnectionFailure(ctx context.Context, p model.Principal, id string, in store.StandaloneRemoteUpdate, err error) string {
+	protocol, host := "IMAP", strings.TrimSpace(in.Host)
+	var mb *model.MailboxError
+	if errors.As(err, &mb) && mb.Message == "the outbound SMTP server could not be validated" {
+		protocol, host = "SMTP", strings.TrimSpace(in.SMTPHost)
+	}
+	if host == "" {
+		if box, e := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id); e == nil && box.Remote != nil {
+			if protocol == "SMTP" && box.Remote.SMTP != nil {
+				host = box.Remote.SMTP.Host
+			} else if protocol == "IMAP" {
+				host = box.Remote.Host
+			}
+		}
+	}
+	category, detail := "internal", "the connection could not be validated"
+	if mb != nil {
+		switch mb.Kind {
+		case model.ErrKindAuth:
+			category, detail = "auth", "the server rejected the credentials"
+		case model.ErrKindUnavailable, model.ErrKindRetryable:
+			category, detail = mb.Kind, "the server could not be validated or reached"
+		case model.ErrKindInvalid:
+			category, detail = "invalid", "the connection settings are invalid"
+		case model.ErrKindForbidden:
+			category, detail = "forbidden", "the server refused access"
+		}
+	}
+	s.Log.Warn("remote connection validation failed", "protocol", protocol, "host", host, "category", category)
+	message := fmt.Sprintf("%s server %s: %s.", protocol, host, detail)
+	if protocol == "IMAP" && strings.EqualFold(host, "imap.gmail.com") && category == "auth" {
+		message += " Gmail app passwords must be entered without spaces; check that the app password belongs to this Google account."
+	}
+	return message
 }
 
 // uiInboxRemoteRoleCreate maps a special folder role either by creating its
@@ -1052,7 +1092,13 @@ func (s *Server) uiInboxRemoteSettingsSave(w http.ResponseWriter, r *http.Reques
 	}
 	// A connector must authenticate before it is saved as active.
 	if verr := s.verifyRemoteUpdate(r.Context(), p, id, in); verr != nil {
-		s.uiError(w, verr, 400)
+		message := s.remoteConnectionFailure(r.Context(), p, id, in, verr)
+		if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
+			w.Header().Set("X-Remote-Validation-Error", "1")
+			http.Error(w, message, http.StatusBadRequest)
+		} else {
+			http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(id)+"/remote?error="+url.QueryEscape(message), http.StatusSeeOther)
+		}
 		return
 	}
 	box, err := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, id, in)
@@ -1081,16 +1127,17 @@ func (s *Server) uiInboxRemoteSettingsSave(w http.ResponseWriter, r *http.Reques
 // missing role shows a prompt, not a fabricate
 const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}">← Back to inbox</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="error notice" role="alert">{{.Error}}</div>{{end}}
+<dialog id="remote-settings-error" aria-labelledby="remote-settings-error-title"><h2 id="remote-settings-error-title">Connection failed</h2><p id="remote-settings-error-message"></p><form method="dialog"><button>Close</button></form></dialog>
 <section class="card"><h1>Connection settings</h1>
 {{if .StandalonePlain}}<div class="banner warn">This inbox connects over plaintext (no transport security). TLS is the default and is never downgraded automatically; plain is an explicit choice for a self-hosted server.</div>{{end}}
-<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/remote/settings" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<form id="remote-settings-form" method="post" action="/ui/inboxes/{{.Inbox.ID}}/remote/settings" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <h3 class="section-head">Inbound IMAP</h3>
 <label>Host</label><input name="host" value="{{.RemoteConfig.Host}}" placeholder="imap.example.com">
 <label>Port</label><input name="port" type="number" min="1" max="65535" value="{{if .RemoteConfig.Port}}{{.RemoteConfig.Port}}{{end}}" placeholder="993">
 <label>Username</label><input name="username" value="{{.RemoteConfig.Username}}" placeholder="agent@example.com">
 <label>Password or app password{{if .RemoteConfig.IMAPPasswordSet}} <span class="muted small">(leave blank only if host, port, username and security are unchanged)</span>{{end}}</label><input name="imap_password" type="password" autocomplete="new-password" placeholder="{{if .RemoteConfig.IMAPPasswordSet}}unchanged{{else}}app password{{end}}">
 <label>Security</label><select name="security"><option value="tls"{{if eq .RemoteConfig.Security "tls"}} selected{{end}}>TLS (implicit, default)</option><option value="starttls"{{if eq .RemoteConfig.Security "starttls"}} selected{{end}}>STARTTLS</option><option value="plain"{{if eq .RemoteConfig.Security "plain"}} selected{{end}}>Plain (no transport security)</option></select>
-<label>Sync root folder</label><input name="namespace" value="{{.RemoteConfig.Namespace}}" placeholder="INBOX">
 <h3 class="section-head">Outbound SMTP (optional)</h3>
 <p class="muted small">Without SMTP this inbox can receive and hand off drafts but cannot send. Leave the host blank to disable outbound.</p>
 <label>SMTP host</label><input name="smtp_host" value="{{.RemoteConfig.SMTPHost}}" placeholder="smtp.example.com">
@@ -1102,16 +1149,18 @@ const remoteSettingsBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.I
 <p class="muted small">When enabled, a message sent from this inbox is copied into the remote Sent folder. The destination is resolved from the Sent role unless a folder is set here.</p>
 <label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="sent_copy_enabled" value="1"{{if .RemoteConfig.SentCopyEnabled}} checked{{end}} style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Copy sent messages to the remote Sent folder</span></label>
 <label>Sent copy folder (optional override)</label><input name="sent_copy_folder" value="{{.RemoteConfig.SentCopyFolder}}" placeholder="Defaults to the Sent role folder">
-<div class="dialog-actions"><button type="submit">Save connection</button></div>
 </form>
-</section>
-<section class="card"><h2>Special folders</h2>
-<p class="muted small">Each well-known role is mapped to a folder on the remote server. A role is mapped only when a folder is selected for it; Mammoth Mail never invents a mapping. Select an existing folder or create the conventional one.</p>
-<table class="dense"><thead><tr><th>Role</th><th>Mapped folder</th><th>Map an existing folder</th><th></th></tr></thead><tbody>
+<details class="advanced-folders"><summary>Advanced folder settings</summary>
+<label>Sync root folder</label><input form="remote-settings-form" name="namespace" value="{{.RemoteConfig.Namespace}}" placeholder="INBOX">
+<h3 class="section-head">Special folders</h3>
+<p class="muted small">Map remote folders to standard roles, or create a conventional folder if one is missing.</p>
+<table class="dense"><thead><tr><th>Role</th><th>Mapped folder</th><th>Map existing</th><th></th></tr></thead><tbody>
 {{range .RoleMappings}}<tr><td>{{.Role}}</td><td>{{if .Mapped}}{{.FolderName}} <span class="pill">mapped</span>{{else}}<span class="pill amber">missing</span>{{end}}</td>
-<td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="folder_id"><option value="">Select a folder…</option>{{range .Candidates}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="secondary btn-sm">Map</button></form></td>
+<td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="folder_id" aria-label="Map {{.Role}} folder"><option value="">Select…</option>{{range .Candidates}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button class="secondary btn-sm">Map</button></form></td>
 <td><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/remote/roles/{{.Role}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="path" value="{{.DefaultName}}"><button class="secondary btn-sm">Create {{.DefaultName}}</button></form></td></tr>{{end}}
 </tbody></table>
+</details>
+<div class="dialog-actions"><button type="submit" form="remote-settings-form">Save connection</button></div>
 </section>`
 
 // roleMappingView is one special folder role in the connection-settings mapping
