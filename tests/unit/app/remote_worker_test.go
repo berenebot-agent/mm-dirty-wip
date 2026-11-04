@@ -1136,3 +1136,78 @@ func TestDetectInboxBacksOffAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("after recovery failures = %d remaining = %s, want both clear", failures, remaining)
 	}
 }
+
+// TestDetectInboxBackoffJittersAtCap proves the ten-minute ceiling is a clamp
+// the jitter runs through, not an early exit: a mailbox failing long enough to
+// reach the cap still retries at its own stable instant, so a fleet that broke
+// together does not converge on one identical retry time.
+func TestDetectInboxBackoffJittersAtCap(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	// A second inbox in the same account gives a like-for-like peer: same
+	// cadence, same failure count, different identity.
+	second, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
+		DisplayName: "Remote peer",
+		Address:     "peer@remote.example",
+		Remote:      &model.RemoteConnection{Host: "imap.remote.example", Username: "peer@remote.example", Security: model.RemoteSecurityPlain, Port: 143},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	configureSecrets(t, rm, u, second, "imap-pw", "")
+	count := failDialer(t, rm)
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	// One second keeps the ladder fast: the cap arrives at the eleventh
+	// consecutive failure (1s doubling reaches ten minutes) instead of after
+	// ten real minutes per rung.
+	w.SetPollInterval(time.Second)
+	first, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := svc.Store.GetInboxInternal(ctx, second.AccountID, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drive both inboxes to the cap. Each recorded failure schedules the next
+	// retry in the future, so the pass is walked forward by an explicit manual
+	// sync rather than by sleeping out eleven raised intervals.
+	manual := app.WithManualRemoteSync(ctx)
+	const toCap = 11
+	for i := 0; i < toCap; i++ {
+		w.DetectInbox(manual, first)
+		w.DetectInbox(manual, peer)
+	}
+	if got := count(); got != 2*toCap {
+		t.Fatalf("attempts = %d, want %d", got, 2*toCap)
+	}
+	failures, firstRemaining := w.SyncBackoffForTest(first)
+	peerFailures, peerRemaining := w.SyncBackoffForTest(peer)
+	if failures != toCap || peerFailures != toCap {
+		t.Fatalf("recorded failures = %d and %d, want %d each", failures, peerFailures, toCap)
+	}
+	// The capped wait is the cap minus up to 20% of per-inbox jitter. A bare,
+	// unjittered cap is outside this window.
+	const capDelay = 10 * time.Minute
+	floor := capDelay - capDelay/5
+	for _, got := range []time.Duration{firstRemaining, peerRemaining} {
+		if got > capDelay || got <= floor {
+			t.Fatalf("capped backoff = %s, want jittered between %s and %s", got, floor, capDelay)
+		}
+	}
+	// The point of the finding: two inboxes at the same failure count must not
+	// share a retry instant. Require a visible gap rather than mere inequality,
+	// so timer noise in the remaining-times cannot pass this on its own: a bare,
+	// unjittered cap puts them within a millisecond of each other.
+	gap := firstRemaining - peerRemaining
+	if gap < 0 {
+		gap = -gap
+	}
+	if gap < time.Second {
+		t.Fatalf("capped backoff not staggered: inboxes retry %s and %s apart", firstRemaining, peerRemaining)
+	}
+}
