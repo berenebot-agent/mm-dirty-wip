@@ -1211,3 +1211,148 @@ func TestDetectInboxBackoffJittersAtCap(t *testing.T) {
 		t.Fatalf("capped backoff not staggered: inboxes retry %s and %s apart", firstRemaining, peerRemaining)
 	}
 }
+
+// deadWatchSession is a fakeRemoteServer whose IDLE watch fails immediately, so a
+// watcher sees a provider that accepts the session and drops it straight away.
+type deadWatchSession struct{ fakeSession }
+
+func (s *deadWatchSession) IdleCapable() bool { return true }
+
+func (s *deadWatchSession) Watch(_ context.Context, _ string, _ int) (<-chan imap.Notification, func(), <-chan error, error) {
+	errCh := make(chan error, 1)
+	errCh <- errors.New("watch dropped")
+	return make(chan imap.Notification), func() {}, errCh, nil
+}
+
+// recordWatchFailure folds one zero-uptime failed session for the inbox into the
+// worker's ladder, the same way a watcher whose session died at once does. It
+// lets a test walk to the cap without dialling eleven times.
+func recordWatchFailure(w *app.RemoteWorker, inbox model.Inbox) time.Duration {
+	return w.NoteWatchFailureForTest(inbox)
+}
+
+// TestWatchSessionFailuresBackOff proves a watch session that keeps failing is
+// not re-opened every five seconds: the wait doubles per consecutive failure up
+// to the ten-minute ceiling, each inbox keeps its own jittered rung, and a fresh
+// worker starts with no ladder (a restart retries every mailbox at once).
+func TestWatchSessionFailuresBackOff(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, fake, _ := workerEnv(t)
+	ctx := context.Background()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The dialer hands out sessions whose watch dies at once, so each session the
+	// watcher opens is a failure: a provider that accepts the connection and drops
+	// it.
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return &deadWatchSession{fakeSession{fake: fake}}, nil
+	})
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	// A short first rung makes the ladder walkable; the ceiling is unchanged.
+	w.SetWatchBackoff(20 * time.Millisecond)
+	base := 20 * time.Millisecond
+
+	// One run of the watch loop climbs exactly one rung. The run is cancelled once
+	// the failure is recorded, so the test does not sleep out the real backoff.
+	climb := func() time.Duration {
+		t.Helper()
+		before, _, _ := w.WatchBackoffForTest(inbox)
+		runCtx, runCancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w.WatchInboxForTest(runCtx, inbox)
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if failures, _, _ := w.WatchBackoffForTest(inbox); failures > before {
+				break
+			}
+			if time.Now().After(deadline) {
+				runCancel()
+				<-done
+				t.Fatalf("watch failure %d never recorded", before+1)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		runCancel()
+		<-done
+		_, _, scheduled := w.WatchBackoffForTest(inbox)
+		return scheduled
+	}
+
+	// The first four rungs double from the base and are each shortened by this
+	// inbox's stable jitter fraction of up to 20%. The scheduled wait is taken
+	// from the ladder's own return value, not from the remaining time: by the
+	// time a caller reads that, part of the rung has already elapsed.
+	var previous time.Duration
+	for i := 1; i <= 4; i++ {
+		scheduled := climb()
+		failures, _, _ := w.WatchBackoffForTest(inbox)
+		if failures != i {
+			t.Fatalf("failures = %d after %d climbs, want %d", failures, i, i)
+		}
+		delay := base << (i - 1)
+		floor := delay - delay/5
+		if scheduled > delay || scheduled <= floor {
+			t.Fatalf("rung %d wait = %s, want jittered between %s and %s", i, scheduled, floor, delay)
+		}
+		if previous > 0 && scheduled <= previous {
+			t.Fatalf("rung %d wait = %s did not exceed the previous rung %s", i, scheduled, previous)
+		}
+		previous = scheduled
+	}
+
+	// Drive two inboxes to the ceiling: 1s doubling reaches ten minutes at the
+	// eleventh consecutive failure.
+	second, err := svc.Store.CreateStandaloneInbox(ctx, box.AccountID, store.StandaloneCreate{
+		DisplayName: "Second remote",
+		Address:     "second@remote.example",
+		Remote:      &model.RemoteConnection{Host: "imap.remote.example", Username: "second@remote.example", Security: model.RemoteSecurityPlain, Port: 143},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := svc.Store.GetInboxInternal(ctx, second.AccountID, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capped := app.NewRemoteWorker(svc, rm, nil)
+	capped.SetWatchBackoff(time.Second)
+	const toCap = 11
+	for i := 0; i < toCap; i++ {
+		recordWatchFailure(capped, inbox)
+		recordWatchFailure(capped, peer)
+	}
+	failures, _, first := capped.WatchBackoffForTest(inbox)
+	peerFailures, _, secondWait := capped.WatchBackoffForTest(peer)
+	if failures != toCap || peerFailures != toCap {
+		t.Fatalf("recorded failures = %d and %d, want %d each", failures, peerFailures, toCap)
+	}
+	// The capped wait is the ceiling minus up to 20% of per-inbox jitter; a bare,
+	// unjittered ceiling is outside this window.
+	const capDelay = 10 * time.Minute
+	floor := capDelay - capDelay/5
+	for _, got := range []time.Duration{first, secondWait} {
+		if got > capDelay || got <= floor {
+			t.Fatalf("capped watch backoff = %s, want jittered between %s and %s", got, floor, capDelay)
+		}
+	}
+	// Two inboxes at the same failure count are jittered independently, so they do
+	// not share a retry instant. Assert only what the hash can promise: each of
+	// the two waits is its own jittered value, never the bare ceiling. A ≥1s gap
+	// assertion would be a coin flip on randomly generated IDs, since two inboxes
+	// can legitimately hash into adjacent buckets.
+	if first == capDelay || secondWait == capDelay {
+		t.Fatalf("capped watch backoff is the bare ceiling: %s and %s", first, secondWait)
+	}
+
+	// The ladder is process-local: a restart tries every mailbox at once.
+	fresh := app.NewRemoteWorker(svc, rm, nil)
+	if failures, remaining, scheduled := fresh.WatchBackoffForTest(inbox); failures != 0 || remaining != 0 || scheduled != 0 {
+		t.Fatalf("fresh worker inherited a ladder: %d failures, %s left, %s scheduled", failures, remaining, scheduled)
+	}
+}

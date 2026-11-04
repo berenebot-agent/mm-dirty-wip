@@ -89,8 +89,23 @@ type RemoteWorker struct {
 	maxInboxConnections int
 	// pollInterval is the bounded fallback poll cadence when IDLE is unavailable.
 	pollInterval time.Duration
-	// watchBackoff bounds reconnect attempts after a watch/connection failure.
+	// watchBackoff is the first reconnect delay after a watch/connection
+	// failure. Each consecutive failure doubles it up to watchMaxBackoff; a
+	// session that stays up for remoteWatchStable clears the ladder again.
 	watchBackoff time.Duration
+	// watchMaxBackoff caps the reconnect ladder. It is the remote-sync backoff
+	// ceiling: a provider that is down for hours is retried at ten-minute
+	// intervals, not every five seconds.
+	watchMaxBackoff time.Duration
+	// watchFailures and watchRetryAt are the per-inbox reconnect ladder state,
+	// guarded by watchMu. They are process-local for the same reason the
+	// detection backoff is: a fresh process should try every mailbox at once.
+	watchMu       sync.Mutex
+	watchFailures map[string]int
+	watchRetryAt  map[string]time.Time
+	// watchDelay is the delay the ladder scheduled for the current rung, kept so
+	// a caller can read what was decided rather than what is left of it.
+	watchDelay map[string]time.Duration
 	// detectionMu and detecting serialize provider detection across startup,
 	// watcher, demand, and approval-triggered paths for each inbox.
 	detectionMu sync.Mutex
@@ -128,6 +143,10 @@ const (
 	defaultRemotePollInterval   = 60 * time.Second
 	defaultRemoteWatchBackoff   = 5 * time.Second
 	defaultRemoteMaxConnections = 8
+	// remoteWatchStable is how long a watch session must have stayed up for
+	// its inbox to be treated as recovered, which resets the reconnect
+	// ladder. A session that is torn down again sooner counts as a failure.
+	remoteWatchStable = time.Minute
 	// defaultRemoteMaxBackoff caps how long a repeatedly failing mailbox is left
 	// alone before an automatic retry. It is deliberately well below the slowest
 	// full-sync cadence: backoff suppresses retries, it never replaces the
@@ -156,6 +175,10 @@ func NewRemoteWorker(svc *Service, rm *RemoteMailboxService, log *slog.Logger) *
 		maxInboxConnections: defaultRemoteMaxConnections,
 		pollInterval:        defaultRemotePollInterval,
 		watchBackoff:        defaultRemoteWatchBackoff,
+		watchMaxBackoff:     defaultRemoteMaxBackoff,
+		watchFailures:       make(map[string]int),
+		watchRetryAt:        make(map[string]time.Time),
+		watchDelay:          make(map[string]time.Duration),
 		detecting:           make(map[string]bool),
 		lastDemand:          make(map[string]time.Time),
 		failures:            make(map[string]remoteFailureState),
@@ -167,6 +190,15 @@ func (w *RemoteWorker) SetPeriod(d time.Duration) { w.period = d }
 
 // SetPollInterval overrides the fallback poll cadence when IDLE is unavailable.
 func (w *RemoteWorker) SetPollInterval(d time.Duration) { w.pollInterval = d }
+
+// SetWatchBackoff overrides the first reconnect delay after a watch failure
+// (tests use a short first rung so the ladder is walkable); the ceiling is
+// unchanged.
+func (w *RemoteWorker) SetWatchBackoff(d time.Duration) {
+	if d > 0 {
+		w.watchBackoff = d
+	}
+}
 
 // SetMaxInboxConnections bounds how many inboxes are watched concurrently.
 func (w *RemoteWorker) SetMaxInboxConnections(n int) {
@@ -221,6 +253,106 @@ func (w *RemoteWorker) backoffRemaining(inbox model.Inbox) time.Duration {
 	return 0
 }
 
+// WatchBackoffForTest exposes one inbox's recorded consecutive watch failures,
+// the time left before its next reconnect is allowed, and the delay the ladder
+// scheduled for that rung, so a test can assert the ladder without waiting out
+// real delays. The remaining time decays as the wait elapses; the scheduled
+// delay does not.
+func (w *RemoteWorker) WatchBackoffForTest(inbox model.Inbox) (int, time.Duration, time.Duration) {
+	key := inbox.AccountID + ":" + inbox.ID
+	w.watchMu.Lock()
+	failures := w.watchFailures[key]
+	retryAt := w.watchRetryAt[key]
+	scheduled := w.watchDelay[key]
+	w.watchMu.Unlock()
+	remaining := time.Until(retryAt)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return failures, remaining, scheduled
+}
+
+// NoteWatchFailureForTest folds one zero-uptime failed watch session for the
+// inbox into the reconnect ladder and returns the wait it scheduled, so a test
+// can walk the ladder to its ceiling without dialling eleven times.
+func (w *RemoteWorker) NoteWatchFailureForTest(inbox model.Inbox) time.Duration {
+	return w.noteWatchResult(inbox, 0, errors.New("watch dropped"))
+}
+
+// noteWatchResult folds one finished watch session into the inbox's reconnect
+// ladder. A session that returned after staying up for remoteWatchStable clears
+// it: a provider that accepts a watch and holds it is healthy, however the
+// session ended. A shorter session, and an error, counts as a failure and
+// schedules the next reconnect.
+//
+// The returned wait is zero for a recovered inbox and otherwise grows 5s → 10s
+// → … → ten minutes. The per-inbox jitter is the same stable fraction the
+// detection backoff uses, so a provider that went down for everyone does not get
+// every mailbox reconnecting on the same tick, and it is applied after the cap
+// so long-outage mailboxes stay spread out too.
+func (w *RemoteWorker) noteWatchResult(inbox model.Inbox, uptime time.Duration, err error) time.Duration {
+	key := inbox.AccountID + ":" + inbox.ID
+	w.watchMu.Lock()
+	defer w.watchMu.Unlock()
+	if err == nil && uptime >= remoteWatchStable {
+		delete(w.watchFailures, key)
+		delete(w.watchRetryAt, key)
+		delete(w.watchDelay, key)
+		return 0
+	}
+	failures := w.watchFailures[key] + 1
+	delay := w.watchBackoffDelay(inbox, failures)
+	w.watchFailures[key] = failures
+	w.watchRetryAt[key] = time.Now().Add(delay)
+	w.watchDelay[key] = delay
+	return delay
+}
+
+// watchBackoffDelay is the wait before reconnect attempt number `failures`:
+// watchBackoff doubling per consecutive failure, clamped to watchMaxBackoff,
+// then shortened by the stable per-inbox jitter fraction.
+//
+// The cap is a clamp inside the ladder, not an early exit, so the jitter also
+// covers an inbox that has been unreachable long enough to reach it; returning
+// the bare cap would put every long-failing mailbox on one identical retry
+// instant.
+func (w *RemoteWorker) watchBackoffDelay(inbox model.Inbox, failures int) time.Duration {
+	base := w.watchBackoff
+	if base <= 0 {
+		base = defaultRemoteWatchBackoff
+	}
+	ceiling := w.watchMaxBackoff
+	if ceiling < base {
+		ceiling = base
+	}
+	delay := base
+	for i := 1; i < failures && delay < ceiling; i++ {
+		if delay > ceiling/2 {
+			delay = ceiling
+			break
+		}
+		delay *= 2
+	}
+	if delay > ceiling {
+		delay = ceiling
+	}
+	return delay - remoteRetryJitter(inbox, delay)
+}
+
+// remoteRetryJitter returns the stable per-inbox fraction (up to 20%) that is
+// subtracted from a retry delay, derived from the inbox identity: the same
+// inbox always gets the same fraction, so the ladder stays jitter-free from run
+// to run while a fleet that broke together still spreads out over the delay.
+func remoteRetryJitter(inbox model.Inbox, delay time.Duration) time.Duration {
+	spread := int64(delay / 5)
+	if spread <= 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(inbox.AccountID + ":" + inbox.ID))
+	return time.Duration(h.Sum64() % uint64(spread))
+}
+
 // noteDetectionResult folds one finished pass into the inbox's retry state: any
 // error escalates the backoff, any success clears it. Every automatic pass is
 // recorded, so a mailbox that is failing stops being retried at its configured
@@ -269,13 +401,7 @@ func (w *RemoteWorker) backoffDelay(inbox model.Inbox, failures int) time.Durati
 	if delay > defaultRemoteMaxBackoff {
 		delay = defaultRemoteMaxBackoff
 	}
-	spread := int64(delay / 5)
-	if spread <= 0 {
-		return delay
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(inbox.AccountID + ":" + inbox.ID))
-	return delay - time.Duration(h.Sum64()%uint64(spread))
+	return delay - remoteRetryJitter(inbox, delay)
 }
 
 // Start launches the worker. It returns immediately.
@@ -462,21 +588,32 @@ func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
 	// arrived while the process was down.
 	w.detectInbox(ctx, inbox)
 	for !w.stopping() {
-		if err := w.runWatchSession(ctx, inbox, folder); err != nil {
-			if ctx.Err() != nil || w.stopping() {
-				return
-			}
-			w.log.Debug("remote watch retry", "inbox_id", inbox.ID, "error", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-w.stop:
-				return
-			case <-time.After(w.watchBackoff):
-			}
+		started := time.Now()
+		err := w.runWatchSession(ctx, inbox, folder)
+		if ctx.Err() != nil || w.stopping() {
+			return
+		}
+		// A watch session that fails, or that a provider tears down again
+		// straight away, climbs this inbox's reconnect ladder; one that held for
+		// remoteWatchStable clears it.
+		wait := w.noteWatchResult(inbox, time.Since(started), err)
+		if err != nil {
+			w.log.Debug("remote watch retry", "inbox_id", inbox.ID, "error", err, "retry_in", wait.Round(time.Second))
+		} else {
+			// A session that ended cleanly but too soon: the provider is
+			// reaching us and dropping us, which is still a failing endpoint.
+			w.log.Debug("remote watch ended", "inbox_id", inbox.ID, "uptime", time.Since(started).Round(time.Second), "retry_in", wait.Round(time.Second))
+		}
+		if wait <= 0 {
 			continue
 		}
-		return
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.stop:
+			return
+		case <-time.After(wait):
+		}
 	}
 }
 
