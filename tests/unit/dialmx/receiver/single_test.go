@@ -45,8 +45,28 @@ func TestSingleCoreSessionDelivery(t *testing.T) {
 			defer func() { cancel(); <-done }()
 			delivery := r.NewDelivery()
 			defer delivery.Close()
+			// Every Resolve call creates its own transaction group and channel
+			// mapping, so a failed attempt leaves nothing behind to recover:
+			// retrying is safe and the accept below is the real signal that the
+			// core session registered a binding.
+			//
+			// Wait for the core session to be admitted before resolving. The
+			// receiver only publishes a single-mode binding once the core's
+			// hello has been read, and on a loaded CI runner that can trail the
+			// dial (which the manager reports as connected first) by more than
+			// this test's budget. Resolving into that window returns
+			// selected=no_binding, which is indistinguishable from a real
+			// failure, so the wait is explicit: active_connections is the
+			// receiver's own count, and a non-zero value means a session was
+			// admitted at least as far as its hello.
+			deadline := time.Now().Add(15 * time.Second)
+			for r.Stats()["active_connections"] == 0 {
+				if time.Now().After(deadline) {
+					t.Fatalf("core session never admitted: stats=%v", r.Stats())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			var resolved mxwire.ResolveResponse
-			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				var err error
 				resolved, err = delivery.Resolve(ctx, []string{"a@example.test", "b@other.test", "unknown@other.test"})
@@ -56,7 +76,7 @@ func TestSingleCoreSessionDelivery(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if len(resolved.Results) != 3 || !resolved.Results[0].Accept || !resolved.Results[1].Accept || resolved.Results[2].Accept {
-				t.Fatalf("resolution: %+v", resolved)
+				t.Fatalf("resolution: %+v (stats %v)", resolved, r.Stats())
 			}
 			raw := "From: sender@outside.test\r\nSubject: private\r\n\r\nbody"
 			digest := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))

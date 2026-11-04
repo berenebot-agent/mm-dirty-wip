@@ -16,7 +16,27 @@ All notable changes to Mammoth Mail are documented here. This project follows
   runs immediately, so a flaky provider is not hammered and a recovered one is not
   left idle.
 
+- **A mailbox whose watch connection keeps dropping reconnects on a backoff.**
+  When an IMAP watch session fails, or a provider accepts the session and tears
+  it down again straight away, the inbox is no longer re-dialled every five
+  seconds. The wait doubles per consecutive failure up to ten minutes, with the
+  same stable per-inbox jitter the detection backoff uses, so a provider outage
+  does not turn into a reconnect storm and does not put every affected mailbox on
+  the same tick. A session that stays up for a minute counts as a recovery and
+  restores the five-second first rung, and the ladder is process-local, so a
+  restart tries every mailbox at once.
+
 ### Fixed
+
+- **A single-core MX session test no longer fails on a busy CI runner.** The test
+  resolved recipients against a fixed five-second budget while retrying blind. The
+  receiver only publishes a single-core binding once the core's hello has been
+  read, so on a loaded runner the first resolutions ran inside that window and
+  came back `no_binding`, which is indistinguishable from a real routing failure:
+  the test failed on an unrelated pull request with no results at all. It now
+  waits for the receiver to report an admitted session before resolving, allows a
+  CI-appropriate deadline, and reports the receiver's own connection count on
+  failure so a future timeout names the cause.
 
 - **A mailbox that has been failing for a long time is still retried off its own
   schedule.** Once the remote-sync backoff reached its ten-minute ceiling the
