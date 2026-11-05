@@ -1054,7 +1054,7 @@ func (s *Server) uiInboxRemoteRoleCreate(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Select a folder or a name to create"), 303)
 		return
 	}
-	folder, cerr := s.remoteMailbox().CreateRemoteFolder(r.Context(), p, id, path, path)
+	folder, cerr := s.remoteMailbox().EnsureRemoteFolder(r.Context(), p, id, path, path)
 	if cerr != nil {
 		s.uiError(w, cerr, 400)
 		return
