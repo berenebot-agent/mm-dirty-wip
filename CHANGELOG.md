@@ -28,6 +28,21 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **An approval request on an inbox with no outbound provider now reports
+  `failed`.** A standalone inbox in `local_approval` mode with an approver but no
+  SMTP binding left `notification_status` at `queued` indefinitely, with no
+  `draft.notification_failed` event. The first delivery attempt now marks the
+  notification failed and emits the event, as `docs/API.md` describes; cancel and
+  resend once a provider is configured.
+
+- **Mapping a special folder role no longer fails when the folder already
+  exists.** `POST /v1/inboxes/{id}/remote/roles/{role}` with `create` issued
+  `CREATE` for a folder the server already had and returned `503` on servers that
+  answer with a bare `NO`. It now treats an existing folder as success. When the
+  folder exists but lies outside the inbox's sync scope (a top-level folder on a
+  server without `NAMESPACE`), the response is a `400` that names the scope
+  instead of a generic failure.
+
 - **A single-core MX session test no longer fails on a busy CI runner.** The test
   resolved recipients against a fixed five-second budget while retrying blind. The
   receiver only publishes a single-core binding once the core's hello has been

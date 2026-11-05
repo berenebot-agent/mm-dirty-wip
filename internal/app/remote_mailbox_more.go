@@ -415,6 +415,17 @@ func (m *RemoteMailboxService) ListRemoteLabels(ctx context.Context, p model.Pri
 // CreateRemoteFolder creates a folder on the live server and mirrors it into the
 // cached index. The new folder is within the inbox's selected root scope.
 func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.Principal, inboxID, path string, name string) (model.Folder, error) {
+	return m.createRemoteFolder(ctx, p, inboxID, path, name, false)
+}
+
+// EnsureRemoteFolder is CreateRemoteFolder for callers that want the folder to
+// exist afterwards (the special-role mapping): a folder the server already has
+// is success, not a conflict. The plain folder-create API keeps its conflict.
+func (m *RemoteMailboxService) EnsureRemoteFolder(ctx context.Context, p model.Principal, inboxID, path string, name string) (model.Folder, error) {
+	return m.createRemoteFolder(ctx, p, inboxID, path, name, true)
+}
+
+func (m *RemoteMailboxService) createRemoteFolder(ctx context.Context, p model.Principal, inboxID, path string, name string, existsOK bool) (model.Folder, error) {
 	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
 		return m.microsoftFolderMutation(ctx, p, inboxID, path, name, "create")
 	}
@@ -438,7 +449,11 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 	}
 	defer sess.Close()
 	if err := sess.CreateFolder(ctx, path); err != nil {
-		return model.Folder{}, normalizeRemoteError(err)
+		// Servers differ in how they refuse a CREATE of an existing folder
+		// (ALREADYEXISTS, or a bare NO), so ask the server rather than parse text.
+		if _, perr := sess.EnsureFolderExists(ctx, path); !existsOK || perr != nil {
+			return model.Folder{}, normalizeRemoteError(err)
+		}
 	}
 	// Mirror the whole discovered tree, not just the new path: the reconcile
 	// replaces the remote folder set and prunes whatever it is not given, so a
@@ -448,6 +463,12 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 	}
 	got, gerr := m.Service.Store.GetFolder(ctx, p.AccountID, inboxID, path)
 	if gerr != nil {
+		if errors.Is(gerr, store.ErrNotFound) {
+			// The server has the folder but discovery did not return it, so the
+			// inbox's sync scope excludes it (for example a top-level folder on a
+			// server without NAMESPACE, where only the INBOX subtree is synced).
+			return model.Folder{}, model.NewMailboxError(model.ErrKindInvalid, "the folder exists on the server but is outside this inbox's sync scope; use a folder under the sync root (for example INBOX.Drafts) or change the sync root", false, gerr)
+		}
 		return model.Folder{}, mapStoreError(gerr)
 	}
 	return got, nil

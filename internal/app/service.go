@@ -2619,6 +2619,20 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, cl
 		if errors.Is(err, store.ErrNoProvider) {
 			outcomeCtx, cancelOutcome := outcomeContext(ctx)
 			defer cancelOutcome()
+			if w.RequestID != "" {
+				// An approval request must not sit at notification 'queued' forever:
+				// nothing will ever reach the approver, so report it failed (and
+				// emit draft.notification_failed) instead of silently awaiting
+				// approval. The sender can cancel and resend once a provider exists.
+				events, ferr := s.Store.MarkWorkflowFailed(outcomeCtx, accountID, workflowID, "no outbound provider configured for this inbox or domain", time.Time{}, 1, "", claim)
+				if ferr != nil {
+					return ferr
+				}
+				for _, ev := range events {
+					s.Hub.Publish(ev)
+				}
+				return nil
+			}
 			return s.Store.HoldWorkflow(outcomeCtx, accountID, workflowID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute), claim)
 		}
 		return s.failWorkflowDetached(ctx, w, err, "", claim)
