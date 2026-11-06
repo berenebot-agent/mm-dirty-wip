@@ -888,8 +888,8 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	// independent of the list page size.
 	totalCount := 0
 	if box.Kind == model.InboxKindStandalone && folder == "label" {
-		if records, err := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, id, store.RemoteMessageFilter{Labels: labelList(label)}); err == nil {
-			totalCount = len(records)
+		if n, err := s.Service.Store.CountRemoteMessagesWithLabels(r.Context(), p.AccountID, id, labelList(label)); err == nil {
+			totalCount = n
 		}
 	} else if f, _, ok := mailboxFilter(id, folder, label); ok {
 		totalCount, _ = s.Service.Store.CountMessages(r.Context(), p, f)

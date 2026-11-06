@@ -1091,6 +1091,28 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 	return out, rows.Err()
 }
 
+// CountRemoteMessagesWithLabels counts the cached remote messages carrying every
+// given label. It is the counting half of ListRemoteMessagesFiltered for the
+// labels-only case the label view's "select all N" total uses: the same rows, no
+// decode and no ORDER BY, so the total does not cost a full read of the mailbox.
+// It honours only the label filter by design; a caller that needs more of the
+// filter must not substitute it for the list.
+func (s *Store) CountRemoteMessagesWithLabels(ctx context.Context, accountID, inboxID string, labels []string) (int, error) {
+	q := `SELECT count(*) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`
+	args := []any{accountID, inboxID}
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		q += ` AND id IN (SELECT remote_message_id FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND label=?)`
+		args = append(args, accountID, inboxID, label)
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, q, args...).Scan(&n)
+	return n, err
+}
+
 // GetRemoteMessageWithLabels loads a cached remote message and its local labels.
 func (s *Store) GetRemoteMessageWithLabels(ctx context.Context, accountID, inboxID, id string) (RemoteMessage, error) {
 	m, err := s.GetRemoteMessage(ctx, accountID, inboxID, id)

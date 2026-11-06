@@ -26,7 +26,20 @@ All notable changes to Mammoth Mail are documented here. This project follows
   restores the five-second first rung, and the ladder is process-local, so a
   restart tries every mailbox at once.
 
+- **A slow page now names itself in the log.** Any non-streaming request that
+  takes longer than 400 ms is logged at INFO on the ordinary process log with its
+  method, path, status and duration, so an intermittently slow view can be
+  attributed without a profiler and without enabling a debug level. SSE streams
+  and long polls are excluded: their duration is the client's, not the server's.
+  Only the path is recorded, never the query string.
+
 ### Fixed
+
+- **A label view no longer reads every matching message just to count them.** The
+  "select all N" total on a standalone inbox's label page counted by listing the
+  whole filtered set — every row decoded and sorted — so the cost of opening a
+  label grew with the mailbox. The total is now a `count(*)` over the same
+  predicate, without the read, the sort or the decode.
 
 - **A draft placed in a connected mailbox's Drafts folder now shows up in the
   local Drafts view at once.** The confirmed handoff writes the placed draft into
