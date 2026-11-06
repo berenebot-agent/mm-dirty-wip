@@ -245,6 +245,12 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Changed
 
+- **The draft-delete prompt says the deletion is permanent.** Deleting a draft
+  from the Drafts list removes the draft and its attachments immediately — there
+  is no Trash entry for drafts — and the confirmation now reads *Delete this
+  draft permanently? This cannot be undone.* instead of a bare *Delete this
+  draft?*.
+
 - **Pre-promotion contract cleanup:** hosted Tusk MX uses `service: "hosted"` rather than `"antler"`, and the receiving API returns `receiver_manifest` instead of `antler_manifest`. Existing encrypted domain configurations are normalised on read and written with neutral receiver metadata keys at their next save; snapshotted receiver endpoints and setup credentials are preserved. `/.well-known/mailmoose`, the old Antler diagram route and outgoing `X-MailMoose-*` webhook header aliases are removed. The Cloudflare inbound and historical draft handoff compatibility readers remain.
 
 - **The Go module follows the renamed upstream:** `github.com/dellarb/mammothmail`.
