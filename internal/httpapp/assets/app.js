@@ -539,6 +539,7 @@
     '.aq-row[data-state=ambiguous] .aq-dot{background:#b88700}',
     '.aq-main{grid-column:2;grid-row:1;min-width:0}',
     '.aq-kind{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:1.4}',
+    '.aq-details{margin-top:2px;font-size:12px;color:#6b6f73}.aq-details summary{cursor:pointer}.aq-error{overflow-wrap:anywhere;color:#b3261e;margin-top:2px}',
     '.aq-meta{display:block;overflow-wrap:anywhere;color:#6b6f73;font-size:12px;line-height:1.4}',
     '.aq-meta[hidden]{display:none}',
     '.aq-row[data-error] .aq-meta{color:#b3261e}',
@@ -579,6 +580,12 @@
   var MAX_ROWS = 6;
   var RANK = { ambiguous: 0, failed: 1, running: 2, pending: 3 };
   var STATE_TEXT = { pending: 'Queued', running: 'Working…', failed: 'Failed', ambiguous: 'Check provider', done: 'Complete' };
+  // An Empty Trash operation and its purge children are verified against the
+  // provider by the server on its own, so an uncertain one is background work,
+  // not a task for the person.
+  function autoVerified(a) {
+    return a.state === 'ambiguous' && (!!(a.input && a.input.trash_target) || a.empty_trash != null);
+  }
   // Live metadata-sync rows share the popup with message actions but carry their
   // own state vocabulary (queued/running/waiting/error, plus "paused" when a
   // provider stops for storage capacity) and never render a retry control: a
@@ -659,7 +666,8 @@
     var queued = 0, attention = 0, syncing = 0, waiting = 0;
     items.forEach(function (a) {
       if (a.state === 'pending' || a.state === 'running') { queued++; }
-      if (a.state === 'failed' || a.state === 'ambiguous') { attention++; }
+      if (flaggedAction(a)) { attention++; }
+      else if (autoVerified(a)) { queued++; }
     });
     drawerSyncs.forEach(function (s) {
       if (s.state === 'running' || s.state === 'queued') { syncing++; }
@@ -671,7 +679,7 @@
 
   // flaggedAction is an action only a human can settle: it failed, or the
   // provider left it ambiguous.
-  function flaggedAction(a) { return a.state === 'failed' || a.state === 'ambiguous'; }
+  function flaggedAction(a) { return a.state === 'failed' || (a.state === 'ambiguous' && !autoVerified(a)); }
 
   // flaggedSync is a metadata sync that stopped for a reason only a human can
   // fix: an error, or a pause.
@@ -681,7 +689,11 @@
   // itself, a row the person cleared stays cleared, and a cleared metadata sync
   // leaves the drawer but keeps the banner on its own inbox page.
   function applyFilter() {
-    items = rawItems.filter(function (a) { return a.state !== 'done' && !cleared['act:' + a.id]; });
+    // Empty Trash purge children are bookkeeping of their parent, whose progress
+    // already summarises them; they never get a row of their own.
+    items = rawItems.filter(function (a) {
+      return a.state !== 'done' && !cleared['act:' + a.id] && !(a.input && a.input.trash_target);
+    });
     drawerSyncs = displaySyncs.filter(function (s) { return !cleared['sync:' + s.inbox_id]; });
   }
 
@@ -713,8 +725,9 @@
     kind.textContent = kindText(a);
     var meta = document.createElement('span');
     meta.className = 'aq-meta';
-    var detail = a.error || shortID(a.message_id);
-    if (!a.error && a.empty_trash) {
+    var auto = autoVerified(a);
+    var detail = (auto || !a.error) ? shortID(a.message_id) : '';
+    if (a.empty_trash) {
       detail = a.empty_trash.phase === 'discovering'
         ? 'Finding messages… (' + fmtCount(a.empty_trash.total) + ' found)'
         : fmtCount(a.empty_trash.purged) + ' of ' + fmtCount(a.empty_trash.total) + ' purged';
@@ -727,9 +740,23 @@
     meta.textContent = parts.join(' · ');
     if (!meta.textContent) { meta.hidden = true; }
     main.append(kind, meta);
+    // The raw provider/database text is for diagnosis, so it sits behind a
+    // collapsed Details control instead of replacing the row's own context.
+    if (a.error && !auto) {
+      var det = document.createElement('details');
+      det.className = 'aq-details';
+      var sum = document.createElement('summary');
+      sum.textContent = 'Details';
+      var errBody = document.createElement('div');
+      errBody.className = 'aq-error';
+      errBody.textContent = a.error;
+      det.append(sum, errBody);
+      main.appendChild(det);
+    }
     var state = document.createElement('span');
     state.className = 'aq-state';
-    state.textContent = STATE_TEXT[a.state] || a.state;
+    state.textContent = auto ? 'Verifying…' : (STATE_TEXT[a.state] || a.state);
+    if (auto) { row.setAttribute('data-state', 'running'); }
     row.append(dot, main, state);
     function showError(message) {
       row.setAttribute('data-error', '1');
@@ -739,7 +766,7 @@
     var acts = document.createElement('div');
     acts.className = 'aq-acts';
     if (a.state === 'failed') { acts.appendChild(control(a, 'Retry', 'retry', showError)); }
-    if (a.state === 'failed' || a.state === 'ambiguous') {
+    if (a.state === 'failed' || (a.state === 'ambiguous' && !auto)) {
       acts.appendChild(control(a, 'Dismiss', 'dismiss', showError));
     }
     if (acts.childNodes.length) { row.appendChild(acts); }
