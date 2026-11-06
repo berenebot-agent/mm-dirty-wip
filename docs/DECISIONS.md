@@ -3780,6 +3780,16 @@ retryable patch keeps being reconsidered) and per-attempt execution stays bounde
 by the existing 30-second context. No schema migration, dependency or additional
 service; two store methods and worker logic only. See `docs/API.md`.
 
+**Queue-clearing amendment (2026-11-06, approved by Ben):** Clear all dismisses
+the flagged rows through the same store dismissal the per-row Dismiss control
+uses, instead of hiding them in the browser. A local hide was indistinguishable
+from a dismissal until the next navigation, at which point every cleared row
+returned — and a failed row is never swept, so it could not be removed at all.
+Clear all only ever targets rows no server-side reconciliation can settle (a
+failed action, or an ambiguous one without an exact locator), so it cannot
+abandon work that is still in flight; a metadata sync that stopped has no
+dismissal path and stays a tab-local hide. No schema, API-shape or worker change.
+
 ## D104 — Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling
 
 **Date:** 2026-10-11. **Approved by:** Ben.

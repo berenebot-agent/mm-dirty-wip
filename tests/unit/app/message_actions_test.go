@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -584,5 +585,79 @@ func TestFailedMoveSurfacesProviderReason(t *testing.T) {
 	}
 	if settled.LastError == "Action could not be completed" {
 		t.Fatalf("failure reason is still the opaque generic string")
+	}
+}
+
+// TestFailedActionIsLoggedWithItsReason pins that a settled failure reaches the
+// container log, not only the queue row. The drawer keeps the reason in the row;
+// an operator reading logs (or an agent triaging "why is this still queued?") had
+// no way to see it, so every non-done settlement emits one Warn line naming the
+// action, its inbox, kind, state and the reason the row will show.
+func TestFailedActionIsLoggedWithItsReason(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<loggedfail@test>", "LoggedFail")
+	// A non-retryable provider refusal settles as "failed" (a retryable one would
+	// become "ambiguous"), which is the state this line is about.
+	fake.moveFail = model.NewMailboxError(model.ErrKindInvalid, "remote server rejected the request", false, nil)
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	sink := newLogSink()
+	svc.Log = slog.New(sink)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	a, err := svc.EnqueueInboxAction(ctx, p, box.ID, res.Items[0].ID, store.MessageActionInput{Kind: "move", Destination: "Drafts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := app.NewActionWorker(svc, rm)
+	svc.ActionWaker = w
+	w.Start()
+	defer w.Stop()
+	settled, err := svc.WaitForInboxAction(ctx, p, a.ID, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.State != "failed" {
+		t.Fatalf("state = %q, want failed: %+v", settled.State, settled)
+	}
+
+	logged := 0
+	for _, m := range sink.messages() {
+		if m == "action not settled" {
+			logged++
+		}
+	}
+	if logged != 1 {
+		t.Fatalf("logged %d \"action not settled\" lines, want 1 (messages: %v)", logged, sink.messages())
+	}
+	if got := sink.values("action_id"); len(got) == 0 || got[len(got)-1] != a.ID {
+		t.Fatalf("action_id log attr = %v, want %q", got, a.ID)
+	}
+	if got := sink.values("inbox_id"); len(got) == 0 || got[len(got)-1] != box.ID {
+		t.Fatalf("inbox_id log attr = %v, want %q", got, box.ID)
+	}
+	if got := sink.values("kind"); len(got) == 0 || got[len(got)-1] != "move" {
+		t.Fatalf("kind log attr = %v, want move", got)
+	}
+	if got := sink.values("state"); len(got) == 0 || got[len(got)-1] != "failed" {
+		t.Fatalf("state log attr = %v, want failed", got)
+	}
+	if got := sink.values("reason"); len(got) == 0 || !strings.Contains(got[len(got)-1], "rejected the request") {
+		t.Fatalf("reason log attr = %v, want the row's own reason", got)
+	}
+	// The production core logger is built at slog.LevelInfo, so the line must be
+	// emitted at Info or above to be reachable at all.
+	level, ok := sink.levelOf("action not settled")
+	if !ok || level < slog.LevelInfo {
+		t.Fatalf("action not settled logged at %v, want at least INFO so the container log carries it", level)
 	}
 }
