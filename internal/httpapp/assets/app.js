@@ -583,8 +583,21 @@
   // An Empty Trash operation and its purge children are verified against the
   // provider by the server on its own, so an uncertain one is background work,
   // not a task for the person.
+  // Only IMAP purges with a frozen UID and UIDVALIDITY can be: any other uncertain
+  // purge (Microsoft, for one) has no server-side check, so it, and the Empty
+  // Trash parent that waits on it, stays a manual review with Dismiss.
+  function serverVerifiable(a) {
+    var t = a.input && a.input.trash_target;
+    return !!t && t.kind === 'imap' && !!t.uid && !!t.uid_validity;
+  }
   function autoVerified(a) {
-    return a.state === 'ambiguous' && (!!(a.input && a.input.trash_target) || a.empty_trash != null);
+    if (a.state !== 'ambiguous') { return false; }
+    if (a.empty_trash != null) {
+      return !rawItems.some(function (c) {
+        return c.state === 'ambiguous' && c.inbox_id === a.inbox_id && c.input && c.input.trash_target && !serverVerifiable(c);
+      });
+    }
+    return serverVerifiable(a);
   }
   // Live metadata-sync rows share the popup with message actions but carry their
   // own state vocabulary (queued/running/waiting/error, plus "paused" when a
