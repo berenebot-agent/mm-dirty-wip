@@ -77,7 +77,7 @@ func TestKeyLoginShowsOperatorScope(t *testing.T) {
 	if strings.Contains(body, other.Address) {
 		t.Fatalf("key session leaked unassigned mailbox %q", other.Address)
 	}
-	for _, banned := range []string{`id="add-inbox"`, "/admin", "Add Client", "Add Domain"} {
+	for _, banned := range []string{`id="add-inbox"`, "/admin", "Add client", "Add domain"} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("key session rendered admin control %q", banned)
 		}

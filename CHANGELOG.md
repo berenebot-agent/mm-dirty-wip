@@ -314,6 +314,19 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Changed
 
+- **The web UI has one design system.** The 47 KB inline stylesheet, the
+  per-template `<style>` blocks and the styles `app.js` injected at runtime now
+  live in one embedded, content-hashed `/assets/app.css` built on `--mm-*`
+  tokens, with colour reserved for state (amber = needs a decision or setup, red
+  = failure, green = done, blue = unread and focus). The draft review page now
+  states who asked to send, the exact From/To/Subject and body, and the approve
+  confirmation names the subject and recipients. Inbox health on the dashboard
+  distinguishes setup-needed (amber) from disconnected (red). Phones and
+  tablets get stacked inbox and activity rows, two-line mail rows and dialogs
+  that no longer clip; the settings side-nav active item is readable again.
+  Button labels are sentence case. No routes, forms or API behaviour changed.
+  Conventions are in `docs/DESIGN.md`.
+
 - **The draft-delete prompt says the deletion is permanent.** Deleting a draft
   from the Drafts list removes the draft and its attachments immediately — there
   is no Trash entry for drafts — and the confirmation now reads *Delete this
