@@ -5156,6 +5156,19 @@ change, no migration.
 `internal/app/remote_mailbox.go` (bridge install), `internal/app/draft_handoff.go`
 and `internal/app/remote_mailbox_more.go` (the two hooks), and the new tests.
 
+**Amendment (2026-11-06, approved by Ben):** The pull was scheduled on the same
+bounded pool as the whole-inbox reconcile, so it could wait behind a reconcile
+holding a slot for up to two minutes — the opposite of "immediate". It now runs
+on its own single-slot lane (`prioritySlots`), coalesced per inbox+role exactly as
+before, adding at most one provider connection. The confirmed append also seeds
+the cached index directly: `HandoffOutcome` carries the destination UIDVALIDITY
+that UIDPLUS already returned, so `settleHandoffPublished` writes the placed
+draft's metadata row (`Store.UpsertRemoteMessage`) before the local draft is
+consumed — best-effort, never failing the publication, and idempotent with the
+pull that follows. The standalone Drafts page now lists those placed drafts
+read-only above the local editable drafts, and the drafts badge and live snapshot
+count both. No schema change, no migration, no API shape change.
+
 ## D123 — `NOINDEX` asks crawlers to skip the human UI
 
 **Date:** 2026-10-14. **Approved by:** Ben.

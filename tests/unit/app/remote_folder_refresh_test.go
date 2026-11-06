@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dellarb/mammothmail/internal/app"
 	"github.com/dellarb/mammothmail/internal/model"
 	"github.com/dellarb/mammothmail/internal/store"
 )
@@ -188,6 +189,121 @@ func TestFailedSentCopyDoesNotRequestPull(t *testing.T) {
 	if got := rec.snapshot(); len(got) != 0 {
 		t.Fatalf("failed sent copy requested a pull: %v", got)
 	}
+}
+
+// TestPublishedHandoffSeedsDraftsIndexWithoutPull proves a confirmed append
+// records the placed draft in the inbox's cached remote index itself, from the
+// UID and UIDVALIDITY the append reported, with no folder pull at all. The pull is
+// deliberately uninstalled so only the append's own answer can produce the row —
+// this is the path that makes a placed draft visible in the local read model the
+// moment publication settles.
+func TestPublishedHandoffSeedsDraftsIndexWithoutPull(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	rm.InstallRemoteBridges()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the backstop: a row can now only come from the append's answer.
+	svc.RemoteFolderRefresher = nil
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d := standaloneDraft(t, svc, u.AccountID, box)
+	if _, err := svc.RequestSend(ctx, asst, d.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	svc.PublishHandoffs(ctx)
+
+	msgs, err := svc.Store.ListRemoteMessages(ctx, u.AccountID, box.ID, "Drafts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("placed draft not seeded into the Drafts index: %+v", msgs)
+	}
+	got := msgs[0]
+	if !got.Draft {
+		t.Fatalf("seeded row is not flagged as a draft: %+v", got)
+	}
+	if got.UID == 0 || got.UIDValidity == 0 {
+		t.Fatalf("seeded row lost the append locator: uid=%d uidvalidity=%d", got.UID, got.UIDValidity)
+	}
+	if got.Subject != d.Subject {
+		t.Fatalf("seeded subject = %q, want %q", got.Subject, d.Subject)
+	}
+	if !got.Read {
+		t.Fatal("seeded draft must be read: the append sets \\Seen, so an unread row would read as new mail")
+	}
+}
+
+// TestRoleFolderPullBypassesWholeInboxReconcile proves a folder pull scheduled
+// after a remote write runs on its own lane: it completes while a whole-inbox
+// reconcile is parked inside a folder and holds the only general refresh slot.
+// With a shared lane the pull would sit behind the reconcile until it finished.
+func TestRoleFolderPullBypassesWholeInboxReconcile(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+
+	// One general slot, so a single parked reconcile occupies the whole pool.
+	svc.Config.RemoteSyncConcurrency = 1
+	rm2 := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm2.Stop)
+	installFake(t, rm2, fake)
+
+	// Establish the folder map and an empty Drafts index first: the pull only
+	// pulls a folder the inbox already knows, and this reconcile must not be the
+	// one that finds the new message.
+	if _, err := rm2.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	releaseAll := func() { once.Do(func() { close(release) }) }
+	defer releaseAll()
+	fake.beforeDiscover = func() {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+	// The message lands on the server after the baseline, so only the pull can
+	// index it.
+	fake.addMessage("Drafts", "From: agent@remote.example\r\nTo: x@y.test\r\nSubject: pulled\r\nMessage-ID: <pulled@remote>\r\n\r\nbody", "<pulled@remote>", "pulled")
+
+	rm2.ScheduleRefresh(u.AccountID, box.ID)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconcile never reached the fake's folder discovery")
+	}
+
+	rm2.ScheduleRoleFolderRefresh(u.AccountID, box.ID, model.FolderRoleDrafts)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		msgs, err := svc.Store.ListRemoteMessages(ctx, u.AccountID, box.ID, "Drafts")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) == 1 && msgs[0].RFCMessageID == "<pulled@remote>" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Drafts pull waited behind the parked whole-inbox reconcile: %+v", msgs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	releaseAll()
+	rm2.Stop()
 }
 
 // TestHandoffPublishPullsDraftsFolderEndToEnd proves the production wiring: a real

@@ -109,8 +109,14 @@ type RemoteMailboxService struct {
 	refreshCancel  context.CancelFunc
 	refreshWG      sync.WaitGroup
 	refreshSlots   chan struct{}
-	syncSlots      chan struct{}
-	reconciling    map[string]*remoteReconcileCall
+	// prioritySlots is the lane a folder-scoped pull uses instead of
+	// refreshSlots, so the Drafts/Sent refresh scheduled right after a confirmed
+	// remote write never queues behind a whole-inbox reconcile. One slot: a pull
+	// is a single-folder pass, and this bounds the lane's extra provider
+	// connection at one. Both lanes drain through refreshWG.
+	prioritySlots chan struct{}
+	syncSlots     chan struct{}
+	reconciling   map[string]*remoteReconcileCall
 	// deltaSyncing coalesces Microsoft folder-delta syncs per inbox+folder, so
 	// a role-folder refresh and a whole-mailbox reconcile do not apply the same
 	// delta page concurrently. Guarded by refreshMu.
@@ -139,7 +145,7 @@ func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	if concurrency < 1 {
 		concurrency = 2
 	}
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), deltaSyncing: make(map[string]bool), roleRefreshing: make(map[string]bool), microsoftDeduped: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), deltaSyncing: make(map[string]bool), roleRefreshing: make(map[string]bool), microsoftDeduped: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), prioritySlots: make(chan struct{}, 1), syncSlots: make(chan struct{}, concurrency)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs

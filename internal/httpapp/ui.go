@@ -484,7 +484,7 @@ func (s *Server) renderExtra(w http.ResponseWriter, r *http.Request, extra, body
 // the mailbox body references (the message list and the send-requests card), so
 // the full page and the live fragments share exactly one definition of each.
 func (s *Server) renderMail(w http.ResponseWriter, r *http.Request, body string, data any) {
-	s.renderExtra(w, r, selectBanner+liveRequestsCard+liveListCard, body, data)
+	s.renderExtra(w, r, selectBanner+liveRequestsCard+liveListCard+draftsListCard, body, data)
 }
 
 // renderFragment renders one named sub-template on its own, without the page
@@ -494,7 +494,7 @@ func (s *Server) renderMail(w http.ResponseWriter, r *http.Request, body string,
 // same one the full inbox page is parsed with, so a fragment and the page it
 // replaces can never drift.
 func (s *Server) renderFragment(w http.ResponseWriter, r *http.Request, templateName string, data any) {
-	t, err := template.New("frag").Funcs(s.templateFuncs(requestTZ(r))).Parse(liveRequestsCard + liveListCard)
+	t, err := template.New("frag").Funcs(s.templateFuncs(requestTZ(r))).Parse(liveRequestsCard + liveListCard + draftsListCard)
 	if err != nil {
 		s.Log.Error("fragment parse failed", "error", err)
 		http.Error(w, "could not render fragment", 500)
@@ -850,6 +850,10 @@ type pageData struct {
 	ComposeFromOptions                         []fromOption
 
 	Drafts []model.Draft
+	// RemoteDrafts are drafts already placed in a standalone inbox's connected
+	// Drafts folder, served read-only from the cached remote index, so a placed
+	// draft appears in the Drafts view as soon as the append is confirmed.
+	RemoteDrafts []model.Message
 
 	// Admin plane and account management: the account mailer selection, the
 	// invite list, the one-time setup link shown immediately after creation,
@@ -4278,7 +4282,7 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 		unreadCount = unread[box.ID]
 		spamCount, _ = s.Service.Store.CountSpam(r.Context(), p, box.ID)
 		trashCount, _ = s.Service.Store.CountTrash(r.Context(), p, box.ID)
-		draftCount, _ = s.Service.Store.CountDrafts(r.Context(), p, box.ID)
+		draftCount = s.draftBadgeCount(r.Context(), p, *box)
 		outboxCount, _ = s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 		inboxLabels, _ = s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 		labelUnread = s.unifiedLabelUnreadCounts(r.Context(), p, *box)
