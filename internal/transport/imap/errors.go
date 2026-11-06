@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 
@@ -92,6 +93,15 @@ func wrapErr(err error) error {
 		return model.NewMailboxError(model.ErrKindRetryable, "operation canceled", false, err)
 	}
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, ErrNotConnected) {
+		return model.NewMailboxError(model.ErrKindUnavailable, "remote connection is closed", true, err)
+	}
+	// A provider that closes the connection mid-command surfaces as EOF, not as
+	// a *net.OpError: the socket was open and the read returned no bytes. It is
+	// a dropped connection like any other, so it is classified here rather than
+	// falling through to internal — otherwise the raw Go text ("unexpected EOF")
+	// reaches the action queue and the outcome is wrongly treated as
+	// undetermined-but-never-retryable.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return model.NewMailboxError(model.ErrKindUnavailable, "remote connection is closed", true, err)
 	}
 

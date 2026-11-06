@@ -111,10 +111,15 @@ function run() {
     pageYOffset: 0,
     location: { href: '/' }
   };
+  const calls = [];
   const context = {
     window,
     document,
-    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    fetch: (url, opts) => {
+      calls.push({ url: String(url), opts: opts || {} });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    },
+    URLSearchParams,
     EventSource: class { addEventListener() {} },
     setInterval: window.setInterval,
     setTimeout: window.setTimeout,
@@ -124,7 +129,7 @@ function run() {
   vm.runInNewContext(moduleSource, context);
   assert.equal(typeof window.mammothmailActionUpdateForTest, 'function', 'test seam is exported');
   document.open();
-  return { window, body, menu, document };
+  return { window, body, menu, document, calls };
 }
 
 function byClass(root, className) {
@@ -199,6 +204,28 @@ function rows(body) {
   window.mammothmailActionUpdateForTest(payload);
   assert.equal(rows(body).length, 0, 'the cleared row stays cleared across a poll');
   assert.equal(clearButton(body).hidden, true, 'the control stays away');
+}
+
+// Clearing is a durable dismissal in the store, not a hide in this tab: each
+// flagged row is dismissed through the endpoint the per-row Dismiss uses, so the
+// next page load cannot bring it back. Live work is left alone.
+{
+  const { window, body, calls } = run();
+  window.mammothmailActionUpdateForTest({
+    csrf: 'token',
+    items: [
+      { id: 'fail-id', message_id: 'msg_1', state: 'failed', error: 'provider refused', input: { kind: 'delete' } },
+      { id: 'live-id', message_id: 'msg_2', state: 'pending', input: { kind: 'move' } }
+    ]
+  });
+  clearButton(body).onclick();
+  const posts = calls.filter(call => call.url.indexOf('/ui/actions/') === 0);
+  assert.equal(posts.length, 1, 'only the flagged row is dismissed');
+  assert.equal(posts[0].url, '/ui/actions/fail-id', 'the dismissal names the action');
+  assert.equal(posts[0].opts.method, 'POST', 'the dismissal is a POST');
+  const form = new URLSearchParams(posts[0].opts.body);
+  assert.equal(form.get('action'), 'dismiss', 'the dismissal asks for dismiss');
+  assert.equal(form.get('_csrf'), 'token', 'the dismissal carries the CSRF token');
 }
 
 // Live work is not a notification: it stays on the drawer.

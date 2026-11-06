@@ -35,6 +35,29 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **A dropped remote connection is no longer reported as an opaque internal
+  error.** A provider that closes the socket mid-command returns `EOF`, which is
+  not a `*net.OpError`, so it fell through to `internal` and the raw Go text
+  (`unexpected EOF`) was written into the action queue while the outcome was
+  treated as undetermined-but-never-retryable. It is now classified as an
+  unavailable connection ("remote connection is closed", retryable), which is
+  what it is: an uncertain Empty Trash purge carrying an exact locator can then
+  be verified by the reconciler instead of sitting failed forever.
+
+- **Clear all in the queue now dismisses, instead of hiding rows until the next
+  page load.** The control only set a flag in memory, so the rows it removed came
+  straight back on any navigation — plus whatever the next action added — and
+  since a failed row never expires, they could not be removed at all. Clear all
+  now sends the same dismissal the per-row Dismiss sends for each flagged row
+  (the ones no server-side reconciliation can settle) and re-reads the queue, so
+  the clearing survives a reload. A stopped metadata sync still has no dismiss
+  path and stays hidden in the tab only.
+
+- **A failed or uncertain action now leaves a line in the container log.** The
+  queue kept the reason in its row only, so "why is this still queued?" could not
+  be answered from `docker logs` at all. Every settlement that is not `done` or
+  `pending` logs one WARN naming the action, inbox, kind, state and reason.
+
 - **The first page load after a restart no longer re-reads the whole mailbox to
   count unread badges.** The dashboard's unread counts walked every row of each
   standalone inbox's remote index and of `messages`, and because no index carried

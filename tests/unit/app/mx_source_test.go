@@ -68,6 +68,7 @@ type logSink struct {
 	mu    sync.Mutex
 	attrs map[string][]string
 	msgs  []string
+	lvls  []slog.Level
 }
 
 func newLogSink() *logSink { return &logSink{attrs: map[string][]string{}} }
@@ -77,6 +78,7 @@ func (h *logSink) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.msgs = append(h.msgs, r.Message)
+	h.lvls = append(h.lvls, r.Level)
 	r.Attrs(func(a slog.Attr) bool {
 		h.attrs[a.Key] = append(h.attrs[a.Key], a.Value.String())
 		return true
@@ -97,6 +99,21 @@ func (h *logSink) messages() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.msgs...)
+}
+
+// levelOf returns the level of the first record carrying msg. A sink that
+// accepts every level records a Debug line too, so a test that only counted
+// messages would not notice a line the production logger (built at
+// slog.LevelInfo) can never print.
+func (h *logSink) levelOf(msg string) (slog.Level, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i, m := range h.msgs {
+		if m == msg {
+			return h.lvls[i], true
+		}
+	}
+	return slog.LevelInfo, false
 }
 
 // TestMXIngestLogsReceivingSourceAsProvider pins the "inbound received" log

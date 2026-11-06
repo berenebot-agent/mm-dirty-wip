@@ -1030,15 +1030,28 @@
   }
 
   close.onclick = function () { hide(); flag.focus(); };
-  // Clear all takes the flagged rows off the drawer. It hides them here only:
-  // nothing is dismissed in the store, so the queue keeps running and the
-  // worker keeps retrying a failed job behind the drawer.
+  // Clear all dismisses the flagged rows in the store. Dismissal is the durable
+  // half: it survives a page load and stops the queue listing the row again,
+  // which a purely local hide never did. Only a row no server-side
+  // reconciliation can settle is offered here (flaggedAction), and each is
+  // hidden optimistically so a poll already in flight cannot put it back. A
+  // stopped metadata sync has no dismiss path, so those rows are hidden in this
+  // tab only.
   clearAll.onclick = function () {
-    items.forEach(function (a) { if (flaggedAction(a)) { cleared['act:' + a.id] = true; } });
+    var posts = [];
+    items.forEach(function (a) {
+      if (!flaggedAction(a)) { return; }
+      cleared['act:' + a.id] = true;
+      posts.push(fetch('/ui/actions/' + encodeURIComponent(a.id), {method:'POST',credentials:'same-origin',body:new URLSearchParams({_csrf:csrf,action:'dismiss'})})
+        .catch(function () {}));
+    });
     drawerSyncs.forEach(function (s) { if (flaggedSync(s)) { cleared['sync:' + s.inbox_id] = true; } });
     applyFilter();
     paint();
     render();
+    // Re-read after the dismissals land, so a row the server refused to dismiss
+    // reappears instead of vanishing from this tab only.
+    if (posts.length) { Promise.all(posts).then(refresh); }
     // The control hides itself with the rows it cleared, so hand the focus to
     // the drawer rather than losing it to the page.
     if (clearAll.hidden) { bubble.focus(); }
