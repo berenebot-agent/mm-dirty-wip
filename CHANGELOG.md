@@ -35,6 +35,17 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **The first page load after a restart no longer re-reads the whole mailbox to
+  count unread badges.** The dashboard's unread counts walked every row of each
+  standalone inbox's remote index and of `messages`, and because no index carried
+  `is_read` every candidate row cost a table page read. Warm, that was harmless;
+  cold — which is every first render after the process starts, because nothing
+  else scans those ranges — it took seconds, which is why only the first login
+  after a restart was slow. Two partial `is_read=0` indexes now answer both counts
+  from an unread-only index range. The dashboard also stopped summing `messages`
+  to rebuild a Size column it already had from each inbox's maintained usage
+  counter.
+
 - **Slow-request log lines no longer carry credentials in the path.** The line now
   records the matched route pattern (`/invite/{token}`) instead of the concrete
   path, so an invitation token can never reach the log; an unmatched request is

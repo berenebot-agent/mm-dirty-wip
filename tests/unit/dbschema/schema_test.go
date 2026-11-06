@@ -129,6 +129,113 @@ func snapshot(t *testing.T, db *sql.DB) map[string][]string {
 	return out
 }
 
+// unapplyUnreadCountIndexes drops the 005 indexes and their marker so a reopen
+// replays that migration. Every lineage-replay test needs this alongside its own
+// marker deletes: CREATE INDEX has no IF NOT EXISTS form on this lineage, so a
+// replay that reached 005 with the indexes still present would fail.
+func unapplyUnreadCountIndexes(t *testing.T, db *sql.DB) {
+	t.Helper()
+	exec(t, db, `DROP INDEX IF EXISTS idx_inbox_remote_messages_unread`)
+	exec(t, db, `DROP INDEX IF EXISTS idx_messages_unread`)
+	exec(t, db, `DELETE FROM schema_migrations WHERE version='005'`)
+}
+
+// planLines renders SQLite's query plan for one statement, one line per step.
+// EXPLAIN QUERY PLAN returns a driver-dependent column count, so the detail is
+// taken from the last column rather than by name.
+func planLines(t *testing.T, db *sql.DB, query string) string {
+	t.Helper()
+	rows, err := db.Query("EXPLAIN QUERY PLAN " + query)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN failed: %v\n%s", err, query)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		last := vals[len(vals)-1]
+		if b, ok := last.([]byte); ok {
+			out = append(out, string(b))
+		} else {
+			out = append(out, fmt.Sprint(last))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestUnreadCountIndexesServeTheBadgeCounts pins the point of migration 005: the
+// unread-badge counts must be answered from the partial is_read=0 indexes rather
+// than by walking the whole table. A partial index is only considered when the
+// query repeats its predicate verbatim, so this test also catches a future edit
+// that rewrites `is_read=0` (for example to `is_read = ?`) and silently drops
+// the plan back to a full scan — the regression that made the first page load
+// after a restart take seconds.
+func TestUnreadCountIndexesServeTheBadgeCounts(t *testing.T) {
+	t.Parallel()
+	_, db := fresh(t)
+	cases := []struct {
+		name   string
+		query  string
+		want   string
+		noScan string
+	}{
+		{
+			name:   "local messages count",
+			query:  `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id='a' AND is_read=0 AND deleted_at IS NULL AND direction='inbound' AND is_spam=0 GROUP BY inbox_id`,
+			want:   "USING INDEX idx_messages_unread",
+			noScan: "SCAN messages",
+		},
+		{
+			// An IMAP-style inbox needs no label join, so the count is answered
+			// within the index range: the predicate columns all live in the
+			// index. SQLite versions differ on whether they report that as
+			// COVERING, so this asserts the index and the absence of a table
+			// scan rather than the word.
+			name:   "imap standalone count",
+			query:  `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND m.folder_path='INBOX'`,
+			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			noScan: "SCAN m",
+		},
+		{
+			name:   "gmail standalone count",
+			query:  `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND m.id IN (SELECT g.message_id FROM google_label_memberships g WHERE g.inbox_id='i' AND g.label_id='INBOX') AND NOT EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id='i' AND g.message_id=m.id AND g.label_id IN ('TRASH','SPAM','DRAFT'))`,
+			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			noScan: "SCAN m",
+		},
+		{
+			name:   "microsoft standalone count",
+			query:  `SELECT count(*) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND g.inbox_id='i' AND g.folder_id='INBOX'`,
+			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			noScan: "SCAN m",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := planLines(t, db, tc.query)
+			if !strings.Contains(plan, tc.want) {
+				t.Fatalf("query plan does not use %s:\n%s", tc.want, plan)
+			}
+			if strings.Contains(plan, tc.noScan) {
+				t.Fatalf("query plan falls back to a table scan (%s):\n%s", tc.noScan, plan)
+			}
+		})
+	}
+}
+
 func basic(t *testing.T, db *sql.DB) {
 	t.Helper()
 	exec(t, db, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES('a','Developer',1000000,?)`, stamp)
@@ -148,7 +255,7 @@ func TestFreshBaselineAndRestart(t *testing.T) {
 	if err := dbschema.Validate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 4 || scalar(t, db, `PRAGMA user_version`) != 1 {
+	if scalar(t, db, `SELECT count(*) FROM schema_migrations`) != 5 || scalar(t, db, `PRAGMA user_version`) != 1 {
 		t.Fatal("fresh database did not get exactly the public baseline")
 	}
 	if scalar(t, db, `SELECT count(*) FROM sqlite_schema WHERE name IN ('api_keys','api_key_mailbox_roles','hermes_connections','external_aliases','one_accounts','system_settings','outbound_credentials','inbound_credentials','idx_inboxes_id_account')`) != 0 {

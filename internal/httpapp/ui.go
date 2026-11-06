@@ -2378,13 +2378,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if draftCounts == nil {
 		draftCounts = map[string]int{}
 	}
-	mailboxSizes, _ := s.Service.Store.MessageSizesByInbox(ctx, p)
-	if mailboxSizes == nil {
-		mailboxSizes = map[string]int64{}
-	}
 	// The Size column shows total per-inbox usage (messages + drafts +
-	// attachments), matching the per-inbox quota it is compared against, so
-	// overwrite the messages-only SUM with each inbox's maintained usage.
+	// attachments), matching the per-inbox quota it is compared against, and it
+	// comes from each inbox's maintained usage counter. Summing messages here
+	// would walk every message row in the account on every render and then be
+	// discarded — the stored usage already covers drafts and attachments.
+	mailboxSizes := make(map[string]int64, len(boxes))
 	inboxQuotas := make(map[string]*int64, len(boxes))
 	for _, box := range boxes {
 		mailboxSizes[box.ID] = box.StorageUsedBytes

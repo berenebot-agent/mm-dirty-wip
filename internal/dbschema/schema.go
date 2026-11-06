@@ -73,6 +73,27 @@ WHERE mode='mailmoose_approval';`
 // AuthoringLocalApprovalRenameHash pins the schema after the approval-mode rename.
 const AuthoringLocalApprovalRenameHash = SentPlacementBackfillHash
 
+// UnreadCountIndexes covers the two unread-badge counts a render runs: the
+// local messages count and the per-standalone-inbox remote count. Neither
+// index existed before, so each count walked every row of its table and, since
+// no index carried is_read, read the table page of every candidate row to test
+// it. That is invisible once the pages are warm but costs seconds on the first
+// render after a restart, when the whole index range is cold — the reason the
+// first dashboard load after a boot was slow and every later one fast.
+//
+// Both indexes are partial on is_read=0, and the count queries spell that
+// predicate literally, which is what lets SQLite use them: a partial index is
+// only considered when the query's WHERE implies the index's WHERE verbatim.
+// Adding them changes no data and no API. A replay that re-applies this
+// migration must drop both indexes first (CREATE INDEX has no IF NOT EXISTS
+// form on this lineage), which is what the lineage-replay tests do alongside
+// deleting the marker.
+const UnreadCountIndexes = `CREATE INDEX idx_inbox_remote_messages_unread ON inbox_remote_messages(account_id,inbox_id,folder_path) WHERE is_read=0;
+CREATE INDEX idx_messages_unread ON messages(account_id,inbox_id) WHERE is_read=0;`
+
+// UnreadCountIndexesHash pins the schema after the unread-count indexes.
+const UnreadCountIndexesHash = "29f98d9978af5a65a8cbdf46d1195d77d198124c09bb07202e621cfd9f5dbefc"
+
 // Queryer is the read surface shared by a pinned connection and a transaction.
 type Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -91,6 +112,7 @@ func migrations() []migration {
 		{"002", FolderLabelMapping, FolderLabelMappingHash},
 		{"003", SentPlacementBackfill, SentPlacementBackfillHash},
 		{"004", AuthoringLocalApprovalRename, AuthoringLocalApprovalRenameHash},
+		{"005", UnreadCountIndexes, UnreadCountIndexesHash},
 	}
 }
 

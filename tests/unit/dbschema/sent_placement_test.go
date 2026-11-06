@@ -24,8 +24,9 @@ func TestSentPlacementBackfillFilesStandaloneInbox(t *testing.T) {
 	exec(t, db, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,status,from_address,to_json,envelope_to_json,received_at,created_at) VALUES('m1','a','s','t1','outbound','sent','agent@remote.test','[]','[]',?,?)`, stamp, stamp)
 	db.Close()
 
-	// Drop the data-only marker and start once: the hardened statement re-runs.
+	// Drop the data-only markers and start once: the hardened statement re-runs.
 	reopen := openDB(t, dir)
+	unapplyUnreadCountIndexes(t, reopen)
 	exec(t, reopen, `DELETE FROM schema_migrations WHERE version IN ('003','004')`)
 	reopen.Close()
 	s, err := store.Open(dir)
@@ -39,7 +40,7 @@ func TestSentPlacementBackfillFilesStandaloneInbox(t *testing.T) {
 	if got := scalar(t, db, `SELECT count(*) FROM messages WHERE id='m1' AND mailbox_id='fld_sent'`); got != 1 {
 		t.Fatal("a standalone inbox's completed send was not filed in its Sent folder")
 	}
-	if got := scalar(t, db, `SELECT count(*) FROM schema_migrations`); got != 4 {
+	if got := scalar(t, db, `SELECT count(*) FROM schema_migrations`); got != 5 {
 		t.Fatalf("migration markers = %d, want the full public lineage", got)
 	}
 	if err := dbschema.Validate(context.Background(), db); err != nil {
