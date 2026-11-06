@@ -951,7 +951,6 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 		// completion field, plus the keyframes that pulse it.
 		`data-microsoft-paste-hint`,
 		"Paste the resulting URL here",
-		`@keyframes paste-hint-flash`,
 		// Every provider step carries the same left-aligned Back control so the
 		// way back sits in one place and returns to the screen the user came from.
 		`class="wizard-step-nav"`,
@@ -960,6 +959,9 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("standalone wizard missing %q", want)
 		}
+	}
+	if !strings.Contains(appStylesheet(t, h), "@keyframes paste-hint-flash") {
+		t.Fatal("app.css missing the paste-hint keyframes")
 	}
 	if strings.Contains(body, "Coming next") {
 		t.Fatal("standalone wizard still shows the disabled Microsoft 'coming next' button")

@@ -518,64 +518,7 @@
   badge.setAttribute('aria-live', 'polite');
   flag.appendChild(badge);
 
-  var style = document.createElement('style');
-  style.textContent = [
-    '#action-queue[open]{position:absolute;left:0;top:0;right:auto;bottom:auto;margin:0;z-index:60;display:flex;flex-direction:column;width:304px;max-height:min(65vh,380px);padding:10px 12px;border:1px solid #dadce0;border-radius:9px;background:#fff;color:#202124;box-shadow:0 6px 20px rgba(32,33,36,.16);font-size:13px;line-height:1.4;box-sizing:border-box;outline:none}',
-    '#action-queue::before{content:"";position:absolute;top:-6px;left:var(--aq-caret,18px);width:10px;height:10px;background:#fff;border-left:1px solid #dadce0;border-top:1px solid #dadce0;transform:rotate(45deg)}',
-    '.aq-head{display:flex;align-items:center;gap:8px;padding:0 0 7px;border-bottom:1px solid #eee;flex:0 0 auto}',
-    '.aq-title{font-weight:600;flex:0 0 auto}',
-    '.aq-summary{margin-left:auto;color:#5f6368;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.aq-close{width:26px;height:26px;padding:0;flex:0 0 auto;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:18px;line-height:1}',
-    '.aq-close:hover{background:#f1f3f4;color:#202124}',
-    '.aq-clear{border:0;background:transparent;color:#174ea6;font-size:12px;line-height:1.4;padding:3px 6px;border-radius:5px;cursor:pointer;flex:0 0 auto}',
-    '.aq-clear:hover{background:#e8f0fe}',
-    '.aq-clear[hidden]{display:none}',
-    '.aq-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}',
-    '.aq-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:2px 8px;align-items:start;padding:8px 0;border-bottom:1px solid #f1f3f4}',
-    '.aq-row:last-child{border-bottom:0}',
-    '.aq-dot{grid-column:1;grid-row:1;width:7px;height:7px;margin-top:5px;border-radius:50%;background:#9aa0a6}',
-    '.aq-row[data-state=running] .aq-dot{background:#1a73e8}',
-    '.aq-row[data-state=failed] .aq-dot{background:#b3261e}',
-    '.aq-row[data-state=ambiguous] .aq-dot{background:#b88700}',
-    '.aq-main{grid-column:2;grid-row:1;min-width:0}',
-    '.aq-kind{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:1.4}',
-    '.aq-details{margin-top:2px;font-size:12px;color:#6b6f73}.aq-details summary{cursor:pointer}.aq-error{overflow-wrap:anywhere;color:#b3261e;margin-top:2px}',
-    '.aq-meta{display:block;overflow-wrap:anywhere;color:#6b6f73;font-size:12px;line-height:1.4}',
-    '.aq-meta[hidden]{display:none}',
-    '.aq-row[data-error] .aq-meta{color:#b3261e}',
-    '.aq-state{grid-column:3;grid-row:1;margin-top:1px;color:#6b6f73;font-size:12px;line-height:1.4;white-space:nowrap}',
-    '.aq-row[data-state=running] .aq-state{color:#174ea6}',
-    '.aq-row[data-state=failed] .aq-state,.aq-row[data-state=ambiguous] .aq-state{color:#b3261e}',
-    '.aq-acts{grid-column:2 / 4;grid-row:2;display:flex;gap:6px;padding-top:4px}',
-    '.aq-btn{padding:2px 9px;border:1px solid #c6c6c6;border-radius:5px;background:#fff;color:#202124;font-size:12px}',
-    '.aq-btn:hover{background:#f5f5f5}',
-    '.aq-btn.aq-primary{border-color:#202124;background:#202124;color:#fff}',
-    '.aq-btn.aq-primary:hover{background:#3c4043}',
-    '.aq-empty,.aq-more,.aq-notice{margin:9px 0 2px;color:#5f6368;font-size:12px;text-align:center}',
-    '.aq-notice[data-error]{color:#b3261e}',
-    '.aq-notice[hidden]{display:none}',
-    '.aq-btn:focus-visible,.aq-close:focus-visible,.aq-clear:focus-visible{outline:2px solid #1557b0;outline-offset:1px}',
-    '.aq-row[data-state=queued] .aq-dot{background:#b88700}',
-    '.aq-row[data-state=waiting] .aq-dot{background:#9aa0a6}',
-    '.aq-row[data-state=paused] .aq-dot{background:#b88700}',
-    '.aq-row[data-state=paused] .aq-state{color:#8a6d00}',
-    '.aq-row[data-state=done] .aq-dot{background:#188038}',
-    '.aq-row[data-state=done] .aq-state{color:#188038}',
-    '.aq-row[data-state=error] .aq-dot{background:#b3261e}',
-    '.aq-row[data-state=error] .aq-state{color:#b3261e}',
-    '.sync-banner{display:block;background:#e8f0fe;border-color:#c6dafc;color:#174ea6}',
-    '.sync-banner[hidden]{display:none}',
-    '.sync-banner[data-state=waiting]{background:#f1f3f4;border-color:#dadce0;color:#3c4043}',
-    '.sync-banner[data-state=queued]{background:#fef7e0;border-color:#f2d489;color:#8a6d00}',
-    '.sync-banner[data-state=paused]{background:#fef7e0;border-color:#f2d489;color:#8a6d00}',
-    '.sync-banner[data-state=error]{background:#fce8e6;border-color:#f0b4ae;color:#b3261e}',
-    '.aq-sync[data-state=running] .aq-dot,.sync-banner[data-state=running]::before{border:2px solid #c6dafc;border-top-color:#1a73e8;border-radius:50%;background:transparent;animation:metadata-sync-spin .8s linear infinite}',
-    '.aq-sync[data-state=running] .aq-dot{width:9px;height:9px;box-sizing:border-box}',
-    '.sync-banner[data-state=running]::before{content:"";display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-2px}',
-    '@keyframes metadata-sync-spin{to{transform:rotate(360deg)}}',
-    '@media(prefers-reduced-motion:reduce){.aq-sync[data-state=running] .aq-dot,.sync-banner[data-state=running]::before{animation:none}}'
-  ].join('');
-  document.head.appendChild(style);
+  // Styles for this module live in app.css.
 
   var MAX_ROWS = 6;
   var RANK = { ambiguous: 0, failed: 1, running: 2, pending: 3 };
@@ -1081,9 +1024,7 @@
   if (!dlg) {
     return;
   }
-  var dialogStyle = document.createElement('style');
-  dialogStyle.textContent = '#key-dialog[open]{display:flex;flex-direction:column;max-height:calc(100dvh - 32px);overflow:hidden}#key-dialog h2{flex:0 0 auto}#key-form:not([hidden]){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow:hidden}#key-form[hidden]{display:none}.key-form-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.key-fields{display:block;min-width:0;overflow:visible}.connector-config-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.connector-config-row>div{min-width:0}.connector-config-row label{display:block}.connector-config-row select{margin-bottom:6px}@media(max-width:520px){.connector-config-row{grid-template-columns:1fr}}#key-dialog #key-error{flex:0 0 auto}#key-dialog #key-form>.dialog-actions{position:static;flex:0 0 auto;padding:12px 0;margin-top:4px;background:#fff;border-top:1px solid #eee}';
-  document.head.appendChild(dialogStyle);
+  // Styles for this module live in app.css.
   var sel = document.getElementById('key-type');
   var form = document.getElementById('key-form');
   var formScroll = document.createElement('div');
@@ -1165,7 +1106,7 @@
       var canRotate = editing && !!idInput.value && (sel.value === 'api' || (sel.value === 'webhook' && !active));
       rotateBtn.hidden = !canRotate;
       rotateBtn.style.display = canRotate ? '' : 'none';
-      rotateBtn.textContent = sel.value === 'webhook' ? 'Rotate signing secret' : 'Rotate Key';
+      rotateBtn.textContent = sel.value === 'webhook' ? 'Rotate signing secret' : 'Rotate key';
     }
   }
 
@@ -1196,7 +1137,7 @@
       title.textContent = connectorCreate ? 'Add connector' : (form.getAttribute('action') === '/ui/keys' ? 'Add client' : (sel.value === 'api' ? 'Edit client' : 'Edit connector'));
     }
     if (submitBtn && form.getAttribute('action') === '/ui/keys') {
-      submitBtn.textContent = connectorCreate ? 'Add Connector' : 'Add Client';
+      submitBtn.textContent = connectorCreate ? 'Add connector' : 'Add client';
     }
     form.querySelectorAll('.connector-inbox-select').forEach(function (inboxSel) {
       var label = inboxSel.previousElementSibling;
@@ -1517,11 +1458,11 @@
     sel.value = 'api';
     sel.disabled = false;
     if (submitBtn) {
-      submitBtn.textContent = 'Add Client';
+      submitBtn.textContent = 'Add client';
     }
     if (rotateBtn) {
       rotateBtn.hidden = true;
-      rotateBtn.textContent = 'Rotate Key';
+      rotateBtn.textContent = 'Rotate key';
     }
     showForm();
     sync();
@@ -1545,7 +1486,7 @@
     sel.disabled = false;
     if (rotateBtn) {
       rotateBtn.hidden = true;
-      rotateBtn.textContent = 'Rotate Key';
+      rotateBtn.textContent = 'Rotate key';
     }
     showForm();
     sync();
@@ -1574,7 +1515,7 @@
     }
     if (rotateBtn) {
       rotateBtn.hidden = isRelayKind(kind);
-      rotateBtn.textContent = 'Rotate Key';
+      rotateBtn.textContent = 'Rotate key';
     }
     nameInput.value = btn.dataset.name || '';
     if (adminInput) {
@@ -1864,34 +1805,7 @@
   var preferencesReady = false;
   var pendingSave = null;
   var saving = false;
-  var style = document.createElement('style');
-  style.textContent = [
-    '.dashboard-group-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
-    '.dashboard-groups-toggle{display:inline-flex;align-items:center;gap:7px}',
-    '.dashboard-groups-box{width:15px;height:15px;flex:0 0 auto;box-sizing:border-box;border:1px solid #999;border-radius:3px;background:#fff;display:inline-flex;align-items:center;justify-content:center}',
-    '.dashboard-groups-toggle[aria-pressed="true"] .dashboard-groups-box{background:#111;border-color:#111}',
-    '.dashboard-groups-toggle[aria-pressed="true"] .dashboard-groups-box:after{content:"";width:3px;height:7px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);margin-top:-2px}',
-    '.dashboard-row-group{display:inline-flex;align-items:center;gap:5px;max-width:160px;height:26px;padding:0 8px;border-radius:6px;font-size:12px;line-height:1;vertical-align:middle}',
-    '.dashboard-row-group.empty{color:#80868b;border-style:dashed}',
-    '.dashboard-row-group svg{width:13px;height:13px;flex:0 0 auto}',
-    '.dashboard-row-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.dashboard-group-head td{background:#f7f8fa;padding:4px 8px;border-bottom:1px solid #eee}',
-    '.dashboard-group-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:3px 2px;border:0;border-radius:0;background:transparent;color:#202124;text-align:left;font:inherit;cursor:pointer}',
-    '.dashboard-group-toggle:hover,.dashboard-group-toggle:focus-visible{border-color:transparent;background:transparent;color:#202124}',
-    '.dashboard-group-toggle:focus-visible,.dashboard-sortable:focus-visible{outline:2px solid #1557b0;outline-offset:-2px}',
-    '.dashboard-group-chevron{width:0;height:0;flex:0 0 auto;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:6px solid #5f6368;transition:transform .15s}',
-    '.dashboard-group-toggle[aria-expanded="true"] .dashboard-group-chevron{transform:rotate(90deg)}',
-    '.dashboard-group-name{font-weight:700}',
-    '.dashboard-group-count{font-weight:400}',
-    '.dashboard-sortable{cursor:pointer;user-select:none;white-space:nowrap}',
-    '.dashboard-sortable:hover{background:#f6f9ff}',
-    '.dashboard-sortable:after{content:"";display:inline-block;width:0;height:0;margin-left:6px;border-left:4px solid transparent;border-right:4px solid transparent;vertical-align:middle;opacity:0}',
-    '.dashboard-sortable[aria-sort="ascending"]:after{border-bottom:5px solid #5f6368;opacity:1}',
-    '.dashboard-sortable[aria-sort="descending"]:after{border-top:5px solid #5f6368;opacity:1}',
-    '#dashboard-group-dialog{width:min(420px,92vw)}',
-    '#dashboard-group-dialog h2{margin-top:0}'
-  ].join('');
-  document.head.appendChild(style);
+  // Dashboard grouping/sorting styles live in app.css (section 7, dashboard).
 
   var tables = {
     inboxes: {
@@ -8439,9 +8353,7 @@ function generateBearerSecret() {
 })();
 (function () {
   'use strict';
-  var style = document.createElement('style');
-  style.textContent = '.load-status{padding:10px 14px;background:#eef4ff;color:#174ea6;border-radius:6px;margin:8px 0}.load-status[hidden]{display:none}.load-status.pending:before{content:"";display:inline-block;width:16px;height:16px;border:2px solid #b8c9e8;border-top-color:#174ea6;border-radius:50%;margin-right:10px;vertical-align:middle;animation:mail-load-spin .8s linear infinite}.navigation-load{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;box-shadow:0 2px 12px #0003}@keyframes mail-load-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.load-status.pending:before{animation:none}}';
-  document.head.appendChild(style);
+  // Styles for this module live in app.css.
   // Pages that carry the header status flag report navigation loading through
   // it rather than a floating banner; the flag delays a brief spinner, so a
   // fast navigation never flashes one. Other pages keep the banner, since they
