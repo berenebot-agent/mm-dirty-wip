@@ -355,38 +355,10 @@ func (s *Service) recordPlacedDraftIndex(ctx context.Context, accountID string, 
 	if len(raw) == 0 || outcome.RemoteUID == 0 || outcome.UIDValidity == 0 || strings.TrimSpace(outcome.RemoteFolder) == "" {
 		return
 	}
-	parsed, err := mailparse.ParseBytes(raw)
+	in, err := remoteDraftIndexInput(raw, outcome.RemoteFolder, outcome.UIDValidity, outcome.RemoteUID)
 	if err != nil {
 		s.Log.Debug("parse placed draft for remote index", "handoff_id", r.HandoffID, "error", err)
 		return
-	}
-	in := store.RemoteMessageInput{
-		FolderPath:   outcome.RemoteFolder,
-		UIDValidity:  outcome.UIDValidity,
-		UID:          outcome.RemoteUID,
-		RFCMessageID: parsed.RFCMessageID,
-		InReplyTo:    parsed.InReplyTo,
-		References:   parsed.References,
-		FromName:     parsed.From.Name,
-		FromAddress:  parsed.From.Address,
-		To:           parsed.To,
-		CC:           parsed.CC,
-		Subject:      parsed.Subject,
-		Snippet:      draftSnippet(parsed.Text),
-		SizeBytes:    int64(len(raw)),
-		HasAttach:    len(parsed.Attachments) > 0,
-		// The append sets \Draft and \Seen, so the local row must agree with the
-		// server from its first read: an unread row would make the placed draft
-		// read as new mail in the count and the folder view.
-		Read:  true,
-		Draft: true,
-		Flags: []string{"\\Draft", "\\Seen"},
-	}
-	if !parsed.Date.IsZero() {
-		at := parsed.Date.UTC().Format(time.RFC3339Nano)
-		in.SentAt = &at
-		in.ReceivedAt = &at
-		in.InternalDate = &at
 	}
 	if _, err := s.Store.UpsertRemoteMessage(ctx, accountID, r.InboxID, in); err != nil {
 		s.Log.Debug("seed placed draft into remote index", "handoff_id", r.HandoffID, "error", err)

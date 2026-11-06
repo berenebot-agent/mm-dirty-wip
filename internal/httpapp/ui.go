@@ -799,14 +799,19 @@ type pageData struct {
 	ComposeSubject, ComposeText, ComposeNote   string
 	ComposeError, ComposeFlash                 string
 	ComposeDraftID                             string
-	ComposeFrom                                string
-	ComposeFromOptions                         []fromOption
+	// ComposeMarker identifies the copy of a placed draft this editor loaded, so
+	// a save can refuse to overwrite an edit made in the operator's own client.
+	ComposeMarker string
+	// ComposePlaced marks a draft that lives in the connected mailbox: it is sent
+	// from there, so the compose page does not offer Send.
+	ComposePlaced      bool
+	ComposeFrom        string
+	ComposeFromOptions []fromOption
 
-	Drafts []model.Draft
-	// RemoteDrafts are drafts already placed in a standalone inbox's connected
-	// Drafts folder, served read-only from the cached remote index, so a placed
-	// draft appears in the Drafts view as soon as the append is confirmed.
-	RemoteDrafts []model.Message
+	// DraftRows is the Drafts list: drafts Mammoth Mail holds and drafts already
+	// placed in a standalone inbox's connected Drafts folder, as one list. A
+	// placed draft's body stays on the server and is fetched when it is opened.
+	DraftRows []draftListRow
 
 	// Admin plane and account management: the account mailer selection, the
 	// invite list, the one-time setup link shown immediately after creation,

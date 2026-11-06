@@ -58,18 +58,17 @@ func (s *Server) uiInboxLive(w http.ResponseWriter, r *http.Request) {
 		before := strings.TrimSpace(r.URL.Query().Get("before"))
 		switch folder {
 		case "drafts":
-			drafts, remote, hasMore, cursor, pagerURL, total, local, derr := s.draftsView(r, p, box, before)
+			rows, hasMore, cursor, pagerURL, total, _, derr := s.draftsView(r, p, box, before)
 			if derr != nil {
 				s.uiError(w, derr, 400)
 				return
 			}
 			data.Folder = "drafts"
-			data.Drafts = drafts
-			data.RemoteDrafts = remote
+			data.DraftRows = rows
 			data.HasMore = hasMore
 			data.Before = cursor
 			data.PagerURL = pagerURL
-			data.TotalCount = local
+			data.TotalCount = total
 			data.DraftCount = total
 			s.renderFragment(w, r, "drafts-list-card", data)
 		case "inbox", "sent", "spam", "trash", "label", "folder":
