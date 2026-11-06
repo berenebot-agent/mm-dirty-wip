@@ -3,6 +3,7 @@ package httpapp
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,8 +33,10 @@ func slowRequestExempt(path string) bool {
 // configuration. The record carries the method, the path and the status, which
 // is enough to attribute a slow page to its handler.
 //
-// Only the path is logged: flash tokens and one-time secrets travel in the
-// query string. Streams are skipped (slowRequestExempt).
+// Only the matched route pattern is logged, never the concrete path or query:
+// flash tokens and one-time secrets travel in the query string, and some paths
+// are credentials themselves (/invite/{token}). Streams are skipped
+// (slowRequestExempt).
 func withRequestTiming(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if slowRequestExempt(r.URL.Path) {
@@ -44,9 +47,23 @@ func withRequestTiming(log *slog.Logger, next http.Handler) http.Handler {
 		rec := &timingWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		if d := time.Since(start); d > slowRequestThreshold {
-			log.Info("slow request", "method", r.Method, "path", r.URL.Path, "status", rec.status, "duration_ms", d.Milliseconds())
+			log.Info("slow request", "method", r.Method, "route", routeLabel(r), "status", rec.status, "duration_ms", d.Milliseconds())
 		}
 	})
+}
+
+// routeLabel is the ServeMux pattern that served the request, without its
+// method prefix ("/invite/{token}"). A request no pattern matched is reported
+// as "unmatched" rather than by its raw path, which may carry a credential.
+func routeLabel(r *http.Request) string {
+	pat := r.Pattern
+	if i := strings.IndexByte(pat, ' '); i >= 0 {
+		pat = pat[i+1:]
+	}
+	if pat == "" {
+		return "unmatched"
+	}
+	return pat
 }
 
 // timingWriter records the status a handler wrote and forwards the optional

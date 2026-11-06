@@ -29,15 +29,17 @@ func timingLogger(buf *bytes.Buffer) *slog.Logger {
 func TestSlowRequestIsLoggedOnTheOrdinaryLog(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	h := withRequestTiming(timingLogger(&buf), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m := http.NewServeMux()
+	m.HandleFunc("GET /ui/inboxes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(slowEnough)
 		w.WriteHeader(http.StatusTeapot)
-	}))
+	})
+	h := withRequestTiming(timingLogger(&buf), m)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/ui/inboxes/inb_1?flash=one-time-secret", nil))
 
 	out := buf.String()
-	for _, want := range []string{"level=INFO", "slow request", "method=GET", "path=/ui/inboxes/inb_1", "status=418", "duration_ms="} {
+	for _, want := range []string{"level=INFO", "slow request", "method=GET", "route=/ui/inboxes/{id}", "status=418", "duration_ms="} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("record missing %q: %q", want, out)
 		}
@@ -96,5 +98,37 @@ func TestSlowRequestExemptPaths(t *testing.T) {
 		if slowRequestExempt(p) {
 			t.Errorf("%s must be timed", p)
 		}
+	}
+}
+
+// TestSlowRequestNeverLogsPathCredentials proves a slow request on a route whose
+// path is itself a credential (the invitation token) logs the route pattern, not
+// the concrete path, for both methods and for a request no route matched.
+func TestSlowRequestNeverLogsPathCredentials(t *testing.T) {
+	t.Parallel()
+	const secret = "inv_s3cret-token"
+	slow := func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(slowEnough)
+	}
+	m := http.NewServeMux()
+	m.HandleFunc("GET /invite/{token}", slow)
+	m.HandleFunc("POST /invite/{token}", slow)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		var buf bytes.Buffer
+		h := withRequestTiming(timingLogger(&buf), m)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, "/invite/"+secret+"?x=1", nil))
+		out := buf.String()
+		if !strings.Contains(out, "route=/invite/{token}") {
+			t.Fatalf("%s: route pattern missing: %q", method, out)
+		}
+		if strings.Contains(out, secret) {
+			t.Fatalf("%s: record leaked the invitation token: %q", method, out)
+		}
+	}
+	var buf bytes.Buffer
+	h := withRequestTiming(timingLogger(&buf), http.HandlerFunc(slow))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/invite/"+secret, nil))
+	if out := buf.String(); strings.Contains(out, secret) || !strings.Contains(out, "route=unmatched") {
+		t.Fatalf("unmatched request logged wrongly: %q", out)
 	}
 }

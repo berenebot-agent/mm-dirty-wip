@@ -35,6 +35,18 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Slow-request log lines no longer carry credentials in the path.** The line now
+  records the matched route pattern (`/invite/{token}`) instead of the concrete
+  path, so an invitation token can never reach the log; an unmatched request is
+  logged as `unmatched`. The field is `route=` rather than `path=`.
+- **An uncertain Empty Trash on a Microsoft mailbox no longer sticks on
+  "Verifying…".** Only IMAP purges with a frozen UID can be verified by the server,
+  so any other uncertain purge, and the Empty Trash that waits on it, shows
+  "Check provider" with Dismiss as before.
+- **A watch session that ran for a minute resets the reconnect ladder even if it
+  then errors.** Previously a healthy session that later lost its network counted
+  as another consecutive failure.
+
 - **A label view no longer reads every matching message just to count them.** The
   "select all N" total on a standalone inbox's label page counted by listing the
   whole filtered set — every row decoded and sorted — so the cost of opening a

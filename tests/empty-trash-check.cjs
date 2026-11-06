@@ -190,7 +190,7 @@ function texts(row, className) {
     csrf: 'token',
     items: [
       { id: 'p', message_id: 'empty-trash:box', state: 'ambiguous', input: { kind: 'empty_trash' }, empty_trash: { phase: 'purging', total: 3, purged: 1, queued: 2 } },
-      { id: 'c1', message_id: 'm1', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'imap', id: '1' } } },
+      { id: 'c1', message_id: 'm1', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'imap', id: '1', uid: 1, uid_validity: 9 } } },
       { id: 'c2', message_id: 'm2', state: 'pending', input: { kind: 'purge', trash_target: { kind: 'imap', id: '2' } } }
     ]
   });
@@ -198,6 +198,39 @@ function texts(row, className) {
   assert.equal(all.length, 1, 'only the parent is listed');
   assert.deepEqual(texts(all[0], 'aq-state'), ['Verifying…'], 'uncertain outcome verifies itself');
   assert.deepEqual(texts(all[0], 'aq-btn'), [], 'no manual dismiss while it is being verified');
+}
+
+// A Microsoft purge has no server-side check, so it and its Empty Trash parent
+// stay a manual review: visible, labelled, dismissable.
+{
+  const { window, body } = run();
+  window.mammothmailActionUpdateForTest({
+    csrf: 'token',
+    items: [
+      { id: 'p', inbox_id: 'box', message_id: 'empty-trash:box', state: 'ambiguous', input: { kind: 'empty_trash' }, empty_trash: { phase: 'purging', total: 2, purged: 0, queued: 2 } },
+      { id: 'c1', inbox_id: 'box', message_id: 'm1', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'microsoft', id: 'AAA' } } }
+    ]
+  });
+  const all = rows(body);
+  assert.equal(all.length, 1, 'the parent is the only row');
+  assert.deepEqual(texts(all[0], 'aq-state'), ['Check provider'], 'unsupported provider is not "Verifying"');
+  assert.deepEqual(texts(all[0], 'aq-btn'), ['Dismiss'], 'manual dismiss stays available');
+}
+
+// An IMAP purge with a frozen UID verifies itself even next to other mailboxes'
+// manual reviews.
+{
+  const { window, body } = run();
+  window.mammothmailActionUpdateForTest({
+    csrf: 'token',
+    items: [
+      { id: 'p', inbox_id: 'a', message_id: 'empty-trash:a', state: 'ambiguous', input: { kind: 'empty_trash' }, empty_trash: { phase: 'purging', total: 1, purged: 0, queued: 1 } },
+      { id: 'c', inbox_id: 'a', message_id: 'm1', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'imap', id: '1', uid: 1, uid_validity: 9 } } },
+      { id: 'q', inbox_id: 'b', message_id: 'm2', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'microsoft', id: 'B' } } }
+    ]
+  });
+  const all = rows(body);
+  assert.deepEqual(texts(all[0], 'aq-state'), ['Verifying…'], 'IMAP parent still verifies itself');
 }
 
 // An ordinary uncertain action (no server-side reconciliation) still asks.

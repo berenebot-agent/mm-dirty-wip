@@ -279,10 +279,17 @@ func (w *RemoteWorker) NoteWatchFailureForTest(inbox model.Inbox) time.Duration 
 	return w.noteWatchResult(inbox, 0, errors.New("watch dropped"))
 }
 
+// NoteWatchSessionForTest folds one finished watch session of the given uptime
+// and outcome into the inbox's reconnect ladder and returns the wait it
+// scheduled, so a test can exercise recovery without waiting a real minute.
+func (w *RemoteWorker) NoteWatchSessionForTest(inbox model.Inbox, uptime time.Duration, err error) time.Duration {
+	return w.noteWatchResult(inbox, uptime, err)
+}
+
 // noteWatchResult folds one finished watch session into the inbox's reconnect
-// ladder. A session that returned after staying up for remoteWatchStable clears
-// it: a provider that accepts a watch and holds it is healthy, however the
-// session ended. A shorter session, and an error, counts as a failure and
+// ladder. A session that stayed up for remoteWatchStable clears it whether it
+// then returned or errored: a provider that accepts a watch and holds it is
+// healthy, however the session ended. A shorter session counts as a failure and
 // schedules the next reconnect.
 //
 // The returned wait is zero for a recovered inbox and otherwise grows 5s → 10s
@@ -294,7 +301,7 @@ func (w *RemoteWorker) noteWatchResult(inbox model.Inbox, uptime time.Duration, 
 	key := inbox.AccountID + ":" + inbox.ID
 	w.watchMu.Lock()
 	defer w.watchMu.Unlock()
-	if err == nil && uptime >= remoteWatchStable {
+	if uptime >= remoteWatchStable {
 		delete(w.watchFailures, key)
 		delete(w.watchRetryAt, key)
 		delete(w.watchDelay, key)
@@ -595,7 +602,7 @@ func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
 		}
 		// A watch session that fails, or that a provider tears down again
 		// straight away, climbs this inbox's reconnect ladder; one that held for
-		// remoteWatchStable clears it.
+		// remoteWatchStable clears it, even if it then ended in an error.
 		wait := w.noteWatchResult(inbox, time.Since(started), err)
 		if err != nil {
 			w.log.Debug("remote watch retry", "inbox_id", inbox.ID, "error", err, "retry_in", wait.Round(time.Second))

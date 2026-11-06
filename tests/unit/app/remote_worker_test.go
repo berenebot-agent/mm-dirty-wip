@@ -1356,3 +1356,38 @@ func TestWatchSessionFailuresBackOff(t *testing.T) {
 		t.Fatalf("fresh worker inherited a ladder: %d failures, %s left, %s scheduled", failures, remaining, scheduled)
 	}
 }
+
+// TestWatchSessionLongUptimeErrorResetsLadder proves a session that held for the
+// stable window recovers the inbox even when it then ends in an error: the next
+// short failure starts again at the first rung, not the next one up.
+func TestWatchSessionLongUptimeErrorResetsLadder(t *testing.T) {
+	t.Parallel()
+	svc, box, rm, _, _ := workerEnv(t)
+	inbox, err := svc.Store.GetInboxInternal(context.Background(), box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetWatchBackoff(time.Second)
+	for i := 0; i < 4; i++ {
+		recordWatchFailure(w, inbox)
+	}
+	if failures, _, _ := w.WatchBackoffForTest(inbox); failures != 4 {
+		t.Fatalf("failures = %d, want 4", failures)
+	}
+	// Thirty minutes of healthy watching, then the network drops.
+	if wait := w.NoteWatchSessionForTest(inbox, 30*time.Minute, errors.New("connection reset")); wait != 0 {
+		t.Fatalf("long-lived session that errored scheduled %s, want an immediate reconnect", wait)
+	}
+	if failures, _, _ := w.WatchBackoffForTest(inbox); failures != 0 {
+		t.Fatalf("failures = %d after a stable session, want 0", failures)
+	}
+	// A short failure afterwards is the first rung (1s, minus up to 20% jitter).
+	if wait := recordWatchFailure(w, inbox); wait > time.Second || wait <= time.Second-time.Second/5 {
+		t.Fatalf("next failure waits %s, want the first rung (800ms-1s]", wait)
+	}
+	// A short session that errors is still a failure.
+	if failures, _, _ := w.WatchBackoffForTest(inbox); failures != 1 {
+		t.Fatalf("failures = %d, want 1", failures)
+	}
+}
