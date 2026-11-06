@@ -185,13 +185,17 @@ func TestToolbarIconButtonsAreUniformWidth(t *testing.T) {
 	cookie, _ := uiSession(t, svc, u.ID)
 
 	const want = `.inboxbar .icon-btn{height:36px;width:36px;min-width:36px;padding:0;flex:0 0 auto;box-sizing:border-box}`
+	css := appStylesheet(t, h)
+	if !strings.Contains(css, want) {
+		t.Fatal("app.css missing the uniform toolbar icon-button rule")
+	}
+	if strings.Contains(css, ".bulkbar .icon-btn") {
+		t.Fatal("app.css still ships the conflicting .bulkbar .icon-btn rule")
+	}
 	for _, path := range []string{"/ui/inboxes/" + box.ID, "/ui/inboxes/" + box.ID + "/folder?folder=" + folder.ID} {
 		body := uiGet(t, h, cookie, path).Body.String()
-		if !strings.Contains(body, want) {
-			t.Fatalf("%s missing the uniform toolbar icon-button rule", path)
-		}
-		if strings.Contains(body, ".bulkbar .icon-btn") {
-			t.Fatalf("%s still ships the conflicting .bulkbar .icon-btn rule", path)
+		if !strings.Contains(body, "/assets/app.css?v=") {
+			t.Fatalf("%s does not load the stylesheet", path)
 		}
 	}
 }

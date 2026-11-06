@@ -38,6 +38,9 @@ import (
 //go:embed assets/app.js
 var appJS []byte
 
+//go:embed assets/app.css
+var appCSS []byte
+
 //go:embed assets/cloudflare-worker.js
 var cloudflareWorkerTemplate []byte
 
@@ -129,7 +132,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		log = slog.Default()
 	}
 	h := sha256.New()
-	for _, b := range [][]byte{appJS, logoHorizontalPNG, hermesConnectorPNG, openClawConnectorPNG, faviconICO, favicon16PNG, favicon32PNG, appleTouchIconPNG} {
+	for _, b := range [][]byte{appJS, appCSS, logoHorizontalPNG, hermesConnectorPNG, openClawConnectorPNG, faviconICO, favicon16PNG, favicon32PNG, appleTouchIconPNG} {
 		_, _ = h.Write(b)
 	}
 	sum := h.Sum(nil)
@@ -195,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	s.registerInbound(m)
 	m.HandleFunc("GET /assets/app.js", s.asset)
+	m.HandleFunc("GET /assets/app.css", s.stylesheet)
 	m.HandleFunc("GET /assets/logo-horizontal.png", s.showLogo)
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
@@ -675,6 +679,12 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	_, _ = w.Write(appJS)
+}
+
+// stylesheet serves the embedded UI stylesheet. Its URL carries the content
+// hash (assetURL), so it is cached as immutable like app.js.
+func (s *Server) stylesheet(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "text/css; charset=utf-8", "public, max-age=31536000, immutable", appCSS)
 }
 
 func serveBlob(w http.ResponseWriter, contentType, cacheControl string, body []byte) {
