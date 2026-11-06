@@ -269,6 +269,48 @@ func (s *Store) DeferMessageActionRecheck(ctx context.Context, id string, next t
 	return err
 }
 
+// ListAmbiguousForRecheck returns undismissed ambiguous actions whose recheck is
+// due and that carry enough durable evidence to verify against the provider: an
+// Empty Trash purge child (frozen exact locator) or an Empty Trash parent.
+func (s *Store) ListAmbiguousForRecheck(ctx context.Context, due time.Time, limit int) ([]MessageAction, error) {
+	rows, err := s.read.QueryContext(ctx, actionSelect+` WHERE dismissed=0 AND state='ambiguous' AND next_attempt_at<=? AND (json_extract(input_json,'$.trash_target') IS NOT NULL OR json_extract(input_json,'$.kind')='empty_trash') ORDER BY CASE WHEN json_extract(input_json,'$.kind')='empty_trash' THEN 1 ELSE 0 END,next_attempt_at,rowid LIMIT ?`, timeText(due), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MessageAction{}
+	for rows.Next() {
+		a, err := scanAction(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ResolveAmbiguousAction moves an ambiguous action to state ('done' or
+// 'pending') once the provider has been checked. It is conditional on the row
+// still being ambiguous and undismissed, so a concurrent dismissal wins.
+func (s *Store) ResolveAmbiguousAction(ctx context.Context, id, state string) (bool, error) {
+	settled := nowText()
+	if state == "pending" {
+		settled = ""
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE inbox_message_actions SET state=?,last_error='',next_attempt_at=?,claim_owner='',settled_at=? WHERE id=? AND state='ambiguous' AND dismissed=0`, state, nowText(), settled, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// DeferAmbiguousRecheck pushes an unresolved ambiguous action's next check back.
+func (s *Store) DeferAmbiguousRecheck(ctx context.Context, id string, next time.Time) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_message_actions SET next_attempt_at=? WHERE id=? AND state='ambiguous' AND dismissed=0`, timeText(next), id)
+	return err
+}
+
 func (s *Store) RecoverMessageActions(ctx context.Context) error {
 	// A crash after a remote move/purge may have committed externally. Never
 	// replay those blindly; safe absolute state patches can be retried.

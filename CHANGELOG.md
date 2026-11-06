@@ -28,6 +28,18 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Uncertain Empty Trash purges now verify themselves.** A purge whose reply was
+  lost used to wait for a person to check the provider. The action worker now
+  looks up the child's frozen UID and UIDVALIDITY on the server: an absent
+  message settles the purge, a still-present one is purged again by that exact
+  UID, and an unreachable provider, changed UIDVALIDITY or changed Trash mapping
+  decides nothing. The parent finishes once no child is uncertain. An IMAP
+  `FETCH` that fails is no longer reported as "message not found".
+- **The action queue is quieter.** Empty Trash purge children no longer get rows
+  of their own (the parent's progress covers them), an uncertain Empty Trash
+  reads "Verifying…" instead of "Check provider", and raw provider or database
+  error text sits behind a collapsed Details control.
+
 - **A confirmed IMAP move no longer fails when sync already indexed the
   destination.** The local half of a move coalesced onto the destination row and
   failed with `UNIQUE constraint failed: inbox_remote_messages…` although the

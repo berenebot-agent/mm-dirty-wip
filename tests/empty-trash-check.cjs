@@ -177,8 +177,39 @@ function texts(row, className) {
   });
   const row = rows(body)[0];
   assert.equal(row.getAttribute('data-state'), 'failed');
-  assert.deepEqual(texts(row, 'aq-meta'), ['No remote Trash folder mapped'], 'failure detail is shown');
+  assert.deepEqual(texts(row, 'aq-error'), ['No remote Trash folder mapped'], 'failure detail is kept under Details');
+  assert.notDeepEqual(texts(row, 'aq-meta'), ['No remote Trash folder mapped'], 'raw error does not replace the row context');
   assert.deepEqual(texts(row, 'aq-btn'), ['Retry', 'Dismiss'], 'failed parent can be retried or dismissed');
+}
+
+// Purge children are internal: they never get a row, and an uncertain Empty
+// Trash is shown as verifying in the background rather than as a task.
+{
+  const { window, body } = run();
+  window.mammothmailActionUpdateForTest({
+    csrf: 'token',
+    items: [
+      { id: 'p', message_id: 'empty-trash:box', state: 'ambiguous', input: { kind: 'empty_trash' }, empty_trash: { phase: 'purging', total: 3, purged: 1, queued: 2 } },
+      { id: 'c1', message_id: 'm1', state: 'ambiguous', input: { kind: 'purge', trash_target: { kind: 'imap', id: '1' } } },
+      { id: 'c2', message_id: 'm2', state: 'pending', input: { kind: 'purge', trash_target: { kind: 'imap', id: '2' } } }
+    ]
+  });
+  const all = rows(body);
+  assert.equal(all.length, 1, 'only the parent is listed');
+  assert.deepEqual(texts(all[0], 'aq-state'), ['Verifying…'], 'uncertain outcome verifies itself');
+  assert.deepEqual(texts(all[0], 'aq-btn'), [], 'no manual dismiss while it is being verified');
+}
+
+// An ordinary uncertain action (no server-side reconciliation) still asks.
+{
+  const { window, body } = run();
+  window.mammothmailActionUpdateForTest({
+    csrf: 'token',
+    items: [{ id: 'o', message_id: 'm9', state: 'ambiguous', input: { kind: 'move' } }]
+  });
+  const all = rows(body);
+  assert.deepEqual(texts(all[0], 'aq-state'), ['Check provider']);
+  assert.deepEqual(texts(all[0], 'aq-btn'), ['Dismiss']);
 }
 
 console.log('empty-trash-check: all checks passed');

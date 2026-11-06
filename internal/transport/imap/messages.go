@@ -411,7 +411,11 @@ func (a *Adapter) FetchHeader(ctx context.Context, loc Locator) (MessageHeader, 
 		cmd := a.conn.Fetch(imap.UIDSetNum(imap.UID(loc.UID)), options)
 		msg := cmd.Next()
 		if msg == nil {
-			_ = cmd.Close()
+			// A failed FETCH is not evidence the message is gone: only a
+			// command that completed cleanly with no row means not found.
+			if err := cmd.Close(); err != nil {
+				return wrapErr(err)
+			}
 			return NotFound("")
 		}
 		item, cerr := msg.Collect()

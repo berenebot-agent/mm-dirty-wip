@@ -539,6 +539,7 @@ func (w *ActionWorker) RecheckFailed() {
 }
 
 func (w *ActionWorker) recheckFailed(ctx context.Context) {
+	defer w.recheckAmbiguous(ctx)
 	// next_attempt_at on a failed row is the next recheck time, so eligibility is
 	// a plain "is it due now" comparison. The interval is applied once, where the
 	// timestamp is written, never again in the query.
