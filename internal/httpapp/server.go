@@ -410,7 +410,7 @@ func (s *Server) Handler() http.Handler {
 		m.HandleFunc(rt.pattern, s.withInstallSession(rt.bind(s)))
 	}
 
-	return s.httpsRedirect(s.securityHeaders(s.recoverer(m)))
+	return s.httpsRedirect(s.securityHeaders(withRequestTiming(s.Log, s.recoverer(m))))
 }
 
 // apiRoute is one authenticated API registration: a ServeMux pattern and the
