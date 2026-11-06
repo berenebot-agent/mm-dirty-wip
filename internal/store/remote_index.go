@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -1300,32 +1301,29 @@ func (s *Store) MoveRemoteMessageMetadata(ctx context.Context, accountID, inboxI
 	if err != nil {
 		return RemoteMessage{}, err
 	}
-	// Preserve local labels across the relocation: the message row's DELETE
-	// cascades the label rows, so capture them first and restore afterwards.
-	labels, err := s.RemoteMessageLabels(ctx, accountID, inboxID, id)
-	if err != nil {
+	// A sync can index the confirmed destination before this local half of MOVE
+	// runs. Coalesce that locator instead of failing an already successful move.
+	// Keep the source id and its references stable, and carry both rows' labels.
+	var duplicate string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND folder_path=? AND remote_uid_validity=? AND remote_uid=? AND id<>?`, accountID, inboxID, destFolder, destUIDValidity, destUID, id).Scan(&duplicate)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return RemoteMessage{}, err
 	}
-	// Delete the old locator row (its UID no longer exists in the source folder)
-	// and insert at the new locator. Labels travel with the message.
-	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=? AND account_id=? AND inbox_id=?`, id, accountID, inboxID); err != nil {
-		return RemoteMessage{}, err
-	}
-	// Preserve the stable metadata id so a client's cached id remains valid across
-	// a move (IDs the service performs are stable).
-	_, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.ID, accountID, inboxID, destFolder, destUIDValidity, destUID, m.RFCMessageID, m.InReplyTo, jsonString(m.References), m.ThreadKey,
-		m.FromName, m.FromAddress, jsonString(m.To), jsonString(m.CC), m.Subject, m.Snippet, m.SizeBytes, boolInt(m.HasAttach), boolInt(m.Read), boolInt(m.Flagged),
-		boolInt(m.Answered), boolInt(m.Draft), jsonString(m.Flags), nullStringPtr(m.ReceivedAt), nullStringPtr(m.SentAt), nullStringPtr(m.InternalDate), now, m.CreatedAt, now)
-	if err != nil {
-		return RemoteMessage{}, err
-	}
-	for _, label := range labels {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_labels(id,account_id,inbox_id,remote_message_id,label,created_at) VALUES(?,?,?,?,?,?)`,
-			idgen.New("rlb"), accountID, inboxID, m.ID, label, now); err != nil {
+	if duplicate != "" {
+		duplicateBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, duplicate)
+		if err != nil {
 			return RemoteMessage{}, err
 		}
+		oldBytes += duplicateBytes
+		if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE inbox_remote_labels SET remote_message_id=? WHERE remote_message_id=? AND account_id=? AND inbox_id=?`, id, duplicate, accountID, inboxID); err != nil {
+			return RemoteMessage{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE id=? AND account_id=? AND inbox_id=?`, duplicate, accountID, inboxID); err != nil {
+			return RemoteMessage{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET folder_path=?,remote_uid_validity=?,remote_uid=?,indexed_at=?,updated_at=? WHERE id=? AND account_id=? AND inbox_id=?`, destFolder, destUIDValidity, destUID, now, now, id, accountID, inboxID); err != nil {
+		return RemoteMessage{}, err
 	}
 	newBytes, _, err := remoteMessageBytesTx(ctx, tx, accountID, inboxID, m.ID)
 	if err != nil {

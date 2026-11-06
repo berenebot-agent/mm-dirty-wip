@@ -28,6 +28,12 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **A confirmed IMAP move no longer fails when sync already indexed the
+  destination.** The local half of a move coalesced onto the destination row and
+  failed with `UNIQUE constraint failed: inbox_remote_messages…` although the
+  server move had succeeded. It now keeps the moved message's id, merges both
+  rows' labels and keeps storage accounting exact.
+
 - **An approval request on an inbox with no outbound provider now reports
   `failed`.** A standalone inbox in `local_approval` mode with an approver but no
   SMTP binding left `notification_status` at `queued` indefinitely, with no
