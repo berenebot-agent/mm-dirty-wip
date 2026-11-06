@@ -26,7 +26,7 @@ func (c *Client) SendRaw(ctx context.Context, token string, r io.Reader, threadI
 		return Message{}, invalid("gmail messages.send: message body is required")
 	}
 	var m Message
-	if err := c.streamRaw(ctx, "gmail messages.send", c.endpoint("/messages/send"), token, r, threadID, false, &m); err != nil {
+	if err := c.streamRaw(ctx, http.MethodPost, "gmail messages.send", c.endpoint("/messages/send"), token, r, threadID, false, &m); err != nil {
 		return Message{}, err
 	}
 	return m, nil
@@ -39,11 +39,59 @@ func (c *Client) CreateDraft(ctx context.Context, token string, r io.Reader, thr
 		return Draft{}, invalid("gmail drafts.create: message body is required")
 	}
 	var d Draft
-	if err := c.streamRaw(ctx, "gmail drafts.create", c.endpoint("/drafts"), token, r, threadID, true, &d); err != nil {
+	if err := c.streamRaw(ctx, http.MethodPost, "gmail drafts.create", c.endpoint("/drafts"), token, r, threadID, true, &d); err != nil {
 		return Draft{}, err
 	}
 	return d, nil
 }
+
+// UpdateDraft replaces a draft's RFC 5322 message in place, keeping the draft and
+// its message id. Gmail addresses a draft by its own id (not the message id), so
+// the caller resolves one with DraftIDForMessage first.
+func (c *Client) UpdateDraft(ctx context.Context, token, id string, r io.Reader, threadID string) (Draft, error) {
+	if strings.TrimSpace(id) == "" {
+		return Draft{}, invalid("gmail drafts.update: draft id is required")
+	}
+	if r == nil {
+		return Draft{}, invalid("gmail drafts.update: message body is required")
+	}
+	var d Draft
+	if err := c.streamRaw(ctx, http.MethodPut, "gmail drafts.update", c.endpoint("/drafts/"+url.PathEscape(id)), token, r, threadID, true, &d); err != nil {
+		return Draft{}, err
+	}
+	return d, nil
+}
+
+// DraftIDForMessage resolves the id of the draft that holds a given message. The
+// cached remote index stores message ids, while drafts.update is addressed by
+// draft id, so the two have to be matched once per write. It is bounded: at most
+// draftLookupPages pages are listed before the draft is reported missing, which
+// keeps a write from walking an arbitrarily large drafts list.
+func (c *Client) DraftIDForMessage(ctx context.Context, token, messageID string) (string, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return "", invalid("gmail drafts.list: message id is required")
+	}
+	page := ""
+	for i := 0; i < draftLookupPages; i++ {
+		res, err := c.ListDrafts(ctx, token, page, maxListResults)
+		if err != nil {
+			return "", err
+		}
+		for _, d := range res.Drafts {
+			if d.Message.ID == messageID {
+				return d.ID, nil
+			}
+		}
+		if res.NextPageToken == "" {
+			break
+		}
+		page = res.NextPageToken
+	}
+	return "", invalid("gmail drafts.list: no draft holds this message")
+}
+
+// draftLookupPages bounds the draft-id lookup at five pages of maxListResults.
+const draftLookupPages = 5
 
 // ListDrafts returns one page of drafts. limit maps to maxResults.
 func (c *Client) ListDrafts(ctx context.Context, token, page string, limit int) (DraftPage, error) {
@@ -84,10 +132,10 @@ func (c *Client) GetDraft(ctx context.Context, token, id, format string) (Draft,
 	return d, nil
 }
 
-// streamRaw posts a streamed JSON envelope (send or draft) and decodes the
-// response. It distinguishes a local body error (definitive) from a transport
+// streamRaw posts (or puts) a streamed JSON envelope (send or draft) and decodes
+// the response. It distinguishes a local body error (definitive) from a transport
 // failure after the request was built (ambiguous).
-func (c *Client) streamRaw(ctx context.Context, op, endpoint, token string, r io.Reader, threadID string, draft bool, out any) error {
+func (c *Client) streamRaw(ctx context.Context, method, op, endpoint, token string, r io.Reader, threadID string, draft bool, out any) error {
 	pr, pw := io.Pipe()
 	errc := make(chan error, 1)
 	go func() {
@@ -100,7 +148,7 @@ func (c *Client) streamRaw(ctx context.Context, op, endpoint, token string, r io
 		errc <- werr
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, pr)
 	if err != nil {
 		_ = pr.Close()
 		<-errc
