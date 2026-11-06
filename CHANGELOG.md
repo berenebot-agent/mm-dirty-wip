@@ -28,6 +28,16 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **A draft placed in a connected mailbox's Drafts folder now shows up in the
+  local Drafts view at once.** The confirmed handoff writes the placed draft into
+  the cached remote index from the append's own UID and UIDVALIDITY, and the
+  standalone Drafts page lists those rows read-only above the local drafts, with
+  the sidebar badge and live snapshot counting them. The folder pull that follows
+  a confirmed write also moved off the whole-inbox reconcile pool onto its own
+  single-slot lane, so a placed draft no longer waits behind a reconcile that can
+  hold a slot for minutes, and a request to send wakes the outbox instead of
+  waiting for its next tick.
+
 - **Uncertain Empty Trash purges now verify themselves.** A purge whose reply was
   lost used to wait for a person to check the provider. The action worker now
   looks up the child's frozen UID and UIDVALIDITY on the server: an absent

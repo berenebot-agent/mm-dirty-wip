@@ -23,10 +23,12 @@ const remoteRoleFolderPullLimit = 100
 // copy placed in Sent) so the new item is visible to reads without waiting for
 // the next full-sync pass.
 //
-// The work runs on the same bounded, process-owned pool as the whole-inbox
-// refresh (refreshSlots, refreshContext), coalesced per inbox+role: a burst of
-// writes to one folder collapses into a single pull, and Stop drains it. It never
-// blocks the caller.
+// The pull runs on its own lane (prioritySlots), not the whole-inbox reconcile
+// pool (refreshSlots): a reconcile holds a slot for up to two minutes, and a
+// just-placed draft must not sit behind one. The lane is one slot, so pulls are
+// serialised among themselves and add at most one provider connection. Work is
+// coalesced per inbox+role — a burst of writes to one folder collapses into a
+// single pull — and Stop drains it through refreshWG. It never blocks the caller.
 func (m *RemoteMailboxService) ScheduleRoleFolderRefresh(accountID, inboxID, role string) {
 	role = strings.TrimSpace(role)
 	if accountID == "" || inboxID == "" || role == "" {
@@ -49,8 +51,8 @@ func (m *RemoteMailboxService) ScheduleRoleFolderRefresh(accountID, inboxID, rol
 			m.refreshMu.Unlock()
 		}()
 		select {
-		case m.refreshSlots <- struct{}{}:
-			defer func() { <-m.refreshSlots }()
+		case m.prioritySlots <- struct{}{}:
+			defer func() { <-m.prioritySlots }()
 		case <-m.refreshContext.Done():
 			return
 		}

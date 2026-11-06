@@ -8154,7 +8154,7 @@ function generateBearerSecret() {
     }
     // The requests card lives only on the inbox folder; the list exists on every
     // folder view. Fetch only what the current page can show.
-    var wantList = folder === 'inbox' || folder === 'sent' || folder === 'spam' || folder === 'trash' || folder === 'label' || folder === 'folder';
+    var wantList = folder === 'inbox' || folder === 'sent' || folder === 'spam' || folder === 'trash' || folder === 'label' || folder === 'folder' || folder === 'drafts';
     var wantRequests = folder === 'inbox';
     if (!wantList && !wantRequests) {
       return;

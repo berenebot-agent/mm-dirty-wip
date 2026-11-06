@@ -160,12 +160,19 @@ const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}
 <div class="dialog-actions"><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/reject"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="feedback" placeholder="Feedback to agent (optional)"><button class="secondary danger">Reject</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Cancel approval &amp; edit</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Approve &amp; send</button></form></div>
 </section>`
 
+// draftsListCard is the Drafts page list, shared by the page and its live
+// fragment so the two can never drift. It holds the local drafts Mammoth Mail
+// keeps for the inbox and — on a standalone inbox — the drafts already placed in
+// the connected Drafts folder, which are read-only because the connected mailbox
+// owns them.
+const draftsListCard = `{{define "drafts-list-card"}}<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn approve" title="Approve and send" aria-label="Approve and send">` + iconApprove + `</button></form><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Cancel approval and edit" aria-label="Cancel approval and edit">` + iconDash + `</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft permanently? This cannot be undone." title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{end}}{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{if .RemoteDrafts}}<div class="mailheader drafts"><span class="mailcheck"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">In mailbox Drafts</span><span></span></div><div class="mailrows">{{range .RemoteDrafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{with .ReadMetadata}}{{if .Snippet}} <span class="mailsnippet">— {{snippet .Snippet 80}}</span>{{end}}{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span></a><span class="mailaction"></span></div>{{end}}</div>{{end}}{{if and (not .Drafts) (not .RemoteDrafts)}}<p class="muted">No drafts yet.</p>{{end}}</section>{{end}}`
+
 const draftsBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar"><form id="drafts-bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="scope" value="page"><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Delete all drafts?" title="Delete drafts" aria-label="Delete drafts">` + iconTrash + `</button>{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{template "select-banner" .}}
-<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn approve" title="Approve and send" aria-label="Approve and send">` + iconApprove + `</button></form><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Cancel approval and edit" aria-label="Cancel approval and edit">` + iconDash + `</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft permanently? This cannot be undone." title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section></div></div>`
+{{template "drafts-list-card" .}}</div></div>`
 
 const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar"><div class="bulkbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div></div>
@@ -306,25 +313,12 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
-	drafts, err := s.Service.Store.ListDraftsPaged(r.Context(), p, box.ID, before, inboxPageSize+1)
+	drafts, remote, hasMore, cursor, pagerURL, draftCount, localDrafts, err := s.draftsView(r, p, box, before)
 	if err != nil {
 		s.uiError(w, err, 400)
 		return
 	}
-	hasMore := len(drafts) > inboxPageSize
-	if hasMore {
-		drafts = drafts[:inboxPageSize]
-	}
-	cursor := ""
-	if len(drafts) > 0 {
-		cursor = drafts[len(drafts)-1].ID
-	}
-	pagerURL := ""
-	if cursor != "" {
-		pagerURL = "/ui/inboxes/" + box.ID + "/drafts?before=" + url.QueryEscape(cursor)
-	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
@@ -339,11 +333,12 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		Account:       acc,
 		Inbox:         &box,
 		Drafts:        drafts,
+		RemoteDrafts:  remote,
 		Folder:        "drafts",
 		HasMore:       hasMore,
 		Before:        cursor,
 		PagerURL:      pagerURL,
-		TotalCount:    draftCount,
+		TotalCount:    localDrafts,
 		Labels:        inboxLabels,
 		LabelUnread:   labelUnread,
 		UnreadCount:   unread[box.ID],
@@ -356,6 +351,63 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyMailboxSidebar(r.Context(), p, box, &data)
 	s.renderMail(w, r, draftsBody, data)
+}
+
+// draftsView builds the Drafts page content: the local drafts Mammoth Mail holds
+// for the inbox, plus the drafts already placed in a standalone inbox's connected
+// Drafts folder. The placed drafts are read from the cached remote index, never
+// from the server, and are read-only — they are the connected mailbox's copies.
+// draftCount covers both, so the sidebar badge agrees with the page.
+func (s *Server) draftsView(r *http.Request, p model.Principal, box model.Inbox, before string) (drafts []model.Draft, remote []model.Message, hasMore bool, cursor, pagerURL string, draftCount, localCount int, err error) {
+	ctx := r.Context()
+	drafts, err = s.Service.Store.ListDraftsPaged(ctx, p, box.ID, before, inboxPageSize+1)
+	if err != nil {
+		return nil, nil, false, "", "", 0, 0, err
+	}
+	hasMore = len(drafts) > inboxPageSize
+	if hasMore {
+		drafts = drafts[:inboxPageSize]
+	}
+	if len(drafts) > 0 {
+		cursor = drafts[len(drafts)-1].ID
+		pagerURL = "/ui/inboxes/" + box.ID + "/drafts?before=" + url.QueryEscape(cursor)
+	}
+	// The badge counts local and placed drafts; the bulk "select all N" banner
+	// counts only the local ones, because a placed draft is read-only here.
+	localCount, _ = s.Service.Store.CountDrafts(ctx, p, box.ID)
+	draftCount = s.draftBadgeCount(ctx, p, box)
+	if f, ok := s.remoteDraftsFolder(ctx, p, box); ok {
+		if res, rerr := s.remoteMailbox().ListRemoteMessagesCached(ctx, p, box.ID, f.Path, inboxPageSize, ""); rerr == nil {
+			for _, v := range res.Items {
+				remote = append(remote, remoteMessageToModel(v, &f))
+			}
+		}
+	}
+	return drafts, remote, hasMore, cursor, pagerURL, draftCount, localCount, nil
+}
+
+// remoteDraftsFolder resolves a standalone inbox's connected Drafts folder from
+// the cached folder map. ok is false for a domain inbox or an inbox with no
+// remote connector, so a local-only mailbox never pays for a remote read.
+func (s *Server) remoteDraftsFolder(ctx context.Context, p model.Principal, box model.Inbox) (model.Folder, bool) {
+	if box.Kind != model.InboxKindStandalone || !box.RemoteConfigured || box.Remote == nil {
+		return model.Folder{}, false
+	}
+	return s.remoteRoleFolder(ctx, p.AccountID, box.ID, model.FolderRoleDrafts)
+}
+
+// draftBadgeCount is the Drafts count shown in the sidebar and the live state
+// snapshot: local drafts plus, for a standalone inbox, the drafts already placed
+// in its connected Drafts folder. Without the remote half a placed draft leaves
+// the badge at zero while the folder view lists it.
+func (s *Server) draftBadgeCount(ctx context.Context, p model.Principal, box model.Inbox) int {
+	n, _ := s.Service.Store.CountDrafts(ctx, p, box.ID)
+	if f, ok := s.remoteDraftsFolder(ctx, p, box); ok {
+		if counts, err := s.Service.Store.CountRemoteFolderMessages(ctx, p.AccountID, box.ID); err == nil {
+			n += counts[f.Path][0]
+		}
+	}
+	return n
 }
 
 func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +432,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 		pagerURL = "/ui/inboxes/" + box.ID + "/outbox?before=" + url.QueryEscape(msgs[len(msgs)-1].ID)
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
+	draftCount := s.draftBadgeCount(r.Context(), p, box)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
@@ -845,7 +897,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
-	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
+	draftCount := s.draftBadgeCount(r.Context(), p, box)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, id)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)

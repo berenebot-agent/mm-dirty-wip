@@ -35,6 +35,11 @@ type HandoffOutcome struct {
 	// RemoteUID is the appended message's UID when the server reported one, else
 	// zero.
 	RemoteUID uint32
+	// UIDValidity is the destination folder's UIDVALIDITY as the append reported
+	// it, when the server answered the APPEND with a UIDPLUS response. It is the
+	// generation half of the cached index's locator key, so a caller can record
+	// the appended draft locally without a folder round trip. Zero when unknown.
+	UIDValidity uint32
 	// RemoteFolder is the folder the draft was appended to.
 	RemoteFolder string
 }
@@ -143,6 +148,11 @@ func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d m
 		return model.Draft{}, err
 	}
 	s.publishAll(events)
+	// The handoff is durably queued: ask the outbox for an immediate pass so the
+	// append starts now rather than on the next poll tick. Handoff publication is
+	// the first step of a delivery pass, so the draft is placed, indexed and
+	// visible without a tick's delay.
+	s.wakeOutbox()
 	return s.Store.GetDraft(ctx, p, d.ID)
 }
 
@@ -214,7 +224,7 @@ func (s *Service) publishOneHandoff(ctx context.Context, r model.AssistantHandli
 			s.deferHandoffRetry(ctx, acct, r)
 			return
 		case outcome.Confirmed:
-			s.settleHandoffPublished(ctx, acct, r, outcome)
+			s.settleHandoffPublished(ctx, acct, r, outcome, nil)
 			return
 		case outcome.Ambiguous:
 			s.markHandoffAmbiguous(ctx, acct, r, "more than one remote draft matched this handoff")
@@ -234,7 +244,7 @@ func (s *Service) publishOneHandoff(ctx context.Context, r model.AssistantHandli
 		s.verifyHandoffByLookup(ctx, acct, r, inbox)
 		return
 	}
-	s.settleHandoffPublished(ctx, acct, r, outcome)
+	s.settleHandoffPublished(ctx, acct, r, outcome, raw)
 }
 
 // accountForHandoff resolves the account id that owns a handoff record by way of
@@ -263,7 +273,7 @@ func (s *Service) verifyHandoffByLookup(ctx context.Context, accountID string, r
 		return
 	}
 	if outcome.Confirmed {
-		s.settleHandoffPublished(ctx, accountID, r, outcome)
+		s.settleHandoffPublished(ctx, accountID, r, outcome, nil)
 		return
 	}
 	if outcome.Ambiguous {
@@ -304,13 +314,21 @@ func (s *Service) markHandoffAmbiguous(ctx context.Context, accountID string, r 
 // settleHandoffPublished records a confirmed publication, then queues the local
 // draft's cleanup (its content is now durably on the remote server). Cleanup is
 // best-effort here and retried by the sweep; the workflow state is retained.
-func (s *Service) settleHandoffPublished(ctx context.Context, accountID string, r model.AssistantHandlingRequest, outcome HandoffOutcome) {
+//
+// raw is the exact frozen MIME that was appended, when the caller still holds it.
+// It lets the confirmed append's own UID/UIDVALIDITY seed the inbox's cached
+// remote index immediately, so the placed draft is in the local read model at the
+// moment publication settles instead of waiting for the folder pull. A nil raw
+// (the lookup-confirmed path, where the frozen file was already gone) skips the
+// seed and leaves the pull to record it.
+func (s *Service) settleHandoffPublished(ctx context.Context, accountID string, r model.AssistantHandlingRequest, outcome HandoffOutcome, raw []byte) {
 	ev, err := s.Store.MarkHandoffPublished(ctx, accountID, r.ID, outcome.RemoteUID)
 	if err != nil {
 		s.Log.Warn("mark handoff published", "handoff_id", r.HandoffID, "error", err)
 		return
 	}
 	s.publishEventPtr(ev)
+	s.recordPlacedDraftIndex(ctx, accountID, r, outcome, raw)
 	if err := s.Store.CleanupPublishedHandoffLocalDraft(ctx, accountID, r.ID); err != nil {
 		s.Log.Warn("cleanup published handoff local draft", "handoff_id", r.HandoffID, "error", err)
 	}
@@ -320,6 +338,74 @@ func (s *Service) settleHandoffPublished(ctx context.Context, accountID string, 
 	// publication is already settled, so a missing bridge or a failed pull can
 	// never affect it.
 	s.requestRoleFolderRefresh(accountID, r.InboxID, handoffFolderRole)
+}
+
+// recordPlacedDraftIndex seeds the inbox's cached remote index with the draft a
+// confirmed append just placed. The append's own UIDPLUS answer carries the
+// destination folder's UIDVALIDITY and the assigned UID — the index's locator key
+// — so the row can be written with no provider round trip and is in the local
+// read model the instant publication settles. A later folder pull upserts the
+// same key, so this can never duplicate the row; it only closes the window in
+// which the placed draft was on the server but absent from every local view.
+//
+// It is deliberately best-effort: publication is already settled and the folder
+// pull remains the backstop, so a quota refusal or an unparseable frozen message
+// is logged and dropped rather than surfaced.
+func (s *Service) recordPlacedDraftIndex(ctx context.Context, accountID string, r model.AssistantHandlingRequest, outcome HandoffOutcome, raw []byte) {
+	if len(raw) == 0 || outcome.RemoteUID == 0 || outcome.UIDValidity == 0 || strings.TrimSpace(outcome.RemoteFolder) == "" {
+		return
+	}
+	parsed, err := mailparse.ParseBytes(raw)
+	if err != nil {
+		s.Log.Debug("parse placed draft for remote index", "handoff_id", r.HandoffID, "error", err)
+		return
+	}
+	in := store.RemoteMessageInput{
+		FolderPath:   outcome.RemoteFolder,
+		UIDValidity:  outcome.UIDValidity,
+		UID:          outcome.RemoteUID,
+		RFCMessageID: parsed.RFCMessageID,
+		InReplyTo:    parsed.InReplyTo,
+		References:   parsed.References,
+		FromName:     parsed.From.Name,
+		FromAddress:  parsed.From.Address,
+		To:           parsed.To,
+		CC:           parsed.CC,
+		Subject:      parsed.Subject,
+		Snippet:      draftSnippet(parsed.Text),
+		SizeBytes:    int64(len(raw)),
+		HasAttach:    len(parsed.Attachments) > 0,
+		// The append sets \Draft and \Seen, so the local row must agree with the
+		// server from its first read: an unread row would make the placed draft
+		// read as new mail in the count and the folder view.
+		Read:  true,
+		Draft: true,
+		Flags: []string{"\\Draft", "\\Seen"},
+	}
+	if !parsed.Date.IsZero() {
+		at := parsed.Date.UTC().Format(time.RFC3339Nano)
+		in.SentAt = &at
+		in.ReceivedAt = &at
+		in.InternalDate = &at
+	}
+	if _, err := s.Store.UpsertRemoteMessage(ctx, accountID, r.InboxID, in); err != nil {
+		s.Log.Debug("seed placed draft into remote index", "handoff_id", r.HandoffID, "error", err)
+	}
+}
+
+// draftSnippet reduces a text body to a one-line list snippet, bounded so a
+// metadata row stays small no matter how long the draft is.
+func draftSnippet(text string) string {
+	const limit = 200
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	out := []rune(strings.Join(fields, " "))
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // settleHandoffError classifies an append failure. A permanent error is

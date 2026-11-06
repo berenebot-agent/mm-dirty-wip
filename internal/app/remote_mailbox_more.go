@@ -879,6 +879,7 @@ func (p *RemoteHandoffPublisher) Append(ctx context.Context, inboxID string, raw
 	if res.Confirmed && res.DestinationUID != 0 {
 		out.Confirmed = true
 		out.RemoteUID = res.DestinationUID
+		out.UIDValidity = res.UIDValidity
 	}
 	return out, nil
 }
