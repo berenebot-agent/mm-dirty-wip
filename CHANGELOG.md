@@ -35,6 +35,15 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **A handler that writes a second status is now named by its route, not by the
+  request-timing wrapper.** The wrapper forwarded every `WriteHeader` call to the
+  server, so a handler that wrote a status after the response was already
+  committed produced net/http's "superfluous response.WriteHeader call" line
+  naming `timingWriter` rather than the handler at fault. The wrapper now keeps
+  the first status and drops the rest, exactly as net/http already did, and
+  records the dropped call at INFO with the request's route so the handler that
+  writes twice can be found from `docker logs`. No response changes.
+
 - **A dropped remote connection is no longer reported as an opaque internal
   error.** A provider that closes the socket mid-command returns `EOF`, which is
   not a `*net.OpError`, so it fell through to `internal` and the raw Go text

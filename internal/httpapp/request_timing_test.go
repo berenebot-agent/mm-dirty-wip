@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -130,5 +131,74 @@ func TestSlowRequestNeverLogsPathCredentials(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/invite/"+secret, nil))
 	if out := buf.String(); strings.Contains(out, secret) || !strings.Contains(out, "route=unmatched") {
 		t.Fatalf("unmatched request logged wrongly: %q", out)
+	}
+}
+
+// countingHeaderWriter records every WriteHeader forwarded to it, so a test can
+// see whether the wrapper suppressed a repeat. httptest.ResponseRecorder
+// ignores a second call itself, which would make the assertion meaningless.
+type countingHeaderWriter struct {
+	http.ResponseWriter
+	codes []int
+}
+
+func (c *countingHeaderWriter) WriteHeader(code int) {
+	c.codes = append(c.codes, code)
+	c.ResponseWriter.WriteHeader(code)
+}
+
+// TestSecondWriteHeaderIsNotForwarded pins that a handler which writes a status
+// after the response is committed does not have that second status forwarded:
+// net/http ignores it, so forwarding would only make the wrapper the reported
+// caller of a superfluous WriteHeader and hide the handler at fault. The drop is
+// recorded once, naming the route.
+func TestSecondWriteHeaderIsNotForwarded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		handle    func(w http.ResponseWriter)
+		wantCodes []int
+		wantStat  string
+	}{
+		{
+			// Two explicit statuses: the first wins, as it does without the wrapper.
+			name: "second status after first",
+			handle: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusTeapot)
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+			wantCodes: []int{http.StatusTeapot},
+			wantStat:  "status=418",
+		},
+		{
+			// A body implicitly commits 200; a later status must not reach the
+			// server either.
+			name: "status after body",
+			handle: func(w http.ResponseWriter) {
+				_, _ = w.Write([]byte("ok"))
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+			wantStat: "status=200",
+		},
+	}
+	for _, tc := range cases {
+		var buf bytes.Buffer
+		cw := &countingHeaderWriter{ResponseWriter: httptest.NewRecorder()}
+		// A real mux, so the record can only pass by naming the matched route
+		// pattern rather than an empty Pattern.
+		m := http.NewServeMux()
+		m.HandleFunc("GET /ui/inboxes/{id}", func(w http.ResponseWriter, r *http.Request) {
+			tc.handle(w)
+		})
+		h := withRequestTiming(timingLogger(&buf), m)
+		h.ServeHTTP(cw, httptest.NewRequest(http.MethodGet, "/ui/inboxes/inb_1", nil))
+
+		if !slices.Equal(cw.codes, tc.wantCodes) {
+			t.Fatalf("%s: forwarded statuses = %v, want %v", tc.name, cw.codes, tc.wantCodes)
+		}
+		out := buf.String()
+		if !strings.Contains(out, "ignored extra WriteHeader") || !strings.Contains(out, "route=/ui/inboxes/{id}") || !strings.Contains(out, tc.wantStat) {
+			t.Fatalf("%s: dropped status not attributed to its route: %q", tc.name, out)
+		}
 	}
 }
