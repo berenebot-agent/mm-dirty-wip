@@ -610,6 +610,73 @@ func (c *Client) SetDraftRecipientsVerified(ctx context.Context, token, mailbox,
 	return nil
 }
 
+// DraftEdit is the editable envelope of an existing draft. Attachments are
+// deliberately absent: a caller that preserves them unchanged can express the
+// whole edit as a field patch, which Graph applies in place with no new message
+// id and no lost draft state.
+type DraftEdit struct {
+	Subject string
+	Text    string
+	HTML    string
+	To      []string
+	CC      []string
+	BCC     []string
+}
+
+// UpdateDraft replaces a draft's subject, body and recipients in place. Unlike
+// SetDraftRecipientsVerified it accepts an empty recipient list, because a draft
+// is allowed to be incomplete. The recipients are read back independently: a
+// successful PATCH is not proof of its result.
+func (c *Client) UpdateDraft(ctx context.Context, token, mailbox, id string, e DraftEdit) (Message, error) {
+	if strings.TrimSpace(id) == "" {
+		return Message{}, failure(model.ErrKindInvalid, "draft id required", false)
+	}
+	encode := func(addresses []string) ([]map[string]any, error) {
+		out := make([]map[string]any, 0, len(addresses))
+		for _, raw := range addresses {
+			a, err := mail.ParseAddress(strings.TrimSpace(raw))
+			if err != nil {
+				return nil, failure(model.ErrKindInvalid, "invalid draft recipient", false)
+			}
+			out = append(out, map[string]any{"emailAddress": map[string]string{"name": a.Name, "address": a.Address}})
+		}
+		return out, nil
+	}
+	to, err := encode(e.To)
+	if err != nil {
+		return Message{}, err
+	}
+	cc, err := encode(e.CC)
+	if err != nil {
+		return Message{}, err
+	}
+	bcc, err := encode(e.BCC)
+	if err != nil {
+		return Message{}, err
+	}
+	body := map[string]string{"contentType": "text", "content": e.Text}
+	if strings.TrimSpace(e.HTML) != "" {
+		body = map[string]string{"contentType": "html", "content": e.HTML}
+	}
+	m, err := c.Patch(ctx, token, mailbox, id, map[string]any{
+		"subject": e.Subject, "body": body,
+		"toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc,
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	var actual Message
+	if err = c.json(ctx, token, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select=id,subject,toRecipients,ccRecipients,bccRecipients", nil, &actual, false); err != nil {
+		return Message{}, err
+	}
+	want := len(e.To) + len(e.CC) + len(e.BCC)
+	got := len(actual.ToRecipients) + len(actual.CCRecipients) + len(actual.BCCRecipients)
+	if want != got {
+		return Message{}, failure(model.ErrKindConflict, "draft recipients did not match the edited message; save stopped", false)
+	}
+	return m, nil
+}
+
 // CreateVerifiedDraft is also used for human handoff: preserve the reviewed
 // MIME recipients before reporting that a draft is ready in Outlook.
 func (c *Client) CreateVerifiedDraft(ctx context.Context, token, mailbox string, raw []byte) (Message, error) {

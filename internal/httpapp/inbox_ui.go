@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/dellarb/mammothmail/internal/app"
 	"github.com/dellarb/mammothmail/internal/htmlsanitize"
@@ -145,7 +147,7 @@ const inboxBody = `<div class="pagehead"><div class="inboxhead"><h1 class="inbox
 {{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`
 
-const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}">{{if gt (len .ComposeFromOptions) 1}}<label>From</label><select name="sender">{{$from := .ComposeFrom}}{{range .ComposeFromOptions}}<option value="{{.Address}}"{{if eq .Address $from}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else if .ComposeFromOptions}}<label>From</label><input value="{{(index .ComposeFromOptions 0).Label}}" disabled>{{end}}<label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="draft_marker" value="{{.ComposeMarker}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}">{{if gt (len .ComposeFromOptions) 1}}<label>From</label><select name="sender">{{$from := .ComposeFrom}}{{range .ComposeFromOptions}}<option value="{{.Address}}"{{if eq .Address $from}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else if .ComposeFromOptions}}<label>From</label><input value="{{(index .ComposeFromOptions 0).Label}}" disabled>{{end}}<label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save draft</button>{{if not .ComposePlaced}}<button type="submit" name="action" value="send">Send</button>{{end}}</div></form></section>`
 
 const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}/drafts">← Back to drafts</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
@@ -160,12 +162,11 @@ const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}
 <div class="decision-bar"><form class="decision-reject" method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/reject"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="feedback" placeholder="Feedback to agent (optional)" aria-label="Feedback to agent (optional)"><button class="secondary danger">Reject</button></form><div class="decision-main"><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Cancel approval &amp; edit</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/approve" data-confirm="Approve and send “{{if .ReviewDraft.Subject}}{{.ReviewDraft.Subject}}{{else}}(no subject){{end}}” to {{join .ReviewDraft.To ", "}}?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Approve &amp; send</button></form></div></div>
 </section>`
 
-// draftsListCard is the Drafts page list, shared by the page and its live
-// fragment so the two can never drift. It holds the local drafts Mammoth Mail
-// keeps for the inbox and — on a standalone inbox — the drafts already placed in
-// the connected Drafts folder, which are read-only because the connected mailbox
-// owns them.
-const draftsListCard = `{{define "drafts-list-card"}}<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send “{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}” to {{join .To ", "}} from {{$.Inbox.Address}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn approve" title="Approve and send" aria-label="Approve and send">` + iconApprove + `</button></form><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Cancel approval and edit" aria-label="Cancel approval and edit">` + iconDash + `</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft permanently? This cannot be undone." title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{end}}{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{if .RemoteDrafts}}<div class="mailheader drafts"><span class="mailcheck"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">In mailbox Drafts</span><span></span></div><div class="mailrows">{{range .RemoteDrafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{with .ReadMetadata}}{{if .Snippet}} <span class="mailsnippet">— {{snippet .Snippet 80}}</span>{{end}}{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span></a><span class="mailaction"></span></div>{{end}}</div>{{end}}{{if and (not .Drafts) (not .RemoteDrafts)}}<p class="muted">No drafts yet.</p>{{end}}</section>{{end}}`
+// draftsListCard renders the Drafts list. A local draft Mammoth Mail holds and a
+// draft already placed in a connected mailbox's Drafts folder are the same row to
+// the reader: the same columns, checkbox, edit link and delete button. Only the
+// store behind the row differs, and the routes resolve either id.
+const draftsListCard = `{{define "drafts-list-card"}}<section class="card" data-live-list>{{if .DraftRows}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .DraftRows}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="{{.EditURL}}"><span class="maildot"></span><span class="mailsender">{{.To}}</span><span class="mailsubject">{{if .PendingSend}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if .Rejected}}<span class="draft-status rejected">Rejected</span> {{else if .Sent}}<span class="draft-status sent">Sent</span> {{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Snippet}} <span class="mailsnippet">— {{.Snippet}}</span>{{end}}</span><span class="maildate">{{mailDate .Updated}}</span></a><span class="mailaction">{{if .PendingSend}}<form method="post" action="{{.ApproveURL}}" data-confirm="{{.ApproveConfirm}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn approve" title="Approve and send" aria-label="Approve and send">` + iconApprove + `</button></form><form method="post" action="{{.CancelURL}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Cancel approval and edit" aria-label="Cancel approval and edit">` + iconDash + `</button></form>{{end}}<form method="post" action="{{.DeleteURL}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="{{.DeleteConfirm}}" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section>{{end}}`
 
 const draftsBody = `<div class="pagehead"><div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div><div class="inboxbar"><form id="drafts-bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="scope" value="page"><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Delete all drafts?" title="Delete drafts" aria-label="Delete drafts">` + iconTrash + `</button>{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</form></div></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
@@ -312,7 +313,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
-	drafts, remote, hasMore, cursor, pagerURL, draftCount, localDrafts, err := s.draftsView(r, p, box, before)
+	rows, hasMore, cursor, pagerURL, draftCount, _, err := s.draftsView(r, p, box, before)
 	if err != nil {
 		s.uiError(w, err, 400)
 		return
@@ -331,13 +332,12 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		CSRF:          csrf(r),
 		Account:       acc,
 		Inbox:         &box,
-		Drafts:        drafts,
-		RemoteDrafts:  remote,
+		DraftRows:     rows,
 		Folder:        "drafts",
 		HasMore:       hasMore,
 		Before:        cursor,
 		PagerURL:      pagerURL,
-		TotalCount:    localDrafts,
+		TotalCount:    draftCount,
 		Labels:        inboxLabels,
 		LabelUnread:   labelUnread,
 		UnreadCount:   unread[box.ID],
@@ -352,16 +352,38 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	s.renderMail(w, r, draftsBody, data)
 }
 
-// draftsView builds the Drafts page content: the local drafts Mammoth Mail holds
-// for the inbox, plus the drafts already placed in a standalone inbox's connected
-// Drafts folder. The placed drafts are read from the cached remote index, never
-// from the server, and are read-only — they are the connected mailbox's copies.
-// draftCount covers both, so the sidebar badge agrees with the page.
-func (s *Server) draftsView(r *http.Request, p model.Principal, box model.Inbox, before string) (drafts []model.Draft, remote []model.Message, hasMore bool, cursor, pagerURL string, draftCount, localCount int, err error) {
+// draftListRow is one row of the Drafts list. A draft Mammoth Mail holds and a
+// draft already placed in a connected mailbox's Drafts folder render the same
+// row; only the store behind the id differs, and the edit and delete routes
+// resolve either one.
+type draftListRow struct {
+	ID             string
+	To             string
+	Subject        string
+	Snippet        string
+	Updated        time.Time
+	Placed         bool
+	EditURL        string
+	DeleteURL      string
+	DeleteConfirm  string
+	PendingSend    bool
+	Rejected       bool
+	Sent           bool
+	ApproveURL     string
+	ApproveConfirm string
+	CancelURL      string
+}
+
+// draftsView builds the Drafts page content: the drafts Mammoth Mail holds for
+// the inbox and the drafts already placed in a standalone inbox's connected
+// Drafts folder, as one list. Placed drafts are read from the cached remote
+// index, never from the server, and their bodies are fetched only when one is
+// opened. draftCount covers both, so the sidebar badge agrees with the page.
+func (s *Server) draftsView(r *http.Request, p model.Principal, box model.Inbox, before string) (rows []draftListRow, hasMore bool, cursor, pagerURL string, draftCount, localCount int, err error) {
 	ctx := r.Context()
-	drafts, err = s.Service.Store.ListDraftsPaged(ctx, p, box.ID, before, inboxPageSize+1)
+	drafts, err := s.Service.Store.ListDraftsPaged(ctx, p, box.ID, before, inboxPageSize+1)
 	if err != nil {
-		return nil, nil, false, "", "", 0, 0, err
+		return nil, false, "", "", 0, 0, err
 	}
 	hasMore = len(drafts) > inboxPageSize
 	if hasMore {
@@ -371,18 +393,78 @@ func (s *Server) draftsView(r *http.Request, p model.Principal, box model.Inbox,
 		cursor = drafts[len(drafts)-1].ID
 		pagerURL = "/ui/inboxes/" + box.ID + "/drafts?before=" + url.QueryEscape(cursor)
 	}
-	// The badge counts local and placed drafts; the bulk "select all N" banner
-	// counts only the local ones, because a placed draft is read-only here.
 	localCount, _ = s.Service.Store.CountDrafts(ctx, p, box.ID)
 	draftCount = s.draftBadgeCount(ctx, p, box)
+	for _, d := range drafts {
+		rows = append(rows, localDraftRow(box, d))
+	}
 	if f, ok := s.remoteDraftsFolder(ctx, p, box); ok {
 		if res, rerr := s.remoteMailbox().ListRemoteMessagesCached(ctx, p, box.ID, f.Path, inboxPageSize, ""); rerr == nil {
 			for _, v := range res.Items {
-				remote = append(remote, remoteMessageToModel(v, &f))
+				rows = append(rows, placedDraftRow(box, v))
 			}
 		}
 	}
-	return drafts, remote, hasMore, cursor, pagerURL, draftCount, localCount, nil
+	// One list, newest first: the same ordering rule the local drafts already
+	// use, applied to the wider set. The cursor still paginates local drafts.
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Updated.After(rows[j].Updated) })
+	return rows, hasMore, cursor, pagerURL, draftCount, localCount, nil
+}
+
+// localDraftRow projects a draft Mammoth Mail holds. It is editable in place,
+// deletable, and carries the approval controls a domain inbox uses.
+func localDraftRow(box model.Inbox, d model.Draft) draftListRow {
+	row := draftListRow{
+		ID:            d.ID,
+		To:            strings.Join(d.To, ", "),
+		Subject:       d.Subject,
+		Snippet:       snippetText(d.Text, 80),
+		Updated:       d.UpdatedAt,
+		EditURL:       "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(d.ID) + "/edit",
+		DeleteURL:     "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(d.ID) + "/delete",
+		DeleteConfirm: "Delete this draft permanently? This cannot be undone.",
+	}
+	if d.SendRequest != nil {
+		switch d.SendRequest.Status {
+		case "pending":
+			row.PendingSend = true
+			row.ApproveURL = "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(d.ID) + "/approve"
+			row.CancelURL = "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(d.ID) + "/cancel-send-request"
+			subject := d.Subject
+			if subject == "" {
+				subject = "(no subject)"
+			}
+			row.ApproveConfirm = fmt.Sprintf("Approve and send %q to %s from %s?", subject, row.To, box.Address)
+		case "rejected":
+			row.Rejected = true
+		case "approved":
+			row.Sent = true
+		}
+	}
+	return row
+}
+
+// placedDraftRow projects a draft that already lives in the connected mailbox's
+// Drafts folder. It is the same row to the reader: the draft is edited through
+// the same editor and deleted through the same button, with the provider owning
+// the message underneath.
+func placedDraftRow(box model.Inbox, v app.RemoteMessageView) draftListRow {
+	row := draftListRow{
+		ID:            v.ID,
+		To:            strings.Join(v.To, ", "),
+		Subject:       v.Subject,
+		Snippet:       snippetText(v.Snippet, 80),
+		Placed:        true,
+		EditURL:       "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(v.ID) + "/edit",
+		DeleteURL:     "/ui/inboxes/" + box.ID + "/drafts/" + url.PathEscape(v.ID) + "/delete",
+		DeleteConfirm: "Delete this draft from the connected mailbox?",
+	}
+	if t := remoteTimestamp(v.InternalDate); t != nil && !t.IsZero() {
+		row.Updated = *t
+	} else if t := remoteTimestamp(v.SentAt); t != nil && !t.IsZero() {
+		row.Updated = *t
+	}
+	return row
 }
 
 // remoteDraftsFolder resolves a standalone inbox's connected Drafts folder from
@@ -471,11 +553,12 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := s.Service.Store.GetDraft(r.Context(), p, r.PathValue("draftId"))
-	if err != nil {
-		http.Error(w, "draft not found", 404)
-		return
-	}
-	if d.InboxID != box.ID {
+	if err != nil || d.InboxID != box.ID {
+		// Not a draft Mammoth Mail holds: it may already live in the connected
+		// mailbox's Drafts folder, which is the same draft to the operator.
+		if s.renderPlacedDraftEditor(w, r, p, box, r.PathValue("draftId")) {
+			return
+		}
 		http.Error(w, "draft not found", 404)
 		return
 	}
@@ -552,6 +635,15 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.Form.Get("action")
+	// A draft id Mammoth Mail does not hold may be a draft already placed in the
+	// connected mailbox's Drafts folder; the same save route edits it there.
+	if draftID != "" {
+		if _, derr := s.Service.Store.GetDraft(r.Context(), p, draftID); derr != nil {
+			if s.savePlacedDraftFromForm(w, r, p, box, draftID, in, action) {
+				return
+			}
+		}
+	}
 	if action == "send" {
 		// Send the draft via the send-draft path, then redirect to Sent.
 		if draftID == "" {
@@ -623,6 +715,11 @@ func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 	draftID := r.PathValue("draftId")
 	paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, draftID)
 	if err != nil {
+		// A placed draft is not in the local drafts table; its delete belongs to
+		// the remote action queue.
+		if s.deletePlacedDraft(w, r, p, box, draftID) {
+			return
+		}
 		s.uiError(w, err, 400)
 		return
 	}
@@ -1277,11 +1374,28 @@ func (s *Server) uiDraftsBulk(w http.ResponseWriter, r *http.Request) {
 			s.uiError(w, err, 400)
 			return
 		}
+		// The list is one list, so "all N" must mean the placed drafts too. They
+		// are bounded by the same page the remote folder bulk uses; each is
+		// queued as a provider delete below.
+		if f, ok := s.remoteDraftsFolder(r.Context(), p, box); ok {
+			if res, rerr := s.remoteMailbox().ListRemoteMessagesCached(r.Context(), p, box.ID, f.Path, remoteBulkMax, ""); rerr == nil {
+				for _, v := range res.Items {
+					ids = append(ids, v.ID)
+				}
+			}
+		}
 	}
 	count := 0
 	for _, id := range ids {
 		d, err := s.Service.Store.GetDraft(r.Context(), p, id)
 		if err != nil || d.InboxID != box.ID {
+			// A placed draft is deleted through the remote action queue, the same
+			// way any other message in the connected mailbox is.
+			if _, ok := s.placedDraftRecord(r.Context(), p, box, id); ok {
+				if _, aerr := s.Service.EnqueueInboxAction(r.Context(), p, box.ID, id, store.MessageActionInput{Kind: "delete"}); aerr == nil {
+					count++
+				}
+			}
 			continue
 		}
 		paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, id)

@@ -6720,3 +6720,73 @@ CI therefore gates on `npm audit --omit=dev --audit-level=high` rather than a
 full-tree audit, which cannot pass by construction. A full-tree audit failing
 in future is expected; the fix is an `npm` release, not another override.
 Revisit when an npm release bundles undici ≥ 6.29.1, and drop this entry.
+
+## D164 — A placed draft is an ordinary draft, edited through the connected mailbox (2026-11-06)
+
+**Date:** 2026-11-06. **Approved by:** Ben.
+
+**Supersedes in part:** D121's consequence that a placed draft "disappears from
+Mammoth Mail once the append is confirmed", and the D122 amendment's "lists
+those placed drafts read-only above the local editable drafts". Everything else
+in D121 stands: a `remote_draft` inbox never notifies, never has an approver and
+never sends.
+
+**Context:** A standalone inbox places an assistant's draft in its connected
+Drafts folder, then consumed the local `drafts` row on the confirmed append, so
+the only copy left was the cached remote row. The Drafts page rendered that row
+in a second, read-only section with no checkbox, no edit link and no action cell
+— the draft the operator could see was the one draft they could not act on, even
+though their own Outlook or Gmail client showed it as an ordinary editable
+draft. To the operator there is only one draft; the app had two models for it.
+
+**Decision:** For a connected standalone inbox the remote Drafts folder *is* the
+inbox's Drafts folder, and Mammoth Mail is a client of it:
+
+- **One list.** Placed drafts render as the same row as local drafts: the same
+  columns, selection checkbox, edit link, approve controls where they apply, and
+  delete button. The second "In mailbox Drafts" group is removed. `/ui/.../drafts`
+  paths and the `before` cursor keep their names and their newest-first rule; a
+  placed draft is addressed by the same edit, save, delete and bulk routes.
+- **The app edits the draft where it lives.** The editor fetches the body live
+  (as it always did for a remote message) and a save writes to the provider, with
+  no local copy and no second storage:
+  - Microsoft: `PATCH` of subject, body and recipients on the existing draft id,
+    with recipients read back before the save is reported as done.
+  - Gmail: `drafts.update` on the draft that holds the cached message id.
+  - IMAP, which has no in-place edit: append the edited message under the same
+    Message-ID with `\Draft \Seen`, then delete the previous copy. Append first,
+    delete second, so an interruption leaves a duplicate the folder pull
+    reconciles by Message-ID instead of a lost draft.
+- **Attachments are carried through a save unchanged.** The body is rebuilt from
+  the fetched MIME with its attachment parts re-embedded. Editing attachments of
+  a placed draft is not part of this decision.
+- **A save is refused when the copy moved.** The editor carries a marker built
+  from the locator, size and INTERNALDATE of the copy it loaded. If the provider's
+  copy no longer matches, the save is answered `409` with "reload and apply your
+  edit again" rather than overwriting work done in the operator's own client,
+  which autosaves a draft as it is typed.
+- **Sending stays in the operator's client.** The compose page offers no Send for
+  a placed draft and the save route refuses `send`/`request-send` for one.
+
+**Scope:** connected standalone inboxes only. A domain inbox and a standalone
+inbox with no remote connector keep the local `drafts` table unchanged, as do the
+local approval flow and its `draft_send_requests`. Placing a draft at creation
+time (so a draft saved in the app is immediately in the remote folder) is a
+separate follow-up: the placement path today starts from `request-send`.
+
+**Consequences:** A placed draft consumes no account storage (only metadata is
+cached) and no longer has a second life as a read-only artefact. The cached index
+is refreshed on the save itself — a seeded row for IMAP's new UID, an upsert on
+the existing locator for Graph and Gmail — and the role-folder pull that follows
+confirms flags and removals, so the list the operator lands on is already right.
+`GET /v1/drafts` is unchanged in envelope, field names, types, status codes and
+error codes; it still returns local drafts only, so the API's draft surface needs
+its own decision before a placed draft appears there. No schema change, no
+migration, no new dependency.
+
+**Complexity:** `internal/transport/microsoft/client.go` (`UpdateDraft`),
+`internal/transport/gmail/send.go` (`UpdateDraft`, `DraftIDForMessage`),
+`internal/app/placed_draft_edit.go` (load, rebuild, save, cache refresh),
+`internal/httpapp/placed_draft_ui.go` (editor, save, delete),
+`internal/httpapp/{inbox_ui,inbox_live,ui}.go` (one list, per-row delete and bulk)
+and the tests. One template row shape replaces two.

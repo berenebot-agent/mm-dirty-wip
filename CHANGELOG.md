@@ -314,6 +314,20 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Changed
 
+- **A draft placed in a connected mailbox is now an ordinary draft in Mammoth
+  Mail.** The Drafts page used to list drafts placed in a standalone inbox's
+  Outlook/Gmail/IMAP Drafts folder in a second, read-only group: no checkbox, no
+  edit link, no actions — the draft the operator could see was the one they could
+  not touch. It is now the same row as a local draft, in one list, with the same
+  editor and the same delete button. The editor fetches the draft's body live and
+  a save writes it back where it lives: an Outlook draft is patched in place, a
+  Gmail draft is updated through `drafts.update`, and an IMAP draft is appended
+  under the same Message-ID with the previous copy removed afterwards. A save is
+  refused if the copy changed in the operator's own client since the editor
+  opened it, and sending still happens there, not here. Attachments are carried
+  through an edit unchanged. No schema change, no migration, and the JSON API's
+  draft endpoints are untouched.
+
 - **The web UI has one design system.** The 47 KB inline stylesheet, the
   per-template `<style>` blocks and the styles `app.js` injected at runtime now
   live in one embedded, content-hashed `/assets/app.css` built on `--mm-*`
