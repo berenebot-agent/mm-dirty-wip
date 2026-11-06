@@ -46,7 +46,15 @@ func withRequestTiming(log *slog.Logger, next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &timingWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		if d := time.Since(start); d > slowRequestThreshold {
+		d := time.Since(start)
+		if rec.extra > 0 {
+			// The handler wrote a status after the response was already
+			// committed. net/http ignores that call, and behind this wrapper it
+			// can only name the wrapper as the caller, so record the route that
+			// did it. The client keeps the first status either way.
+			log.Info("ignored extra WriteHeader", "method", r.Method, "route", routeLabel(r), "status", rec.status, "extra", rec.extra)
+		}
+		if d > slowRequestThreshold {
 			log.Info("slow request", "method", r.Method, "route", routeLabel(r), "status", rec.status, "duration_ms", d.Milliseconds())
 		}
 	})
@@ -73,12 +81,19 @@ type timingWriter struct {
 	http.ResponseWriter
 	status  int
 	written bool
+	// extra counts WriteHeader calls made after the response was committed.
+	// net/http ignores those (and logs a warning naming whoever called it), so
+	// the wrapper must not forward them either: forwarding only re-attributes
+	// that warning to timingWriter and hides the handler that wrote twice.
+	extra int
 }
 
 func (w *timingWriter) WriteHeader(code int) {
-	if !w.written {
-		w.status, w.written = code, true
+	if w.written {
+		w.extra++
+		return
 	}
+	w.status, w.written = code, true
 	w.ResponseWriter.WriteHeader(code)
 }
 
