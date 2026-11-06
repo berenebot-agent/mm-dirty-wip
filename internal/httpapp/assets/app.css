@@ -235,7 +235,7 @@ button.connector-chip:hover,button.connector-chip:focus-visible{background:trans
 .subdomain-tag{display:inline-flex;align-items:center;vertical-align:middle;color:var(--mm-text-3)}
 .subdomain-tag svg{width:14px;height:14px;display:block}
 .log-table{font-size:12px}
-.log-detail{font-size:10px;word-break:break-all}
+.log-detail{font-size:var(--mm-text-xs);color:var(--mm-text-3);word-break:break-all}
 dialog.inbox-settings[open]{border:0;border-radius:12px;padding:0;width:min(1080px,96vw);height:min(90dvh,880px);max-width:96vw;max-height:96dvh;display:flex;flex-direction:column;overflow:hidden}
 .inbox-settings-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--mm-divider);flex:0 0 auto}
 .inbox-settings-head h2{margin:0;font-size:1.25em}
@@ -1007,4 +1007,13 @@ td.actions>form{display:inline-block}
   .mailrow.drafts .mailsubject,.mailrow.requests .mailsubject{grid-column:1 / -1;grid-row:2;white-space:normal}
   .mailrow.drafts .mailaction{grid-column:3}
   .mailrow.requests .mailaction{grid-column:2}
+}
+@media (max-width:640px){
+  /* Inbox access rows: name on its own line, role control full width beneath. */
+  .access-row{flex-wrap:wrap}
+  .access-row .access-main{flex:1 1 100%}
+  .access-row .access-role{flex:1 1 auto}
+  .access-row .seg{display:flex;width:100%;box-sizing:border-box}
+  .access-row .seg label,.access-row .seg button{min-width:0;flex:1 1 0;padding-left:4px;padding-right:4px}
+  .access-domain-send-spacer{display:none}
 }
