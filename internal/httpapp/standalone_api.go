@@ -1195,7 +1195,7 @@ func (s *Server) apiInboxRemoteRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "the folder name does not map to the "+role+" role")
 		return
 	}
-	folder, cerr := s.remoteMailbox().CreateRemoteFolder(r.Context(), p, inboxID, path, path)
+	folder, cerr := s.remoteMailbox().EnsureRemoteFolder(r.Context(), p, inboxID, path, path)
 	if cerr != nil {
 		mapMailboxError(w, cerr)
 		return

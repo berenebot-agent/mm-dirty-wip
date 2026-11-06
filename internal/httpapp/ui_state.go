@@ -150,8 +150,12 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 		writeError(w, 404, "not found")
 		return
 	}
+	box, berr := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id)
 	unread := s.inboxUnreadCounts(ctx, p)
-	drafts, _ := s.Service.Store.CountDrafts(ctx, p, id)
+	drafts := 0
+	if berr == nil {
+		drafts = s.draftBadgeCount(ctx, p, box)
+	}
 	outbox, _ := s.Service.Store.CountOutbox(ctx, p, id)
 	spam, _ := s.Service.Store.CountSpam(ctx, p, id)
 	trash, _ := s.Service.Store.CountTrash(ctx, p, id)
@@ -173,8 +177,7 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 	// which the reconcile refreshes. Report staleness so a live snapshot never
 	// presents a stale unread count as current: remote_status is the last index
 	// state and remote_indexed_at is when it was last built (zero if never).
-	box, gerr := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id)
-	if gerr == nil && box.Kind == model.InboxKindStandalone {
+	if berr == nil && box.Kind == model.InboxKindStandalone {
 		if remoteLabels, e := s.Service.Store.RemoteInboxLabelUnreadCounts(ctx, p.AccountID, id); e == nil {
 			out["labels"] = remoteLabels
 		}

@@ -251,6 +251,10 @@ type fakeRemoteServer struct {
 	// beforeDelete runs inside a folder delete, after the provider applied it, so
 	// a test can simulate a request that died while the write landed.
 	beforeDelete func()
+	// beforeDiscover, when set, runs at the start of a folder discovery pass and
+	// before the fake takes its lock, so a test can park one reconcile before it
+	// indexes anything and observe what another lane does meanwhile.
+	beforeDiscover func()
 }
 
 func newFakeRemoteServer() *fakeRemoteServer {
@@ -273,6 +277,9 @@ func (f *fakeRemoteServer) addFolder(path string, uidValidity uint32) {
 }
 
 func (f *fakeRemoteServer) DiscoverFolders(_ context.Context, _ string) ([]imap.RemoteFolder, imap.RootScope, error) {
+	if f.beforeDiscover != nil {
+		f.beforeDiscover()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]imap.RemoteFolder, 0, len(f.folders))

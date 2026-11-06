@@ -322,7 +322,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
-	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
+	draftCount := s.draftBadgeCount(r.Context(), p, box)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
@@ -545,7 +545,7 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
-	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
+	draftCount := s.draftBadgeCount(r.Context(), p, box)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
@@ -1054,7 +1054,7 @@ func (s *Server) uiInboxRemoteRoleCreate(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/ui/inboxes/"+id+"/remote?notice="+url.QueryEscape("Select a folder or a name to create"), 303)
 		return
 	}
-	folder, cerr := s.remoteMailbox().CreateRemoteFolder(r.Context(), p, id, path, path)
+	folder, cerr := s.remoteMailbox().EnsureRemoteFolder(r.Context(), p, id, path, path)
 	if cerr != nil {
 		s.uiError(w, cerr, 400)
 		return

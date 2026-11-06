@@ -16,7 +16,95 @@ All notable changes to Mammoth Mail are documented here. This project follows
   runs immediately, so a flaky provider is not hammered and a recovered one is not
   left idle.
 
+- **A mailbox whose watch connection keeps dropping reconnects on a backoff.**
+  When an IMAP watch session fails, or a provider accepts the session and tears
+  it down again straight away, the inbox is no longer re-dialled every five
+  seconds. The wait doubles per consecutive failure up to ten minutes, with the
+  same stable per-inbox jitter the detection backoff uses, so a provider outage
+  does not turn into a reconnect storm and does not put every affected mailbox on
+  the same tick. A session that stays up for a minute counts as a recovery and
+  restores the five-second first rung, and the ladder is process-local, so a
+  restart tries every mailbox at once.
+
+- **A slow page now names itself in the log.** Any non-streaming request that
+  takes longer than 400 ms is logged at INFO on the ordinary process log with its
+  method, path, status and duration, so an intermittently slow view can be
+  attributed without a profiler and without enabling a debug level. SSE streams
+  and long polls are excluded: their duration is the client's, not the server's.
+  Only the path is recorded, never the query string.
+
 ### Fixed
+
+- **Slow-request log lines no longer carry credentials in the path.** The line now
+  records the matched route pattern (`/invite/{token}`) instead of the concrete
+  path, so an invitation token can never reach the log; an unmatched request is
+  logged as `unmatched`. The field is `route=` rather than `path=`.
+- **An uncertain Empty Trash on a Microsoft mailbox no longer sticks on
+  "Verifying…".** Only IMAP purges with a frozen UID can be verified by the server,
+  so any other uncertain purge, and the Empty Trash that waits on it, shows
+  "Check provider" with Dismiss as before.
+- **A watch session that ran for a minute resets the reconnect ladder even if it
+  then errors.** Previously a healthy session that later lost its network counted
+  as another consecutive failure.
+
+- **A label view no longer reads every matching message just to count them.** The
+  "select all N" total on a standalone inbox's label page counted by listing the
+  whole filtered set — every row decoded and sorted — so the cost of opening a
+  label grew with the mailbox. The total is now a `count(*)` over the same
+  predicate, without the read, the sort or the decode.
+
+- **A draft placed in a connected mailbox's Drafts folder now shows up in the
+  local Drafts view at once.** The confirmed handoff writes the placed draft into
+  the cached remote index from the append's own UID and UIDVALIDITY, and the
+  standalone Drafts page lists those rows read-only above the local drafts, with
+  the sidebar badge and live snapshot counting them. The folder pull that follows
+  a confirmed write also moved off the whole-inbox reconcile pool onto its own
+  single-slot lane, so a placed draft no longer waits behind a reconcile that can
+  hold a slot for minutes, and a request to send wakes the outbox instead of
+  waiting for its next tick.
+
+- **Uncertain Empty Trash purges now verify themselves.** A purge whose reply was
+  lost used to wait for a person to check the provider. The action worker now
+  looks up the child's frozen UID and UIDVALIDITY on the server: an absent
+  message settles the purge, a still-present one is purged again by that exact
+  UID, and an unreachable provider, changed UIDVALIDITY or changed Trash mapping
+  decides nothing. The parent finishes once no child is uncertain. An IMAP
+  `FETCH` that fails is no longer reported as "message not found".
+- **The action queue is quieter.** Empty Trash purge children no longer get rows
+  of their own (the parent's progress covers them), an uncertain Empty Trash
+  reads "Verifying…" instead of "Check provider", and raw provider or database
+  error text sits behind a collapsed Details control.
+
+- **A confirmed IMAP move no longer fails when sync already indexed the
+  destination.** The local half of a move coalesced onto the destination row and
+  failed with `UNIQUE constraint failed: inbox_remote_messages…` although the
+  server move had succeeded. It now keeps the moved message's id, merges both
+  rows' labels and keeps storage accounting exact.
+
+- **An approval request on an inbox with no outbound provider now reports
+  `failed`.** A standalone inbox in `local_approval` mode with an approver but no
+  SMTP binding left `notification_status` at `queued` indefinitely, with no
+  `draft.notification_failed` event. The first delivery attempt now marks the
+  notification failed and emits the event, as `docs/API.md` describes; cancel and
+  resend once a provider is configured.
+
+- **Mapping a special folder role no longer fails when the folder already
+  exists.** `POST /v1/inboxes/{id}/remote/roles/{role}` with `create` issued
+  `CREATE` for a folder the server already had and returned `503` on servers that
+  answer with a bare `NO`. It now treats an existing folder as success. When the
+  folder exists but lies outside the inbox's sync scope (a top-level folder on a
+  server without `NAMESPACE`), the response is a `400` that names the scope
+  instead of a generic failure.
+
+- **A single-core MX session test no longer fails on a busy CI runner.** The test
+  resolved recipients against a fixed five-second budget while retrying blind. The
+  receiver only publishes a single-core binding once the core's hello has been
+  read, so on a loaded runner the first resolutions ran inside that window and
+  came back `no_binding`, which is indistinguishable from a real routing failure:
+  the test failed on an unrelated pull request with no results at all. It now
+  waits for the receiver to report an admitted session before resolving, allows a
+  CI-appropriate deadline, and reports the receiver's own connection count on
+  failure so a future timeout names the cause.
 
 - **A mailbox that has been failing for a long time is still retried off its own
   schedule.** Once the remote-sync backoff reached its ten-minute ceiling the
@@ -191,6 +279,12 @@ All notable changes to Mammoth Mail are documented here. This project follows
   still returns 409. See **D155** and `docs/API.md` §9.
 
 ### Changed
+
+- **The draft-delete prompt says the deletion is permanent.** Deleting a draft
+  from the Drafts list removes the draft and its attachments immediately — there
+  is no Trash entry for drafts — and the confirmation now reads *Delete this
+  draft permanently? This cannot be undone.* instead of a bare *Delete this
+  draft?*.
 
 - **Pre-promotion contract cleanup:** hosted Tusk MX uses `service: "hosted"` rather than `"antler"`, and the receiving API returns `receiver_manifest` instead of `antler_manifest`. Existing encrypted domain configurations are normalised on read and written with neutral receiver metadata keys at their next save; snapshotted receiver endpoints and setup credentials are preserved. `/.well-known/mailmoose`, the old Antler diagram route and outgoing `X-MailMoose-*` webhook header aliases are removed. The Cloudflare inbound and historical draft handoff compatibility readers remain.
 

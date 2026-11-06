@@ -298,10 +298,19 @@ lookup) the inbox's Drafts folder is pulled; when a sent copy settles `copied`
 the Sent folder is pulled. `RemoteMailboxService.PullRoleFolder` resolves the
 role folder per connector — an IMAP folder reconcile for the mapped role path, a
 Gmail system-label (`DRAFT`/`SENT`) message page, or an Outlook folder delta —
-and stores metadata only. It is scheduled asynchronously on the same bounded
-refresh pool as the deep reconcile, coalesced per inbox+role, and is best-effort:
-it never blocks or fails the write, and a miss is still covered by the normal
-cadence. An `ambiguous` or `failed` append pulls nothing (nothing was confirmed).
+and stores metadata only. It runs on its own single-slot lane, not the
+whole-inbox reconcile pool, so a pull scheduled by a write never queues behind a
+reconcile that may hold a slot for minutes; it is coalesced per inbox+role and
+is best-effort: it never blocks or fails the write, and a miss is still covered
+by the normal cadence. An `ambiguous` or `failed` append pulls nothing (nothing
+was confirmed).
+
+An IMAP append that reports a UID (UIDPLUS) also carries the destination
+folder's UIDVALIDITY, so the confirmed handoff writes the placed draft's
+metadata row into the cached index directly, with no round trip: the row is in
+the local read model the moment publication settles and the pull only confirms
+it. The standalone Drafts view lists those placed drafts read-only (they belong
+to the connected mailbox), above the local drafts Mammoth Mail still holds.
 
 ### Sync cadence (per-inbox) and the manual refresh
 Each standalone inbox carries two optional overrides (`inboxes.remote_poll_seconds`,
@@ -380,8 +389,9 @@ transient scope/`LIST` shortfall or a generation flip.
   appends the frozen draft to the connected remote Drafts folder. Mammoth Mail
   never sends it and sends no notification email. The frozen draft carries the
   correlation header used to verify publication. Once publication is confirmed
-  the Drafts folder is pulled immediately (see "Immediate folder pull after a
-  confirmed write").
+  the placed draft is recorded in the local index and the Drafts folder is
+  pulled immediately (see "Immediate folder pull after a confirmed write"), so
+  the standalone Drafts view shows it read-only without waiting for a sync.
 - The mode is snapshotted onto each request at creation, so an inbox setting
   change never affects an in-flight request. A standalone inbox can be switched
   to `LocalApproval` (its approver identity is matched against the message

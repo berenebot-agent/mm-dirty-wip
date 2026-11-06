@@ -773,3 +773,66 @@ func TestRenameRemoteFolderPathsMovesSubtreeIDs(t *testing.T) {
 		t.Fatalf("sibling id changed: %q -> %q", ids["Other"], f.ID)
 	}
 }
+
+// TestCountRemoteMessagesWithLabels proves the label view's "select all N" total
+// is counted without reading the rows: the count must equal the filtered list for
+// the same labels, and an unmatched label must count zero.
+func TestCountRemoteMessagesWithLabels(t *testing.T) {
+	t.Parallel()
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "count@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 10},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolderMessages(ctx, acct, in.ID, "INBOX", 10, []store.RemoteMessageInput{
+		{UID: 1, RFCMessageID: "<c1@remote>", Subject: "One"},
+		{UID: 2, RFCMessageID: "<c2@remote>", Subject: "Two"},
+		{UID: 3, RFCMessageID: "<c3@remote>", Subject: "Three"},
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListRemoteMessages(ctx, acct, in.ID, "INBOX")
+	if err != nil || len(msgs) != 3 {
+		t.Fatalf("seeded %d messages, want 3 (err=%v)", len(msgs), err)
+	}
+	if _, err := st.SetRemoteMessageLabels(ctx, acct, in.ID, msgs[0].ID, []string{"keep", "work"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetRemoteMessageLabels(ctx, acct, in.ID, msgs[1].ID, []string{"keep"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		labels []string
+		want   int
+	}{
+		{"one label", []string{"keep"}, 2},
+		{"two labels AND together", []string{"keep", "work"}, 1},
+		{"unmatched AND", []string{"keep", "absent"}, 0},
+		{"unknown label", []string{"nope"}, 0},
+		{"no labels counts the inbox", nil, 3},
+	} {
+		got, err := st.CountRemoteMessagesWithLabels(ctx, acct, in.ID, tc.labels)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: count = %d, want %d", tc.name, got, tc.want)
+		}
+		// The count must agree with the rows the page would list for the same
+		// filter, which is the only contract the label banner depends on.
+		listed, err := st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{Labels: tc.labels})
+		if err != nil {
+			t.Fatalf("%s: list: %v", tc.name, err)
+		}
+		if got != len(listed) {
+			t.Fatalf("%s: count %d != listed %d", tc.name, got, len(listed))
+		}
+	}
+}
