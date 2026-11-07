@@ -173,19 +173,19 @@ func TestStandalonePlacedDraftEditsInPlace(t *testing.T) {
 	}
 
 	// The cached row follows at once, so the list the operator lands on is right.
-	// The role-folder pull that the save schedules is asynchronous, so give it a
-	// bounded moment to settle before insisting the list is final.
-	var page string
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		page = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts").Body.String()
-		if strings.Contains(page, "Edited subject") && !strings.Contains(page, "Placed draft subject") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("drafts page did not settle on the edited draft: %s", page)
-		}
-		time.Sleep(20 * time.Millisecond)
+	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts").Body.String()
+	if !strings.Contains(page, "Edited subject") || strings.Contains(page, "Placed draft subject") {
+		t.Fatalf("drafts page did not show the edited draft: %s", page)
+	}
+
+	// A later folder pull re-reads the same row from the server's envelope. The
+	// pull has to find the subject there too: when the fake stored only the
+	// appended bytes it reported an empty subject and the pull overwrote the
+	// seeded row, so the list flipped to "(no subject)". Force the pass rather
+	// than racing the asynchronous one the save schedules.
+	refreshRemote(t, h, box.ID, key)
+	if page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts").Body.String(); !strings.Contains(page, "Edited subject") {
+		t.Fatalf("a folder pull after the save lost the edited subject: %s", page)
 	}
 
 	// The edit is attributable: the placement's correlation header survived.

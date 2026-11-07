@@ -309,12 +309,23 @@ func (f *fakeIMAP) DeleteMessage(_ context.Context, loc imap.Locator) error {
 	return model.NewMailboxError(model.ErrKindNotFound, "no message", false, imap.ErrNotFound)
 }
 
-func (f *fakeIMAP) AppendReader(_ context.Context, folder string, r io.Reader, size int64, _ []string, _ time.Time) (imap.AppendResult, error) {
+func (f *fakeIMAP) AppendReader(_ context.Context, folder string, r io.Reader, size int64, flags []string, at time.Time) (imap.AppendResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	buf := make([]byte, size)
 	n, _ := io.ReadFull(r, buf)
-	m := &fakeIMAPMsg{uid: f.nextUID, uidValidity: f.folders[folder], folder: folder, raw: string(buf[:n])}
+	raw := string(buf[:n])
+	m := &fakeIMAPMsg{uid: f.nextUID, uidValidity: f.folders[folder], folder: folder, raw: raw, flags: append([]string(nil), flags...), internalDate: at}
+	// A real server hands the appended message's envelope, flags and internal
+	// date to a later folder pull. A fake that kept only the bytes made that
+	// pull report an empty subject and no \Draft\Seen, so it overwrote the row
+	// the confirming write had just seeded with thinner data — a subject-less
+	// row the drafts page renders as "(no subject)".
+	if parsed, perr := mailparse.ParseBytes([]byte(raw)); perr == nil {
+		m.subject = parsed.Subject
+		m.messageID = parsed.RFCMessageID
+		m.from = imap.Address{Name: parsed.From.Name, Address: parsed.From.Address}
+	}
 	f.nextUID++
 	f.messages = append(f.messages, m)
 	return imap.AppendResult{DestinationUID: m.uid, UIDValidity: m.uidValidity, Confirmed: true}, nil
