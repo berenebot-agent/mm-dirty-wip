@@ -332,6 +332,16 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Changed
 
+- **Every segmented control on the client-access form is the same height.** The
+  domain header rows, the `Domain send` toggle and the `Set all:` header draw
+  their ladder as `<button>`s, while the inbox rows draw the same pill from radio
+  inputs and labels. The global button rule's `min-height` (34 px) was never reset
+  on `.seg button`, so those rows stood 8 px taller than the inbox rows in the
+  same table — the domain rows read as having their own bigger buttons. The
+  button variant now sizes from its own padding like the labels, so the whole
+  matrix (and the inbox-settings Access ladders, which `app.js` builds from
+  buttons) is one height.
+
 - **A draft placed in a connected mailbox is now an ordinary draft in Mammoth
   Mail.** The Drafts page used to list drafts placed in a standalone inbox's
   Outlook/Gmail/IMAP Drafts folder in a second, read-only group: no checkbox, no
