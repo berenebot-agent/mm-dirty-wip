@@ -432,7 +432,7 @@ dialog.inbox-settings .email-field,dialog.inbox-settings .inbox-schedule-grid,di
 .seg input:checked+label{background:var(--mm-ink);color:var(--mm-on-ink)}
 .seg input:focus-visible+label{outline:2px solid var(--mm-accent);outline-offset:-2px}
 .seg input:disabled+label{cursor:not-allowed}
-.seg button{border:0;border-left:1px solid var(--mm-border);border-radius:0;background:var(--mm-surface);color:var(--mm-text);min-width:92px;text-align:center;box-sizing:border-box;font-weight:700;padding:5px 11px;font-size:13px;line-height:1.2}
+.seg button{border:0;border-left:1px solid var(--mm-border);border-radius:0;background:var(--mm-surface);color:var(--mm-text);min-width:92px;min-height:0;text-align:center;box-sizing:border-box;font-weight:700;padding:5px 11px;font-size:13px;line-height:1.2}
 .seg button:first-of-type{border-left:0}
 .seg button:hover{background:var(--mm-subtle);color:var(--mm-text)}
 .seg button:disabled{color:var(--mm-border-hover)}
