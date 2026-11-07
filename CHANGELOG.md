@@ -35,6 +35,15 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **The Settings tab rail now centres its labels.** The rail rule set
+  `display:flex` without `align-items`, which happened to look right in the inbox
+  dialogs because their tabs are `<button>`s and inherit `align-items:center` from
+  the global button rule. The Settings dialog's tabs link to real URLs (`/account`,
+  `/account?tab=account`, `/admin`), so they are `<a>`s, and their labels sat at
+  the top of the 34 px highlight instead of centred in it. The rail rule now sets
+  `align-items:center` itself, and the stylesheet test pins it. No markup, route
+  or API change.
+
 - **A handler that writes a second status is now named by its route, not by the
   request-timing wrapper.** The wrapper forwarded every `WriteHeader` call to the
   server, so a handler that wrote a status after the response was already

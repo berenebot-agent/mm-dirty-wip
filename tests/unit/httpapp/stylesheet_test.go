@@ -22,6 +22,30 @@ func appStylesheet(t *testing.T, h http.Handler) string {
 	return rr.Body.String()
 }
 
+// TestSettingsNavTabsCentreTheirLabel pins that the settings tab rail centres
+// its label inside the row. The rail holds both <a> tabs (the Settings dialog,
+// which links to real URLs) and <button> tabs (the inbox dialogs); only buttons
+// inherit align-items:center from the global button rule, so the rail rule has
+// to set it itself or the anchor labels sit at the top of the highlight.
+func TestSettingsNavTabsCentreTheirLabel(t *testing.T) {
+	t.Parallel()
+	_, h, _, _, _ := httpFixture(t)
+	css := appStylesheet(t, h)
+	const sel = ".inbox-settings-nav .dialog-tab{"
+	i := strings.Index(css, sel)
+	if i < 0 {
+		t.Fatal("app.css has no .inbox-settings-nav .dialog-tab rule")
+	}
+	rest := css[i+len(sel):]
+	j := strings.Index(rest, "}")
+	if j < 0 {
+		t.Fatal("app.css .inbox-settings-nav .dialog-tab rule is unterminated")
+	}
+	if block := rest[:j]; !strings.Contains(block, "align-items:center") {
+		t.Fatalf("settings nav tab rule does not centre its label: %s", block)
+	}
+}
+
 // TestPagesLinkVersionedStylesheet pins that rendered pages load the shared
 // stylesheet through a content-hashed URL and no longer inline it, and that
 // app.js no longer injects style blocks at runtime.
