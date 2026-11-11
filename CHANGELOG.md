@@ -35,6 +35,16 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Editing a placed draft is safer.** Saving a draft that lives in a connected
+  mailbox now needs Assistant or Owner access (read access is no longer enough),
+  keeps its Bcc recipients, and refuses to overwrite a copy that changed in the
+  operator's own client: the change check reads the provider's live revision
+  (Graph changeKey, Gmail draft message id, IMAP UID plus content hash) instead of
+  the cached index, and a save with no marker is refused. An edited body no longer
+  leaves the old HTML alternative behind, the editor hides file uploads it cannot
+  honour, and the Outlook save check compares recipient addresses rather than
+  counts.
+
 - **The Settings tab rail now centres its labels.** The rail rule set
   `display:flex` without `align-items`, which happened to look right in the inbox
   dialogs because their tabs are `<button>`s and inherit `align-items:center` from
