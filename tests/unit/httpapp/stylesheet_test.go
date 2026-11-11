@@ -46,6 +46,18 @@ func TestSettingsNavTabsCentreTheirLabel(t *testing.T) {
 	}
 }
 
+func TestAddInboxChoicesStayWithinDialog(t *testing.T) {
+	t.Parallel()
+	_, h, _, _, _ := httpFixture(t)
+	css := appStylesheet(t, h)
+	if !strings.Contains(css, ".add-inbox-choose{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));") {
+		t.Fatal("Add inbox chooser columns must be allowed to shrink within the dialog")
+	}
+	if !strings.Contains(css, ".add-inbox-choice .choice-desc{max-width:100%;") {
+		t.Fatal("Add inbox choice descriptions must wrap within their cards")
+	}
+}
+
 // TestPagesLinkVersionedStylesheet pins that rendered pages load the shared
 // stylesheet through a content-hashed URL and no longer inline it, and that
 // app.js no longer injects style blocks at runtime.

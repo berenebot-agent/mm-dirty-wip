@@ -265,13 +265,13 @@ dialog.inbox-settings[open]{border:0;border-radius:12px;padding:0;width:min(1080
   .inbox-settings-nav{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;border-right:0;border-bottom:1px solid var(--mm-divider);padding:8px}
   .inbox-settings-nav .dialog-tab{white-space:nowrap;flex:0 0 auto}
 }
-.add-inbox-choose{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:12px 0 4px}
+.add-inbox-choose{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:12px 0 4px}
 .add-inbox-choice{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-height:170px;padding:22px 20px;border:1px solid var(--mm-border-strong);border-radius:12px;background:var(--mm-surface);color:var(--mm-text);text-align:left;cursor:pointer}
 .add-inbox-choice:hover,.add-inbox-choice:focus-visible{background:var(--mm-subtle);border-color:var(--mm-border-hover)}
 .add-inbox-choice:focus-visible{outline:2px solid var(--mm-accent);outline-offset:2px}
 .add-inbox-choice .choice-icon{width:34px;height:34px;color:var(--mm-text);flex:0 0 auto;margin-bottom:6px}
 .add-inbox-choice .choice-title{font-size:16px;font-weight:700;color:var(--mm-text)}
-.add-inbox-choice .choice-desc{font-size:13px;line-height:1.45;color:var(--mm-text-3);font-weight:400}
+.add-inbox-choice .choice-desc{max-width:100%;font-size:13px;line-height:1.45;color:var(--mm-text-3);font-weight:400}
 .inbox-settings--subview:has(.inbox-subview.active[data-inbox-subview=connectors]) .inbox-settings-footer [type=submit]{display:inline-block}
 .inbox-settings--subview:has(.inbox-subview.active[data-inbox-subview=connectors]) #inbox-edit-delete{display:none}
 .provider-choose{display:grid;gap:10px;margin:6px 0 4px}
