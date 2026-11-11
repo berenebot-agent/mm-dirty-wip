@@ -43,7 +43,9 @@ All notable changes to Mammoth Mail are documented here. This project follows
   the cached index, and a save with no marker is refused. An edited body no longer
   leaves the old HTML alternative behind, the editor hides file uploads it cannot
   honour, and the Outlook save check compares recipient addresses rather than
-  counts.
+  counts. An Outlook save is also conditional on the entity tag it read
+  (`If-Match`), so Graph itself refuses it if the draft moved mid-save, and a
+  successful save refreshes the cached row immediately.
 
 - **The Settings tab rail now centres its labels.** The rail rule set
   `display:flex` without `align-items`, which happened to look right in the inbox

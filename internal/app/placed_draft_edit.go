@@ -142,6 +142,8 @@ func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Prin
 	}
 
 	newID := rec.ID
+	// cached is set when the provider branch already refreshed the index.
+	cached := false
 	switch {
 	case m.IsMicrosoft(ctx, p.AccountID, inboxID):
 		t, c, e := m.microsoftAccess(ctx, p.AccountID, inboxID)
@@ -152,10 +154,29 @@ func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Prin
 		if e != nil {
 			return "", mapStoreError(e)
 		}
-		if _, e = m.Microsoft.UpdateDraft(ctx, t, c.Mailbox, provider, microsoft.DraftEdit{
+		saved, e := m.Microsoft.UpdateDraft(ctx, t, c.Mailbox, provider, microsoft.DraftEdit{
 			Subject: f.Subject, Text: f.Text, HTML: f.HTML, To: f.To, CC: f.CC, BCC: f.BCC,
-		}); e != nil {
+			IfMatch: live.etag,
+		})
+		if e != nil {
+			// A refused precondition (or any conflict) may mean the draft moved
+			// between the check above and the write; re-read to tell that apart
+			// from some other conflict.
+			if isConflict(e) {
+				if now, derr := m.Microsoft.DraftState(ctx, t, c.Mailbox, provider); derr == nil && "ms:"+now.ChangeKey != live.marker {
+					return "", ErrPlacedDraftChanged
+				}
+			}
 			return "", e
+		}
+		// Graph edits in place, so the cached row is the same row: refresh it from
+		// the response rather than waiting for the delta pull.
+		if saved.ID != "" && saved.ParentFolderID != "" {
+			if _, e := m.cacheMicrosoft(ctx, p.AccountID, inboxID, saved); e != nil {
+				m.Service.Log.Debug("refresh edited draft", "inbox_id", inboxID, "error", e)
+			} else {
+				cached = true
+			}
 		}
 	case m.IsGoogle(ctx, p.AccountID, inboxID):
 		client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inboxID)
@@ -170,8 +191,20 @@ func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Prin
 		if e != nil {
 			return "", e
 		}
-		if _, e = client.UpdateDraft(ctx, t, draftRef, bytes.NewReader(raw), ""); e != nil {
+		updated, e := client.UpdateDraft(ctx, t, draftRef, bytes.NewReader(raw), "")
+		if e != nil {
 			return "", e
+		}
+		// drafts.update replaces the message under a new id. Index the new one now
+		// and let the generic path below drop the replaced row.
+		if updated.Message.ID != "" {
+			if g, ge := client.Get(ctx, t, updated.Message.ID, "metadata"); ge != nil {
+				m.Service.Log.Debug("read edited draft", "inbox_id", inboxID, "error", ge)
+			} else if view, ce := m.cacheGoogle(ctx, p.AccountID, inboxID, g); ce != nil {
+				m.Service.Log.Debug("refresh edited draft", "inbox_id", inboxID, "error", ce)
+			} else {
+				newID, cached = view.ID, true
+			}
 		}
 	default:
 		newID, err = m.replacePlacedDraftIMAP(ctx, p.AccountID, inboxID, rec, raw)
@@ -188,7 +221,7 @@ func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Prin
 		if e := m.Service.Store.DeleteRemoteMessage(ctx, p.AccountID, inboxID, rec.ID); e != nil {
 			m.Service.Log.Debug("drop replaced draft row", "inbox_id", inboxID, "error", e)
 		}
-	} else {
+	} else if !cached {
 		if _, e := m.seedPlacedDraft(ctx, p.AccountID, inboxID, rec.FolderPath, rec.UIDValidity, rec.UID, raw); e != nil {
 			m.Service.Log.Debug("seed edited draft", "inbox_id", inboxID, "error", e)
 		}
@@ -216,7 +249,15 @@ func (m *RemoteMailboxService) placedDraftRecord(ctx context.Context, p model.Pr
 	if err != nil {
 		return store.RemoteMessage{}, mapStoreError(err)
 	}
-	if rec.FolderPath != folder.Path || !m.folderInScope(inbox, rec.FolderPath) {
+	// A Graph row is filed under "microsoft:<id>"; the folder it sits in is the
+	// provider's folder id, which is what the Drafts folder's path holds.
+	where := rec.FolderPath
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		if fp, ferr := m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inboxID, rec.ID); ferr == nil {
+			where = fp
+		}
+	}
+	if where != folder.Path || !m.folderInScope(inbox, where) {
 		return store.RemoteMessage{}, model.NewMailboxError(model.ErrKindNotFound, "draft is not in this inbox's Drafts folder", false, nil)
 	}
 	return rec, nil
@@ -407,6 +448,9 @@ type placedDraftLiveState struct {
 	// the MIME (Graph's MIME rendering omits Bcc); bccKnown says whether to use it.
 	bcc      []string
 	bccKnown bool
+	// etag is Graph's entity tag for the revision read, echoed in If-Match on
+	// the write so the provider refuses it if the draft moves in between.
+	etag string
 }
 
 // placedDraftLive asks the provider for the draft's current revision instead of
@@ -441,7 +485,7 @@ func (m *RemoteMailboxService) placedDraftLive(ctx context.Context, accountID, i
 				bcc = append(bcc, a)
 			}
 		}
-		return placedDraftLiveState{marker: "ms:" + msg.ChangeKey, bcc: bcc, bccKnown: true}, nil
+		return placedDraftLiveState{marker: "ms:" + msg.ChangeKey, bcc: bcc, bccKnown: true, etag: msg.ETag}, nil
 	case m.IsGoogle(ctx, accountID, inboxID):
 		provider, _, _, err := m.Service.Store.GoogleMessage(ctx, accountID, inboxID, rec.ID)
 		if err != nil {
@@ -464,6 +508,13 @@ func (m *RemoteMailboxService) placedDraftLive(ctx context.Context, accountID, i
 		sum := sha256.Sum256(data)
 		return placedDraftLiveState{marker: fmt.Sprintf("i:%d/%d/%s", rec.UIDValidity, rec.UID, hex.EncodeToString(sum[:]))}, nil
 	}
+}
+
+// isConflict reports whether err is a provider conflict (for Graph, a failed
+// If-Match precondition among them).
+func isConflict(err error) bool {
+	var me *model.MailboxError
+	return errors.As(err, &me) && me.Kind == model.ErrKindConflict
 }
 
 // isRemoteGone reports whether a provider error means the item is no longer
