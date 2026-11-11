@@ -39,7 +39,10 @@ type Header struct{ Name, Value string }
 type Message struct {
 	ID, ConversationID, ParentFolderID, InternetMessageID, Subject, BodyPreview string
 	// ChangeKey is Graph's revision token: it moves on every change to the item.
-	ChangeKey                                 string
+	ChangeKey string
+	// ETag is Graph's entity tag for the item (`@odata.etag`), the value a
+	// conditional write echoes back in If-Match.
+	ETag                                      string `json:"@odata.etag"`
 	From, Sender                              Recipient
 	ToRecipients, CCRecipients, BCCRecipients []Recipient
 	ReceivedDateTime, SentDateTime            string
@@ -190,6 +193,12 @@ func (c *Client) continuation(raw, path string) (string, error) {
 	return u.String(), nil
 }
 func (c *Client) request(ctx context.Context, t, method, path, cursor string, body io.Reader, ct string, out any, stream io.Writer, ambiguous bool) error {
+	return c.requestHeaders(ctx, t, method, path, cursor, body, ct, out, stream, ambiguous, nil)
+}
+
+// requestHeaders is request with extra request headers, for the few calls that
+// need a precondition (If-Match).
+func (c *Client) requestHeaders(ctx context.Context, t, method, path, cursor string, body io.Reader, ct string, out any, stream io.Writer, ambiguous bool, hdr map[string]string) error {
 	c.mu.Lock()
 	blocked := time.Now().Before(c.backoff[retryKey(path)])
 	c.mu.Unlock()
@@ -214,6 +223,9 @@ func (c *Client) request(ctx context.Context, t, method, path, cursor string, bo
 	}
 	r.Header.Set("Authorization", "Bearer "+t)
 	r.Header.Set("Prefer", `IdType="ImmutableId"`)
+	for k, v := range hdr {
+		r.Header.Set(k, v)
+	}
 	if ct != "" {
 		r.Header.Set("Content-Type", ct)
 	}
@@ -637,6 +649,9 @@ type DraftEdit struct {
 	To      []string
 	CC      []string
 	BCC     []string
+	// IfMatch, when set, makes the write conditional on the item's entity tag, so
+	// Graph itself refuses it if the draft changed after the tag was read.
+	IfMatch string
 }
 
 // UpdateDraft replaces a draft's subject, body and recipients in place. Unlike
@@ -674,11 +689,20 @@ func (c *Client) UpdateDraft(ctx context.Context, token, mailbox, id string, e D
 	if strings.TrimSpace(e.HTML) != "" {
 		body = map[string]string{"contentType": "html", "content": e.HTML}
 	}
-	m, err := c.Patch(ctx, token, mailbox, id, map[string]any{
+	patch := map[string]any{
 		"subject": e.Subject, "body": body,
 		"toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc,
-	})
+	}
+	var hdr map[string]string
+	if strings.TrimSpace(e.IfMatch) != "" {
+		hdr = map[string]string{"If-Match": e.IfMatch}
+	}
+	var m Message
+	raw, err := json.Marshal(patch)
 	if err != nil {
+		return Message{}, err
+	}
+	if err = c.requestHeaders(ctx, token, "PATCH", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id), "", bytes.NewReader(raw), "application/json", &m, nil, false, hdr); err != nil {
 		return Message{}, err
 	}
 	var actual Message

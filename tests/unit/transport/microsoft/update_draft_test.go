@@ -3,6 +3,7 @@ package microsoft_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dellarb/mammothmail/internal/model"
 	"github.com/dellarb/mammothmail/internal/transport/microsoft"
 )
 
@@ -151,7 +153,7 @@ func TestDraftStateReportsRevisionAndBcc(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"draft-1","changeKey":"CK-7","bccRecipients":[{"emailAddress":{"address":"hidden@example.com"}}]}`))
+		_, _ = w.Write([]byte(`{"@odata.etag":"W/\"CK-7\"","id":"draft-1","changeKey":"CK-7","bccRecipients":[{"emailAddress":{"address":"hidden@example.com"}}]}`))
 	}))
 	defer srv.Close()
 
@@ -161,10 +163,72 @@ func TestDraftStateReportsRevisionAndBcc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DraftState: %v", err)
 	}
-	if m.ChangeKey != "CK-7" || len(m.BCCRecipients) != 1 || m.BCCRecipients[0].EmailAddress.Address != "hidden@example.com" {
+	if m.ETag != `W/"CK-7"` || m.ChangeKey != "CK-7" || len(m.BCCRecipients) != 1 || m.BCCRecipients[0].EmailAddress.Address != "hidden@example.com" {
 		t.Fatalf("DraftState = %+v", m)
 	}
 	if !strings.Contains(query, "changeKey") || !strings.Contains(query, "bccRecipients") {
 		t.Fatalf("select did not ask for the revision and Bcc: %s", query)
+	}
+}
+
+// TestUpdateDraftSendsIfMatchOnlyWhenGiven proves a conditional edit carries the
+// entity tag the caller read, so Graph itself can refuse a write over a draft
+// that moved, and that an unconditional edit sends no precondition.
+func TestUpdateDraftSendsIfMatchOnlyWhenGiven(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var ifMatch []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			mu.Lock()
+			ifMatch = append(ifMatch, r.Header.Get("If-Match"))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":"draft-1"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"draft-1","toRecipients":[{"emailAddress":{"address":"someone@example.com"}}],"ccRecipients":[],"bccRecipients":[]}`))
+	}))
+	defer srv.Close()
+
+	c := microsoft.NewClient(srv.Client())
+	c.BaseURL = srv.URL
+	edit := microsoft.DraftEdit{Subject: "s", Text: "b", To: []string{"someone@example.com"}}
+	if _, err := c.UpdateDraft(context.Background(), "token", "agent@remote.test", "draft-1", edit); err != nil {
+		t.Fatal(err)
+	}
+	edit.IfMatch = `W/"CK-7"`
+	if _, err := c.UpdateDraft(context.Background(), "token", "agent@remote.test", "draft-1", edit); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ifMatch) != 2 || ifMatch[0] != "" || ifMatch[1] != `W/"CK-7"` {
+		t.Fatalf("If-Match headers = %q, want [\"\" W/\"CK-7\"]", ifMatch)
+	}
+}
+
+// TestUpdateDraftReportsAFailedPreconditionAsAConflict proves a 412 from Graph
+// surfaces as an error rather than a saved draft.
+func TestUpdateDraftReportsAFailedPreconditionAsAConflict(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_, _ = w.Write([]byte(`{"error":{"code":"ErrorIrresolvableConflict","message":"changed"}}`))
+	}))
+	defer srv.Close()
+
+	c := microsoft.NewClient(srv.Client())
+	c.BaseURL = srv.URL
+	_, err := c.UpdateDraft(context.Background(), "token", "agent@remote.test", "draft-1", microsoft.DraftEdit{
+		Subject: "s", Text: "b", To: []string{"someone@example.com"}, IfMatch: `W/"old"`,
+	})
+	if err == nil {
+		t.Fatal("a failed precondition must not be reported as saved")
+	}
+	var me *model.MailboxError
+	if !errors.As(err, &me) || me.Kind != model.ErrKindConflict {
+		t.Fatalf("error = %v, want a conflict", err)
 	}
 }
