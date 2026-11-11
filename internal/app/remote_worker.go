@@ -219,7 +219,7 @@ func (w *RemoteWorker) WatchIntervalForTest(inbox model.Inbox) time.Duration {
 // WatchInboxForTest exposes the per-inbox watch loop for tests, which need to
 // observe the realtime IDLE path and its logging without starting the full worker.
 func (w *RemoteWorker) WatchInboxForTest(ctx context.Context, inbox model.Inbox) {
-	w.watchInbox(ctx, inbox)
+	w.watchInbox(ctx, inbox, false)
 }
 
 // DemandIntervalForTest exposes the demand-coalescing cadence for tests.
@@ -462,7 +462,7 @@ func (w *RemoteWorker) run() {
 	}
 	active := map[string]*watcher{}
 
-	reconcile := func() {
+	reconcile := func(skipInitialDetection bool) {
 		inboxes, err := w.svc.Store.ListDetectableRemoteInboxes(context.Background())
 		if err != nil {
 			w.log.Error("remote watcher reconcile", "error", err)
@@ -500,20 +500,20 @@ func (w *RemoteWorker) run() {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			active[id] = &watcher{cancel: cancel, done: done}
-			go func(ib model.Inbox) {
+			go func(ib model.Inbox, skipInitialDetection bool) {
 				defer close(done)
-				w.watchInbox(ctx, ib)
-			}(ib)
+				w.watchInbox(ctx, ib, skipInitialDetection)
+			}(ib, skipInitialDetection)
 		}
 	}
 
 	// On startup, drain any arrivals left pending by a previous process, then
-	// reconcile and run one full detection pass over every inbox so a fresh start
-	// catches up immediately.
+	// stage one detection pass per inbox before starting its watcher. Starting all
+	// watchers first makes every inbox detect at once and can starve login.
 	w.drainRemoteArrivals()
 	w.reconcileRemoteActions()
-	reconcile()
 	w.detectAll()
+	reconcile(true)
 	w.drainRemotePreviews()
 
 	ticker := time.NewTicker(w.period)
@@ -529,7 +529,7 @@ func (w *RemoteWorker) run() {
 			}
 			return
 		case <-ticker.C:
-			reconcile()
+			reconcile(false)
 			w.drainRemoteArrivals()
 			w.drainRemotePreviews()
 			w.reconcileRemoteActions()
@@ -564,13 +564,17 @@ func fullSyncDue(status store.RemoteIndexStatus, fullMinutes *int) bool {
 // IDLE (or the watch fails) it falls back to bounded polling. A connection failure
 // backs off and retries; it never advances the cursor past unrecorded mail, so no
 // arrival is lost.
-func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
+func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox, skipInitialDetection bool) {
 	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
 		// Neither provider has an IDLE watch, so the worker polls. The interval is
 		// re-resolved every pass: a Microsoft inbox with active push drops its
 		// quick poll to the full-sync safety net, and returns to quick polling if
 		// the subscription expires or is removed.
-		timer := time.NewTimer(0)
+		first := time.Duration(0)
+		if skipInitialDetection {
+			first = w.watchIntervalFor(inbox)
+		}
+		timer := time.NewTimer(first)
 		defer timer.Stop()
 		for {
 			w.detectInbox(ctx, inbox)
@@ -591,9 +595,11 @@ func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
 		}
 	}
 	folder := inboxFolder(inbox)
-	// Run one detection pass up front so a fresh watcher reports mail that
-	// arrived while the process was down.
-	w.detectInbox(ctx, inbox)
+	if !skipInitialDetection {
+		// Run one detection pass up front so a fresh watcher reports mail that
+		// arrived while the process was down.
+		w.detectInbox(ctx, inbox)
+	}
 	for !w.stopping() {
 		started := time.Now()
 		err := w.runWatchSession(ctx, inbox, folder)
@@ -848,28 +854,19 @@ func (w *RemoteWorker) ReconcileRemoteActionsForTest(ctx context.Context) {
 
 // detectAll runs one detection pass over every configured inbox. It is used on
 // startup (and in tests) so a fresh process catches up without waiting for an IDLE
-// signal. It runs the passes concurrently, bounded by maxInboxConnections.
+// signal. Startup is deliberately serial so provider work cannot starve login.
 func (w *RemoteWorker) detectAll() {
 	inboxes, err := w.svc.Store.ListDetectableRemoteInboxes(context.Background())
 	if err != nil {
 		w.log.Error("remote detection list", "error", err)
 		return
 	}
-	sem := make(chan struct{}, w.maxInboxConnections)
-	var wg sync.WaitGroup
 	for _, ib := range inboxes {
 		if w.stopping() {
 			break
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(ib model.Inbox) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			w.detectInbox(context.Background(), ib)
-		}(ib)
+		w.detectInbox(context.Background(), ib)
 	}
-	wg.Wait()
 }
 
 // inboxFolder resolves the folder a watcher observes for an inbox: its selected
