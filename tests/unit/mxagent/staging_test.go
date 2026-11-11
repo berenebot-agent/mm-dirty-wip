@@ -146,6 +146,50 @@ func smtpCode(err error) int {
 	return 0
 }
 
+func TestDataLineLengthResponses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		body    string
+		reply   string
+		ingests int64
+	}{
+		{"at limit", strings.Repeat("A", 1998) + "\r\n", "250 ", 1},
+		{"over limit", strings.Repeat("A", 1999) + "\r\n", "554 5.5.1 ", 0},
+		{"empty", "", "451 4.3.0 ", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := &blockingDelivery{}
+			addr, stop := startStagingEdge(t, mxagent.Config{
+				Hostname: "mx.example.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20,
+				MaxRecipients: 10, MaxConnections: 10, ReadTimeout: 5 * time.Second,
+				WriteTimeout: 5 * time.Second, DataTimeout: 5 * time.Second, DNSTimeout: time.Second,
+			}, d)
+			defer stop()
+			conn, br := rawSMTP(t, addr)
+			defer conn.Close()
+			expectCode(t, br, 220)
+			writeSMTP(t, conn, "EHLO client.test\r\n")
+			drainMulti(t, br, 250)
+			writeSMTP(t, conn, "MAIL FROM:<sender@outside.test>\r\n")
+			expectCode(t, br, 250)
+			writeSMTP(t, conn, "RCPT TO:<box@example.test>\r\n")
+			expectCode(t, br, 250)
+			writeSMTP(t, conn, "DATA\r\n")
+			expectCode(t, br, 354)
+			writeSMTP(t, conn, tc.body+".\r\n")
+			line, err := br.ReadString('\n')
+			if err != nil || !strings.HasPrefix(line, tc.reply) {
+				t.Fatalf("DATA reply %q, error %v; want prefix %q", line, err, tc.reply)
+			}
+			if got := atomic.LoadInt64(&d.ingests); got != tc.ingests {
+				t.Fatalf("ingests=%d want %d", got, tc.ingests)
+			}
+		})
+	}
+}
+
 // TestStagingReservationHeldThroughIngest is the regression for the lifetime
 // bug: the reservation must stay held while the raw bytes are resident through
 // verification and ingest, not be released when the copy goroutine finishes.
