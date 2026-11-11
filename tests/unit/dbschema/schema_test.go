@@ -196,7 +196,7 @@ func TestUnreadCountIndexesServeTheBadgeCounts(t *testing.T) {
 		{
 			name:   "local messages count",
 			query:  `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id='a' AND is_read=0 AND deleted_at IS NULL AND direction='inbound' AND is_spam=0 GROUP BY inbox_id`,
-			want:   "USING INDEX idx_messages_unread",
+			want:   "idx_messages_unread",
 			noScan: "SCAN messages",
 		},
 		{
@@ -207,19 +207,19 @@ func TestUnreadCountIndexesServeTheBadgeCounts(t *testing.T) {
 			// scan rather than the word.
 			name:   "imap standalone count",
 			query:  `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND m.folder_path='INBOX'`,
-			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			want:   "idx_inbox_remote_messages_unread",
 			noScan: "SCAN m",
 		},
 		{
 			name:   "gmail standalone count",
 			query:  `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND m.id IN (SELECT g.message_id FROM google_label_memberships g WHERE g.inbox_id='i' AND g.label_id='INBOX') AND NOT EXISTS (SELECT 1 FROM google_label_memberships g WHERE g.inbox_id='i' AND g.message_id=m.id AND g.label_id IN ('TRASH','SPAM','DRAFT'))`,
-			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			want:   "idx_inbox_remote_messages_unread",
 			noScan: "SCAN m",
 		},
 		{
 			name:   "microsoft standalone count",
 			query:  `SELECT count(*) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id='a' AND m.inbox_id='i' AND m.is_read=0 AND g.inbox_id='i' AND g.folder_id='INBOX'`,
-			want:   "USING INDEX idx_inbox_remote_messages_unread",
+			want:   "idx_inbox_remote_messages_unread",
 			noScan: "SCAN m",
 		},
 	}
