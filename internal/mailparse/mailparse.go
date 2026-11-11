@@ -35,7 +35,7 @@ type Parsed struct {
 	RFCMessageID, InReplyTo string
 	References              []string
 	From                    Address
-	To, CC                  []string
+	To, CC, BCC             []string
 	Subject, Text, HTML     string
 	Date                    time.Time
 	Attachments             []Attachment
@@ -104,6 +104,7 @@ func parseMessage(msg *mail.Message, limits Limits) (Parsed, error) {
 	}
 	p.To = parseAddressList(msg.Header, "To")
 	p.CC = parseAddressList(msg.Header, "Cc")
+	p.BCC = parseAddressList(msg.Header, "Bcc")
 	if d, err := msg.Header.Date(); err == nil {
 		p.Date = d.UTC()
 	} else {

@@ -38,14 +38,16 @@ type Recipient struct {
 type Header struct{ Name, Value string }
 type Message struct {
 	ID, ConversationID, ParentFolderID, InternetMessageID, Subject, BodyPreview string
-	From, Sender                                                                Recipient
-	ToRecipients, CCRecipients, BCCRecipients                                   []Recipient
-	ReceivedDateTime, SentDateTime                                              string
-	IsRead, IsDraft, HasAttachments                                             bool
-	Categories                                                                  []string
-	Flag                                                                        struct{ FlagStatus string }
-	InternetMessageHeaders                                                      []Header
-	Removed                                                                     *struct{ Reason string } `json:"@removed"`
+	// ChangeKey is Graph's revision token: it moves on every change to the item.
+	ChangeKey                                 string
+	From, Sender                              Recipient
+	ToRecipients, CCRecipients, BCCRecipients []Recipient
+	ReceivedDateTime, SentDateTime            string
+	IsRead, IsDraft, HasAttachments           bool
+	Categories                                []string
+	Flag                                      struct{ FlagStatus string }
+	InternetMessageHeaders                    []Header
+	Removed                                   *struct{ Reason string } `json:"@removed"`
 }
 type Folder struct {
 	ID, DisplayName, ParentFolderID                   string
@@ -473,6 +475,16 @@ func (c *Client) Delta(ctx context.Context, t, mailbox, folder, cursor string) (
 	e := c.request(ctx, t, "GET", path+"?$select="+metadata+"&$top=100", cursor, nil, "", &p, nil, false)
 	return p, e
 }
+
+// DraftState reads a draft's live revision and recipients straight from Graph.
+// The cached index can lag an edit made elsewhere, so a save that has to know
+// whether the draft moved, or what its Bcc list is (the MIME rendering omits
+// it), asks here.
+func (c *Client) DraftState(ctx context.Context, t, mailbox, id string) (Message, error) {
+	var m Message
+	e := c.json(ctx, t, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select=id,changeKey,toRecipients,ccRecipients,bccRecipients", nil, &m, false)
+	return m, e
+}
 func (c *Client) Raw(ctx context.Context, t, mailbox, id string, w io.Writer) error {
 	return c.request(ctx, t, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"/$value", "", nil, "", nil, w, false)
 }
@@ -587,27 +599,31 @@ func (c *Client) SetDraftRecipientsVerified(ctx context.Context, token, mailbox,
 	if e = c.json(ctx, token, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select=id,toRecipients,ccRecipients,bccRecipients", nil, &actual, false); e != nil {
 		return e
 	}
-	equal := func(a, b []Recipient) bool {
-		if len(a) != len(b) {
-			return false
-		}
-		counts := map[string]int{}
-		for _, r := range a {
-			counts[strings.ToLower(r.EmailAddress.Address)]++
-		}
-		for _, r := range b {
-			k := strings.ToLower(r.EmailAddress.Address)
-			if counts[k] == 0 {
-				return false
-			}
-			counts[k]--
-		}
-		return true
-	}
-	if !equal(wantTo, actual.ToRecipients) || !equal(wantCC, actual.CCRecipients) || !equal(wantBCC, actual.BCCRecipients) {
+	if !sameRecipients(wantTo, actual.ToRecipients) || !sameRecipients(wantCC, actual.CCRecipients) || !sameRecipients(wantBCC, actual.BCCRecipients) {
 		return failure(model.ErrKindConflict, "draft recipients did not match the composed message; submission stopped", false)
 	}
 	return nil
+}
+
+// sameRecipients reports whether two recipient lists hold the same addresses,
+// ignoring order and case. Comparing lengths alone would pass a list of the
+// right size that names the wrong people.
+func sameRecipients(a, b []Recipient) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := map[string]int{}
+	for _, r := range a {
+		counts[strings.ToLower(strings.TrimSpace(r.EmailAddress.Address))]++
+	}
+	for _, r := range b {
+		k := strings.ToLower(strings.TrimSpace(r.EmailAddress.Address))
+		if counts[k] == 0 {
+			return false
+		}
+		counts[k]--
+	}
+	return true
 }
 
 // DraftEdit is the editable envelope of an existing draft. Attachments are
@@ -669,12 +685,26 @@ func (c *Client) UpdateDraft(ctx context.Context, token, mailbox, id string, e D
 	if err = c.json(ctx, token, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select=id,subject,toRecipients,ccRecipients,bccRecipients", nil, &actual, false); err != nil {
 		return Message{}, err
 	}
-	want := len(e.To) + len(e.CC) + len(e.BCC)
-	got := len(actual.ToRecipients) + len(actual.CCRecipients) + len(actual.BCCRecipients)
-	if want != got {
+	if !recipientsMatch(e.To, actual.ToRecipients) || !recipientsMatch(e.CC, actual.CCRecipients) || !recipientsMatch(e.BCC, actual.BCCRecipients) {
 		return Message{}, failure(model.ErrKindConflict, "draft recipients did not match the edited message; save stopped", false)
 	}
 	return m, nil
+}
+
+// recipientsMatch compares the addresses a caller asked for with what Graph
+// reports back.
+func recipientsMatch(want []string, got []Recipient) bool {
+	w := make([]Recipient, 0, len(want))
+	for _, raw := range want {
+		a, err := mail.ParseAddress(strings.TrimSpace(raw))
+		if err != nil {
+			return false
+		}
+		var r Recipient
+		r.EmailAddress.Address = a.Address
+		w = append(w, r)
+	}
+	return sameRecipients(w, got)
 }
 
 // CreateVerifiedDraft is also used for human handoff: preserve the reviewed

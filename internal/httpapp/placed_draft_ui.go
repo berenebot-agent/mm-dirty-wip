@@ -42,6 +42,10 @@ func (s *Server) renderPlacedDraftEditor(w http.ResponseWriter, r *http.Request,
 	if _, ok := s.placedDraftRecord(r.Context(), p, box, draftID); !ok {
 		return false
 	}
+	if !canEditPlacedDraft(p, box.ID) {
+		http.Error(w, "not permitted", http.StatusForbidden)
+		return true
+	}
 	pd, err := s.remoteMailbox().LoadPlacedDraft(r.Context(), p, box.ID, draftID)
 	if err != nil {
 		s.uiError(w, err, http.StatusBadGateway)
@@ -86,6 +90,16 @@ func (s *Server) savePlacedDraftFromForm(w http.ResponseWriter, r *http.Request,
 	if _, ok := s.placedDraftRecord(r.Context(), p, box, draftID); !ok {
 		return false
 	}
+	if !canEditPlacedDraft(p, box.ID) {
+		http.Error(w, "not permitted", http.StatusForbidden)
+		return true
+	}
+	if len(in.Attachments) > 0 {
+		// Adding files to a placed draft is not supported; saying so beats
+		// reporting a save that quietly dropped them.
+		http.Error(w, "attachments cannot be added to a draft in the connected mailbox; attach them in the mailbox itself", http.StatusBadRequest)
+		return true
+	}
 	if action == "send" || action == "request-send" {
 		// Sending is the operator's own client's job for a placed draft: Mammoth
 		// Mail never sends one, so the editor cannot offer it.
@@ -102,11 +116,15 @@ func (s *Server) savePlacedDraftFromForm(w http.ResponseWriter, r *http.Request,
 		Subject: in.Subject, Text: in.Text,
 		FromAddress: in.FromAddress,
 	}
-	// The compose page edits text only. An HTML alternative the draft already
-	// carries is kept rather than dropped by an unrelated subject edit.
-	fields.HTML = current.Fields.HTML
+	// The compose page edits text only. While the text is untouched, an HTML
+	// alternative the draft carries is kept so a subject or recipient edit does
+	// not flatten it. Once the text changes the old HTML no longer says what the
+	// message says, so it is dropped and the draft becomes plain text rather than
+	// displaying the previous body.
 	if strings.TrimSpace(in.HTML) != "" {
 		fields.HTML = in.HTML
+	} else if sameBodyText(in.Text, current.Fields.Text) {
+		fields.HTML = current.Fields.HTML
 	}
 	if strings.TrimSpace(fields.FromAddress) == "" {
 		fields.FromAddress = current.Fields.FromAddress
@@ -138,4 +156,21 @@ func (s *Server) deletePlacedDraft(w http.ResponseWriter, r *http.Request, p mod
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Draft+deleted", http.StatusSeeOther)
 	return true
+}
+
+// canEditPlacedDraft reports whether the principal may change a draft in the
+// connected mailbox: the same Assistant or Owner authority any mailbox change
+// needs. The service enforces it too; checking here lets the page refuse early.
+func canEditPlacedDraft(p model.Principal, inboxID string) bool {
+	return p.Admin || p.CanAssist(inboxID)
+}
+
+// sameBodyText compares two plain-text bodies ignoring line-ending style and
+// surrounding whitespace, which a browser form rewrites (CRLF) without the
+// operator having edited anything.
+func sameBodyText(a, b string) bool {
+	norm := func(v string) string {
+		return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
+	}
+	return norm(a) == norm(b)
 }

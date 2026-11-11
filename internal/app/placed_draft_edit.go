@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -59,7 +61,7 @@ type PlacedDraft struct {
 // LoadPlacedDraft reads a placed draft's editable fields from the connected
 // mailbox. The body is fetched transiently and never archived.
 func (m *RemoteMailboxService) LoadPlacedDraft(ctx context.Context, p model.Principal, inboxID, draftID string) (PlacedDraft, error) {
-	rec, err := m.placedDraftRecord(ctx, p, inboxID, draftID)
+	rec, err := m.placedDraftRecord(ctx, p, inboxID, draftID, false)
 	if err != nil {
 		return PlacedDraft{}, err
 	}
@@ -72,11 +74,18 @@ func (m *RemoteMailboxService) LoadPlacedDraft(ctx context.Context, p model.Prin
 	if err != nil {
 		return PlacedDraft{}, err
 	}
+	live, err := m.placedDraftLive(ctx, p.AccountID, inboxID, rec, path)
+	if err != nil {
+		return PlacedDraft{}, err
+	}
+	if live.bccKnown {
+		out.Fields.BCC = live.bcc
+	}
 	out.ID = rec.ID
 	out.InboxID = inboxID
 	out.FolderPath = rec.FolderPath
 	out.SizeBytes = rec.SizeBytes
-	out.Marker = placedDraftMarker(rec)
+	out.Marker = live.marker
 	return out, nil
 }
 
@@ -89,16 +98,39 @@ func (m *RemoteMailboxService) LoadPlacedDraft(ctx context.Context, p model.Prin
 // It returns the id of the cached row that now holds the draft: unchanged for
 // Graph and Gmail, the appended copy's new row for IMAP.
 func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Principal, inboxID, draftID string, f PlacedDraftFields, marker string) (string, error) {
-	rec, err := m.placedDraftRecord(ctx, p, inboxID, draftID)
+	// Editing a draft changes the mailbox, so it needs the same Assistant or
+	// Owner authority every other mailbox change does; read access is not enough.
+	rec, err := m.placedDraftRecord(ctx, p, inboxID, draftID, true)
 	if err != nil {
 		return "", err
 	}
-	if marker != "" && marker != placedDraftMarker(rec) {
+	// A save without a marker has nothing to prove the editor saw the current
+	// copy, so it is refused rather than allowed to overwrite blindly.
+	if strings.TrimSpace(marker) == "" {
 		return "", ErrPlacedDraftChanged
 	}
 	path, _, err := m.fetchRemoteRawFor(ctx, p.AccountID, inboxID, draftID, &rec)
 	if err != nil {
+		// A draft the provider no longer holds under this id was changed or
+		// removed elsewhere since the editor loaded it.
+		if isRemoteGone(err) {
+			return "", ErrPlacedDraftChanged
+		}
 		return "", err
+	}
+	// The marker is checked against the provider's current state, not the
+	// cached index, which can lag an edit made in the operator's own client.
+	live, err := m.placedDraftLive(ctx, p.AccountID, inboxID, rec, path)
+	if err != nil {
+		m.CleanupRemoteRaw(path)
+		if isRemoteGone(err) {
+			return "", ErrPlacedDraftChanged
+		}
+		return "", err
+	}
+	if live.marker != marker {
+		m.CleanupRemoteRaw(path)
+		return "", ErrPlacedDraftChanged
 	}
 	raw, err := m.rebuildPlacedDraft(ctx, p, rec, path, f)
 	m.CleanupRemoteRaw(path)
@@ -167,8 +199,12 @@ func (m *RemoteMailboxService) SavePlacedDraft(ctx context.Context, p model.Prin
 
 // placedDraftRecord resolves a cached row and refuses anything that is not the
 // Drafts folder of this inbox.
-func (m *RemoteMailboxService) placedDraftRecord(ctx context.Context, p model.Principal, inboxID, draftID string) (store.RemoteMessage, error) {
-	inbox, err := m.authorizeRead(ctx, p, inboxID)
+func (m *RemoteMailboxService) placedDraftRecord(ctx context.Context, p model.Principal, inboxID, draftID string, write bool) (store.RemoteMessage, error) {
+	authorize := m.authorizeRead
+	if write {
+		authorize = m.authorizeAssist
+	}
+	inbox, err := authorize(ctx, p, inboxID)
 	if err != nil {
 		return store.RemoteMessage{}, err
 	}
@@ -333,7 +369,7 @@ func placedDraftFromFile(path string) (PlacedDraft, error) {
 		return PlacedDraft{}, err
 	}
 	out := PlacedDraft{Fields: PlacedDraftFields{
-		To: parsed.To, CC: parsed.CC, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML,
+		To: parsed.To, CC: parsed.CC, BCC: parsed.BCC, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML,
 		FromAddress: parsed.From.Address, FromName: parsed.From.Name,
 	}}
 	for _, a := range parsed.Attachments {
@@ -362,15 +398,79 @@ func placedDraftHandoffID(path string) (string, error) {
 	return strings.TrimSpace(msg.Header.Get(model.HandoffHeader)), nil
 }
 
-// placedDraftMarker identifies the copy an editor loaded. Size and INTERNALDATE
-// move whenever the draft is saved anywhere, including in the operator's own
-// mail client.
-func placedDraftMarker(rec store.RemoteMessage) string {
-	internal := ""
-	if rec.InternalDate != nil {
-		internal = *rec.InternalDate
+// placedDraftLiveState is what the provider reports about a draft right now.
+type placedDraftLiveState struct {
+	// marker identifies the copy that was read. It changes whenever the draft is
+	// saved anywhere, including in the operator's own mail client.
+	marker string
+	// bcc is the draft's Bcc list when the provider reports it separately from
+	// the MIME (Graph's MIME rendering omits Bcc); bccKnown says whether to use it.
+	bcc      []string
+	bccKnown bool
+}
+
+// placedDraftLive asks the provider for the draft's current revision instead of
+// trusting the cached index. rawPath is the body just fetched for the same draft:
+//   - Graph: the item's changeKey, which moves on every change.
+//   - Gmail: a message is immutable and drafts.update replaces it with a new id,
+//     so the draft is current exactly while a draft still holds this message id.
+//   - IMAP: there is no revision token, so the marker is the UID plus a hash of
+//     the bytes just fetched; any edit changes the bytes, and a replaced draft
+//     has a new UID.
+func (m *RemoteMailboxService) placedDraftLive(ctx context.Context, accountID, inboxID string, rec store.RemoteMessage, rawPath string) (placedDraftLiveState, error) {
+	switch {
+	case m.IsMicrosoft(ctx, accountID, inboxID):
+		t, c, err := m.microsoftAccess(ctx, accountID, inboxID)
+		if err != nil {
+			return placedDraftLiveState{}, err
+		}
+		provider, err := m.Service.Store.MicrosoftMessage(ctx, accountID, inboxID, rec.ID)
+		if err != nil {
+			return placedDraftLiveState{}, mapStoreError(err)
+		}
+		msg, err := m.Microsoft.DraftState(ctx, t, c.Mailbox, provider)
+		if err != nil {
+			return placedDraftLiveState{}, err
+		}
+		if strings.TrimSpace(msg.ChangeKey) == "" {
+			return placedDraftLiveState{}, fmt.Errorf("the connected mailbox did not report a draft revision")
+		}
+		bcc := make([]string, 0, len(msg.BCCRecipients))
+		for _, r := range msg.BCCRecipients {
+			if a := strings.ToLower(strings.TrimSpace(r.EmailAddress.Address)); a != "" {
+				bcc = append(bcc, a)
+			}
+		}
+		return placedDraftLiveState{marker: "ms:" + msg.ChangeKey, bcc: bcc, bccKnown: true}, nil
+	case m.IsGoogle(ctx, accountID, inboxID):
+		provider, _, _, err := m.Service.Store.GoogleMessage(ctx, accountID, inboxID, rec.ID)
+		if err != nil {
+			return placedDraftLiveState{}, mapStoreError(err)
+		}
+		client, t, err := m.GoogleMailboxClient(ctx, accountID, inboxID)
+		if err != nil {
+			return placedDraftLiveState{}, err
+		}
+		if _, err = client.DraftIDForMessage(ctx, t, provider); err != nil {
+			// No draft holds this message any more: it was edited or removed.
+			return placedDraftLiveState{}, ErrPlacedDraftChanged
+		}
+		return placedDraftLiveState{marker: "g:" + provider}, nil
+	default:
+		data, err := os.ReadFile(rawPath)
+		if err != nil {
+			return placedDraftLiveState{}, err
+		}
+		sum := sha256.Sum256(data)
+		return placedDraftLiveState{marker: fmt.Sprintf("i:%d/%d/%s", rec.UIDValidity, rec.UID, hex.EncodeToString(sum[:]))}, nil
 	}
-	return fmt.Sprintf("%d/%d/%d/%s", rec.UIDValidity, rec.UID, rec.SizeBytes, internal)
+}
+
+// isRemoteGone reports whether a provider error means the item is no longer
+// there under the id the cache holds.
+func isRemoteGone(err error) bool {
+	var me *model.MailboxError
+	return errors.As(err, &me) && me.Kind == model.ErrKindNotFound
 }
 
 // mimePartPath parses an IMAP-style MIME part path ("1.2") into its indices.
