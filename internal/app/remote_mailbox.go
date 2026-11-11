@@ -500,6 +500,11 @@ func normalizeRemoteError(err error) error {
 	if errors.Is(err, imap.ErrNotConnected) {
 		return model.NewMailboxError(model.ErrKindUnavailable, "remote connection is closed", true, err)
 	}
+	// A provider that closes the socket mid-command returns io.EOF rather than a
+	// *net.OpError, so it must be classified as the dropped connection it is.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return model.NewMailboxError(model.ErrKindUnavailable, "remote connection is closed", true, err)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return model.NewMailboxError(model.ErrKindUnavailable, "remote server timed out", true, err)
 	}

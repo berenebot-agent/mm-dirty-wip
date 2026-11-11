@@ -121,6 +121,15 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		defer cancel()
 		if err := w.svc.Store.SettleMessageAction(outcome, a.ID, state, reason, next); err != nil {
 			w.svc.Log.Error("action settlement", "action_id", a.ID, "error", err)
+		} else if state != "done" && state != "pending" {
+			// The queue keeps the reason only in its row, so a failed or uncertain
+			// action is invisible to anyone reading the container log — which is
+			// where "why is this still queued?" is asked. One line per settled
+			// non-done action closes that gap; an Empty Trash parent re-settles
+			// once per restart, not on every coordination turn.
+			w.svc.Log.Warn("action not settled",
+				"action_id", a.ID, "inbox_id", a.InboxID, "kind", a.Input.Kind,
+				"state", state, "attempts", a.Attempts, "reason", reason)
 		}
 		// An Empty Trash parent re-runs a coordination turn every
 		// emptyTrashTurnDelay while its purge children are still in flight. Such

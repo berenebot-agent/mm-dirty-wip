@@ -309,8 +309,24 @@ An IMAP append that reports a UID (UIDPLUS) also carries the destination
 folder's UIDVALIDITY, so the confirmed handoff writes the placed draft's
 metadata row into the cached index directly, with no round trip: the row is in
 the local read model the moment publication settles and the pull only confirms
-it. The standalone Drafts view lists those placed drafts read-only (they belong
-to the connected mailbox), above the local drafts Mammoth Mail still holds.
+it. The standalone Drafts view lists those placed drafts as ordinary drafts in
+one list with the drafts Mammoth Mail still holds: the same row, the same editor
+and the same delete button, because a placed draft is the operator's draft
+wherever they open it.
+
+A placed draft is edited through the connected mailbox, not copied back. The
+editor fetches its body live (nothing is archived, so the draft consumes no
+account storage), and a save writes it to the provider: an Outlook draft is
+patched in place, a Gmail draft is replaced through `drafts.update`, and an IMAP
+draft is appended under the same Message-ID with the previous copy deleted
+afterwards, so a failure between the two leaves a duplicate the folder pull
+reconciles by Message-ID rather than a lost draft. The editor carries a change
+marker built from the copy it loaded; a save whose marker no longer matches the
+server's copy is refused, because the operator's own mail client autosaves a
+draft and a silent overwrite would discard that work. Attachments are carried
+through a save unchanged rather than edited here. Sending stays in the operator's
+own client: the compose page offers no Send for a placed draft, and Mammoth Mail
+never sends one.
 
 ### Sync cadence (per-inbox) and the manual refresh
 Each standalone inbox carries two optional overrides (`inboxes.remote_poll_seconds`,

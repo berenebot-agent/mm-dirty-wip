@@ -551,6 +551,10 @@ func (s *session) Data(r io.Reader) error {
 			s.logDataDecision(txID, "552", "too_large", durationMs(time.Since(txnStart)))
 			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: fmt.Sprintf("Message too large: maximum size is %d bytes", s.srv.cfg.MaxMessageBytes)}
 		}
+		if errors.Is(err, smtp.ErrTooLongLine) {
+			s.logDataDecision(txID, "554", reason, durationMs(time.Since(txnStart)))
+			return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "Message line too long"}
+		}
 		s.logDataDecision(txID, "451", reason, durationMs(time.Since(txnStart)))
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}

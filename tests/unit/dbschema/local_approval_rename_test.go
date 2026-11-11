@@ -24,6 +24,7 @@ func TestLocalApprovalRenameRewritesStoredMode(t *testing.T) {
 
 	// Drop the approval-mode marker and start once: the rewrite statement re-runs.
 	reopen := openDB(t, dir)
+	unapplyUnreadCountIndexes(t, reopen)
 	exec(t, reopen, `DELETE FROM schema_migrations WHERE version='004'`)
 	reopen.Close()
 	s, err := store.Open(dir)
@@ -49,7 +50,7 @@ func TestLocalApprovalRenameRewritesStoredMode(t *testing.T) {
 	if got := scalar(t, db, `SELECT count(*) FROM inboxes WHERE authoring_mode='mailmoose_approval'`); got != 0 {
 		t.Fatal("old approval mode remains on an inbox")
 	}
-	if got := scalar(t, db, `SELECT count(*) FROM schema_migrations`); got != 4 {
+	if got := scalar(t, db, `SELECT count(*) FROM schema_migrations`); got != 5 {
 		t.Fatalf("migration markers = %d, want the full public lineage", got)
 	}
 	if err := dbschema.Validate(context.Background(), db); err != nil {

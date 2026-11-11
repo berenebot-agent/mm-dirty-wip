@@ -35,6 +35,70 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Editing a placed draft is safer.** Saving a draft that lives in a connected
+  mailbox now needs Assistant or Owner access (read access is no longer enough),
+  keeps its Bcc recipients, and refuses to overwrite a copy that changed in the
+  operator's own client: the change check reads the provider's live revision
+  (Graph changeKey, Gmail draft message id, IMAP UID plus content hash) instead of
+  the cached index, and a save with no marker is refused. An edited body no longer
+  leaves the old HTML alternative behind, the editor hides file uploads it cannot
+  honour, and the Outlook save check compares recipient addresses rather than
+  counts. An Outlook save is also conditional on the entity tag it read
+  (`If-Match`), so Graph itself refuses it if the draft moved mid-save, and a
+  successful save refreshes the cached row immediately.
+
+- **The Settings tab rail now centres its labels.** The rail rule set
+  `display:flex` without `align-items`, which happened to look right in the inbox
+  dialogs because their tabs are `<button>`s and inherit `align-items:center` from
+  the global button rule. The Settings dialog's tabs link to real URLs (`/account`,
+  `/account?tab=account`, `/admin`), so they are `<a>`s, and their labels sat at
+  the top of the 34 px highlight instead of centred in it. The rail rule now sets
+  `align-items:center` itself, and the stylesheet test pins it. No markup, route
+  or API change.
+
+- **A handler that writes a second status is now named by its route, not by the
+  request-timing wrapper.** The wrapper forwarded every `WriteHeader` call to the
+  server, so a handler that wrote a status after the response was already
+  committed produced net/http's "superfluous response.WriteHeader call" line
+  naming `timingWriter` rather than the handler at fault. The wrapper now keeps
+  the first status and drops the rest, exactly as net/http already did, and
+  records the dropped call at INFO with the request's route so the handler that
+  writes twice can be found from `docker logs`. No response changes.
+
+- **A dropped remote connection is no longer reported as an opaque internal
+  error.** A provider that closes the socket mid-command returns `EOF`, which is
+  not a `*net.OpError`, so it fell through to `internal` and the raw Go text
+  (`unexpected EOF`) was written into the action queue while the outcome was
+  treated as undetermined-but-never-retryable. It is now classified as an
+  unavailable connection ("remote connection is closed", retryable), which is
+  what it is: an uncertain Empty Trash purge carrying an exact locator can then
+  be verified by the reconciler instead of sitting failed forever.
+
+- **Clear all in the queue now dismisses, instead of hiding rows until the next
+  page load.** The control only set a flag in memory, so the rows it removed came
+  straight back on any navigation — plus whatever the next action added — and
+  since a failed row never expires, they could not be removed at all. Clear all
+  now sends the same dismissal the per-row Dismiss sends for each flagged row
+  (the ones no server-side reconciliation can settle) and re-reads the queue, so
+  the clearing survives a reload. A stopped metadata sync still has no dismiss
+  path and stays hidden in the tab only.
+
+- **A failed or uncertain action now leaves a line in the container log.** The
+  queue kept the reason in its row only, so "why is this still queued?" could not
+  be answered from `docker logs` at all. Every settlement that is not `done` or
+  `pending` logs one WARN naming the action, inbox, kind, state and reason.
+
+- **The first page load after a restart no longer re-reads the whole mailbox to
+  count unread badges.** The dashboard's unread counts walked every row of each
+  standalone inbox's remote index and of `messages`, and because no index carried
+  `is_read` every candidate row cost a table page read. Warm, that was harmless;
+  cold — which is every first render after the process starts, because nothing
+  else scans those ranges — it took seconds, which is why only the first login
+  after a restart was slow. Two partial `is_read=0` indexes now answer both counts
+  from an unread-only index range. The dashboard also stopped summing `messages`
+  to rebuild a Size column it already had from each inbox's maintained usage
+  counter.
+
 - **Slow-request log lines no longer carry credentials in the path.** The line now
   records the matched route pattern (`/invite/{token}`) instead of the concrete
   path, so an invitation token can never reach the log; an unmatched request is
@@ -279,6 +343,43 @@ All notable changes to Mammoth Mail are documented here. This project follows
   still returns 409. See **D155** and `docs/API.md` §9.
 
 ### Changed
+
+- **Every segmented control on the client-access form is the same height.** The
+  domain header rows, the `Domain send` toggle and the `Set all:` header draw
+  their ladder as `<button>`s, while the inbox rows draw the same pill from radio
+  inputs and labels. The global button rule's `min-height` (34 px) was never reset
+  on `.seg button`, so those rows stood 8 px taller than the inbox rows in the
+  same table — the domain rows read as having their own bigger buttons. The
+  button variant now sizes from its own padding like the labels, so the whole
+  matrix (and the inbox-settings Access ladders, which `app.js` builds from
+  buttons) is one height.
+
+- **A draft placed in a connected mailbox is now an ordinary draft in Mammoth
+  Mail.** The Drafts page used to list drafts placed in a standalone inbox's
+  Outlook/Gmail/IMAP Drafts folder in a second, read-only group: no checkbox, no
+  edit link, no actions — the draft the operator could see was the one they could
+  not touch. It is now the same row as a local draft, in one list, with the same
+  editor and the same delete button. The editor fetches the draft's body live and
+  a save writes it back where it lives: an Outlook draft is patched in place, a
+  Gmail draft is updated through `drafts.update`, and an IMAP draft is appended
+  under the same Message-ID with the previous copy removed afterwards. A save is
+  refused if the copy changed in the operator's own client since the editor
+  opened it, and sending still happens there, not here. Attachments are carried
+  through an edit unchanged. No schema change, no migration, and the JSON API's
+  draft endpoints are untouched.
+
+- **The web UI has one design system.** The 47 KB inline stylesheet, the
+  per-template `<style>` blocks and the styles `app.js` injected at runtime now
+  live in one embedded, content-hashed `/assets/app.css` built on `--mm-*`
+  tokens, with colour reserved for state (amber = needs a decision or setup, red
+  = failure, green = done, blue = unread and focus). The draft review page now
+  states who asked to send, the exact From/To/Subject and body, and the approve
+  confirmation names the subject and recipients. Inbox health on the dashboard
+  distinguishes setup-needed (amber) from disconnected (red). Phones and
+  tablets get stacked inbox and activity rows, two-line mail rows and dialogs
+  that no longer clip; the settings side-nav active item is readable again.
+  Button labels are sentence case. No routes, forms or API behaviour changed.
+  Conventions are in `docs/DESIGN.md`.
 
 - **The draft-delete prompt says the deletion is permanent.** Deleting a draft
   from the Drafts list removes the draft and its attachments immediately — there

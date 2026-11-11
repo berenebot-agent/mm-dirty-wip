@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
-const css = fs.readFileSync('internal/httpapp/ui.go', 'utf8');
+const css = fs.readFileSync('internal/httpapp/assets/app.css', 'utf8');
 function section(start, end) {
   const a = source.indexOf(start);
   const b = source.indexOf(end, a + start.length);

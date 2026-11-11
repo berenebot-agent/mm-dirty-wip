@@ -165,15 +165,18 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		t.Fatalf("GET /assets/app.js = %d", rr.Code)
 	}
 	script := rr.Body.String()
+	// The sync spinner keyframes moved with the queue styles into app.css.
+	css := appStylesheet(t, h)
+	if !strings.Contains(css, "@keyframes metadata-sync-spin") || !strings.Contains(css, "@media(prefers-reduced-motion:reduce){.aq-sync[data-state=running] .aq-dot") {
+		t.Fatal("app.css missing the metadata sync spinner keyframes or its reduced-motion guard")
+	}
 	for _, want := range []string{
 		"data-sync-banner",
 		"aq-sync",
 		"SYNC_STATE_TEXT",
 		"syncProgress",
 		"' indexed'",
-		"metadata-sync-spin",
 		"Inbox-wide",
-		"prefers-reduced-motion",
 		// Downloading wording and the estimate marker for Gmail/One totals.
 		"Downloading metadata",
 		"estimated_total",
