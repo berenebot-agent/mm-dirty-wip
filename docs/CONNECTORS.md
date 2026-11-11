@@ -135,10 +135,10 @@ The OpenClaw channel plugin is included in this repository but is not yet publis
 cd plugins/openclaw/openclaw-plugin
 npm ci && npm run build
 npm pack --pack-destination /tmp
-openclaw plugins install npm-pack:/tmp/mammothmail-openclaw-0.1.0.tgz --accept-capabilities
+openclaw plugins install npm-pack:/tmp/mammothmail-openclaw-0.1.0.tgz --accept-capabilities --force
 ```
 
-The plugin requires Node 24.16 or later in the supported 24.x or 26.x ranges. If installing from a local directory instead of a package, OpenClaw also requires `--force`.
+The plugin requires Node 24.16 or later in the supported 24.x or 26.x ranges. OpenClaw also requires `--force` when installing from a local directory or `npm-pack:` package.
 
 In Mammoth Mail, choose **Add Connector → OpenClaw**, then **One-time code**. Run the generated command on the OpenClaw host:
 
