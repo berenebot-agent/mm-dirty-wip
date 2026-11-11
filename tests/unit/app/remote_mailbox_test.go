@@ -1440,7 +1440,7 @@ func TestRemoteReconcileBackfillsWholeFolder(t *testing.T) {
 	configureSecrets(t, rm, u, box, "imap-pw", "")
 	fake := newFakeRemoteServer()
 	installFake(t, rm, fake)
-	const total = 2100 // > DefaultRemoteReconcileLimit (2000)
+	const total = app.DefaultRemoteReconcileLimit + 100
 	for i := 0; i < total; i++ {
 		fake.addMessage("INBOX", fmt.Sprintf("From: a@b.test\r\nSubject: m%d\r\nMessage-ID: <m%d@remote>\r\n\r\nbody", i, i), fmt.Sprintf("<m%d@remote>", i), fmt.Sprintf("m%d", i))
 	}
@@ -1459,7 +1459,7 @@ func TestRemoteReconcileBackfillsWholeFolder(t *testing.T) {
 		t.Fatal("first pass indexed nothing")
 	}
 	// Successive passes backfill the rest.
-	for i := 0; i < 5; i++ {
+	for i := 0; i < (total+app.DefaultRemoteReconcileLimit-1)/app.DefaultRemoteReconcileLimit+1; i++ {
 		if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
 			t.Fatal(err)
 		}
