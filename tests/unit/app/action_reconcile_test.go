@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,11 +16,13 @@ import (
 // retryable failure, as when the connection drops before the reply arrives.
 type lostResponseSession struct {
 	*fakeRemoteServer
-	apply bool
-	down  bool
+	apply        bool
+	down         bool
+	deleteCalled atomic.Int32
 }
 
 func (s *lostResponseSession) DeleteMessage(ctx context.Context, loc imap.Locator) error {
+	s.deleteCalled.Add(1)
 	if s.apply {
 		_ = s.fakeRemoteServer.DeleteMessage(ctx, loc)
 	}
@@ -106,9 +109,7 @@ func TestRecheckAmbiguousPurgeStillPresentIsRetried(t *testing.T) {
 	w.RecheckFailed()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		session.fakeRemoteServer.mu.Lock()
-		calls := session.fakeRemoteServer.deleteCalled
-		session.fakeRemoteServer.mu.Unlock()
+		calls := session.deleteCalled.Load()
 		if calls == 0 && time.Now().After(deadline) {
 			t.Fatal("present message was never retried")
 		}
