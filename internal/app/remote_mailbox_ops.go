@@ -91,12 +91,12 @@ func remoteView(m store.RemoteMessage) RemoteMessageView {
 // backfills per folder. Together with the per-folder cursor it bounds the work of
 // a single pass while still letting the whole folder be indexed over successive
 // passes; it is NOT a permanent cap. The newest window is refreshed every pass.
-const DefaultRemoteReconcileLimit = 2000
+const DefaultRemoteReconcileLimit = 250
 
 // remoteNewestRefresh is the number of newest messages whose headers are
 // refreshed on every reconcile pass, so recent mail and flag changes are always
 // current even while an older backlog is still being backfilled.
-const remoteNewestRefresh = 500
+const remoteNewestRefresh = 100
 
 // remoteUIDSetCap bounds the full UID set a reconcile will hold to prune against.
 // A set is four bytes per message; a folder beyond this is left un-pruned for the
