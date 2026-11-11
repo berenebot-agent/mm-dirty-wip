@@ -153,7 +153,7 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
-## github.com/emersion/go-smtp v0.25.0
+## github.com/emersion/go-smtp v0.25.1
 
 SMTP server used by the unified MX receiver (`dialmx/cmd/receiver`, `internal/mxagent`).
 Licence: MIT.
