@@ -249,14 +249,9 @@ func (m *RemoteMailboxService) placedDraftRecord(ctx context.Context, p model.Pr
 	if err != nil {
 		return store.RemoteMessage{}, mapStoreError(err)
 	}
-	// A Graph row is filed under "microsoft:<id>"; the folder it sits in is the
-	// provider's folder id, which is what the Drafts folder's path holds.
-	where := rec.FolderPath
-	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
-		if fp, ferr := m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inboxID, rec.ID); ferr == nil {
-			where = fp
-		}
-	}
+	// Gmail and Graph rows are filed under a provider-prefixed id; resolve the
+	// folder they really sit in before comparing it with the Drafts folder.
+	where := m.Service.Store.RemoteMessageFolder(ctx, p.AccountID, inboxID, rec)
 	if where != folder.Path || !m.folderInScope(inbox, where) {
 		return store.RemoteMessage{}, model.NewMailboxError(model.ErrKindNotFound, "draft is not in this inbox's Drafts folder", false, nil)
 	}

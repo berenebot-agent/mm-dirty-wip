@@ -28,7 +28,7 @@ func (s *Server) placedDraftRecord(ctx context.Context, p model.Principal, box m
 		return store.RemoteMessage{}, false
 	}
 	rec, err := s.Service.Store.GetRemoteMessage(ctx, p.AccountID, box.ID, id)
-	if err != nil || rec.FolderPath != folder.Path {
+	if err != nil || s.Service.Store.RemoteMessageFolder(ctx, p.AccountID, box.ID, rec) != folder.Path {
 		return store.RemoteMessage{}, false
 	}
 	return rec, true
