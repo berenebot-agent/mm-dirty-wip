@@ -5687,7 +5687,7 @@ and future public-migration rollback tests. Keep `internal/dbschema`, baseline
 not migrate, rebuild or modify existing databases.
 
 **Recovery:** The retired converter and its operator instructions remain in Git
-at commit `6938358` for deliberate recovery of an old developer backup. They are
+at commit `3d6398d` for deliberate recovery of an old developer backup. They are
 not part of the supported public upgrade path. Normal `/data` and encryption-key
 backup/restore instructions remain in `docs/SELFHOSTING.md`.
 
