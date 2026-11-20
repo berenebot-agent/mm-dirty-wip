@@ -61,6 +61,9 @@ type DNSWatcher struct {
 	demanded  map[string]bool
 	// demand wakes the Run loop to service a targeted re-check.
 	demand chan struct{}
+	// now is the clock the demand floor is measured against; time.Now unless a
+	// test injects one via SetClock (guarded by mu).
+	now func() time.Time
 }
 
 // DNSState returns the last verdict the watcher published for a domain, and
@@ -103,7 +106,16 @@ func NewDNSWatcher(svc *Service, resolver DNSResolver) *DNSWatcher {
 		checkedAt: map[string]time.Time{},
 		demanded:  map[string]bool{},
 		demand:    make(chan struct{}, 1),
+		now:       time.Now,
 	}
+}
+
+// SetClock replaces the clock the demand floor is measured against, so tests
+// can age a verdict past the floor without sleeping through it.
+func (w *DNSWatcher) SetClock(now func() time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.now = now
 }
 
 // wake nudges the Run loop to service an outstanding demand request without
@@ -183,7 +195,7 @@ func (w *DNSWatcher) RequestCheckIfStale(domainID string) {
 		return
 	}
 	w.mu.Lock()
-	fresh := !w.checkedAt[domainID].IsZero() && time.Since(w.checkedAt[domainID]) < dnsDemandFloor
+	fresh := !w.checkedAt[domainID].IsZero() && w.now().Sub(w.checkedAt[domainID]) < dnsDemandFloor
 	if !fresh {
 		w.demanded[domainID] = true
 	}
@@ -200,7 +212,7 @@ func (w *DNSWatcher) RequestCheckIfStale(domainID string) {
 func (w *DNSWatcher) Stale(domainID string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.checkedAt[domainID].IsZero() || time.Since(w.checkedAt[domainID]) >= dnsDemandFloor
+	return w.checkedAt[domainID].IsZero() || w.now().Sub(w.checkedAt[domainID]) >= dnsDemandFloor
 }
 
 // takeDemanded returns the domains a read asked to re-check and clears the set.
@@ -431,7 +443,7 @@ func (w *DNSWatcher) setVerdict(domainID, accountID string, verdict DNSVerdict) 
 	w.last[domainID] = verdict
 	w.resolved[domainID] = true
 	if accountID != "" {
-		w.checkedAt[domainID] = time.Now()
+		w.checkedAt[domainID] = w.now()
 	}
 	w.mu.Unlock()
 	// Publish only on a real change. The first verdict for a domain that is clean

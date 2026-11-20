@@ -94,10 +94,29 @@ func watchDNS(svc *app.Service, res app.DNSResolver) {
 	svc.DNS.CheckOnce(context.Background())
 }
 
-// waitPastDemandFloor waits out the watcher's 10s demand floor so a following
-// read has to queue a re-check. shortcut: a 10s sleep per run, fold the floor
-// into a test hook if this becomes hot.
-func waitPastDemandFloor() { time.Sleep(10 * time.Second) }
+// agePastDemandFloor moves the watcher's injected clock beyond its 10s demand
+// floor so a following read has to queue a re-check, without sleeping.
+func agePastDemandFloor(clock *fakeClock) {
+	clock.advance(11 * time.Second)
+}
+
+// fakeClock is a manually advanced clock for the DNS watcher.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
 
 // dnsLights returns the kind→state map from a receiving response body.
 func dnsLights(t *testing.T, body map[string]any) map[string]string {
@@ -421,7 +440,9 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 // that serves a stale verdict queues a re-check and says so (dns_stale), so the
 // status dialog's own follow-up read carries the fresh, empty verdict.
 func TestDialMXStaleVerdictSelfClears(t *testing.T) {
-	// Serial: it ages the watcher's verdict past the demand floor.
+	// The watcher clock is injected, so aging the verdict needs no sleep and the
+	// test is independent of the others.
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -434,7 +455,10 @@ func TestDialMXStaleVerdictSelfClears(t *testing.T) {
 	}
 	res := &switchableResolver{}
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}}, nil)
-	watchDNS(svc, res)
+	clock := &fakeClock{t: time.Now()}
+	svc.DNS = app.NewDNSWatcher(svc, res)
+	svc.DNS.SetClock(clock.now)
+	svc.DNS.CheckOnce(context.Background())
 	srv := httpapp.New(svc, nil)
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -458,7 +482,7 @@ func TestDialMXStaleVerdictSelfClears(t *testing.T) {
 
 	// The operator removes the record; the cached verdict is now stale.
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
-	waitPastDemandFloor()
+	agePastDemandFloor(clock)
 	if !svc.DNS.Stale(domain.ID) {
 		t.Fatal("verdict must read as stale once it is past the demand floor")
 	}
