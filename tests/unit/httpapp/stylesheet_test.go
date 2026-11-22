@@ -56,6 +56,9 @@ func TestAddInboxChoicesStayWithinDialog(t *testing.T) {
 	if !strings.Contains(css, ".add-inbox-choice .choice-desc{max-width:100%;") {
 		t.Fatal("Add inbox choice descriptions must wrap within their cards")
 	}
+	if !strings.Contains(css, ".add-inbox-choice{display:flex;flex-direction:column;align-items:flex-start;white-space:normal;") {
+		t.Fatal("Add inbox choice cards must override the global button nowrap")
+	}
 }
 
 // TestPagesLinkVersionedStylesheet pins that rendered pages load the shared
