@@ -11,7 +11,7 @@ Mammoth Mail supports a wide range of options for receiving and sending email, o
 The API names for these providers — the value that goes in `"provider"` when you
 configure a domain over the API — are `mx` (Direct MX), `dialmx` (Tusk MX),
 `remotemx` (Remote MX), `mailgun`, `cloudflare`, `resend`, `postmark`,
-`sendgrid`, `brevo` and `smtp`. Each provider's section below names its own.
+`brevo` and `smtp`; `sendgrid` is not currently offered (see its section). Each provider's section below names its own.
 The label the interface shows and the API name are different strings — the
 picker says "Remote Mammoth Mail MX" where the API says `remotemx` — so copy the
 name from the provider's section rather than from the dropdown.
@@ -180,6 +180,11 @@ webhook caller, not the envelope sender; see the relevant note in
 sending provider.
 
 ## Inbound: SendGrid
+
+> **Not currently offered.** SendGrid is not registered as an inbound provider
+> (`internal/app/service.go:47-53`), so the receiving provider menus hide it and
+> the API has no adapter to accept it. The steps below describe the adapter for
+> when it is re-enabled; see commit `4f30d239`.
 
 **API provider name:** `sendgrid`
 
