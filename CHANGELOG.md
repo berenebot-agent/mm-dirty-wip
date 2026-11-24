@@ -35,6 +35,17 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Dependency security bumps.** The OpenClaw plugin's runtime tree now resolves
+  `minimatch` 11.x (clearing the minimatch DoS advisory) and `undici` 8.x (clearing
+  the undici TLS and DoS advisories for the runtime tree). The plugin pins move to
+  `ws` 8.23.0, `openclaw` 2026.11.6 and `@types/node` ^26.6.6. The Go modules move
+  to `go-imap/v2` beta.9, `go-smtp` v0.26.0, `x/crypto` v0.59.0, `x/net` v0.63.0
+  and `x/sys` v0.50.0. The plugin's `@hono/node-server` resolves to 2.1.11
+  (clearing the static-path middleware bypass advisory), and npm is pinned to
+  12.2.3 so its bundled `undici` resolves to 6.29.1. Only npm's dev-only
+  bundled `minimatch` 10.2.5 remains, since npm overrides do not reach it; that
+  copy's Dependabot alert is dismissed as an accepted risk (`D163`).
+
 - **Editing a placed draft is safer.** Saving a draft that lives in a connected
   mailbox now needs Assistant or Owner access (read access is no longer enough),
   keeps its Bcc recipients, and refuses to overwrite a copy that changed in the

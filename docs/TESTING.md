@@ -59,6 +59,53 @@ silently lost, and that step adds one thing the local tier does not:
 (`MAIL_SMOKE=1 go test -race -count=1 -timeout=120s ./internal/auth ./tests/unit/dialmx/receiver/`).
 Run that command directly if you need the auth smoke locally.
 
+## Lanes, sizing and overrides
+
+Independent tiers run concurrently in three lanes (A: `unit`/`smoke`, B: `vet`
+then `lint`, C: `fmt`, `js`), so wall-clock follows the slowest lane. Every
+tier writes only its own `<run>/<tier>/` folder, and each Go tier has a private
+container and tmpfs `/tmp`. `<run>/run.log` is a relative-timestamp phase
+timeline; `meta.txt` records cores, RAM, image and the active overrides.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MAIL_TEST_LANES` | `3` if >= 4 cores, else `1` | `1` = fully serial tiers |
+| `MAIL_GO_MEM` | 40% of RAM per container when lanes overlap, else 50% | per-container RAM cap |
+| `MAIL_GO_PARALLEL` | `nproc` | Go `-p` / `GOMAXPROCS` |
+| `MAIL_GO_TMPFS` | RAM cap (`0` = off) | in-RAM `/tmp` for SQLite churn |
+| `MAIL_GO_CACHE` | `~/.cache/mammothmail-go` | build/module caches |
+
+Fast edit loop (seconds): `./mammothmail-go.sh test -mod=readonly -run 'TestName' ./tests/unit/<pkg>/`.
+
+### Measured (6 cores, 26 GB, warm cache unless noted)
+
+| Run | Before | After |
+|---|---|---|
+| Default preset, warm | 55.6s | 43-45s |
+| `unit` alone, warm | 43.3s | 38.9s |
+| Default preset, cold caches | 453.5s | 95.0s |
+
+Unit test count (2256 pass, 8 skips, 0 fail) is identical before and after.
+The warm suite is CPU-bound under `-race`, so lanes help little there; the big
+win is cold/cache-miss runs, where `lint`'s toolchain build overlaps `unit`.
+Cold-run caveat: the 453.5s baseline was a first run on a cold cache; the
+"after" used a freshly emptied `MAIL_GO_CACHE`.
+
+### Fixed-sleep removal
+
+`TestDialMXStaleVerdictSelfClears` used a real 10s sleep to age a DNS verdict
+past the demand floor. `DNSWatcher.SetClock` now lets the test advance an
+injected clock instead (10s -> 1.3s), and the test is now `t.Parallel()`.
+
+### Still slow / needs a human decision
+
+- Remaining long poles are CPU-heavy under `-race` (e.g. the 501-message
+  empty-trash tests, ~5-8s). Shrinking the fixture size would weaken the
+  over-batch-limit check, so it was left alone.
+- `tests/unit/httpapp` (~25s) and `tests/unit/app` (~17s) are the critical
+  packages; splitting them would be the next lever.
+- Tests that stay serial are annotated in-file with `// Serial: <reason>`.
+
 ## Run folder layout
 
 Every run produces a folder named `<UTC timestamp>-<pid>-<tiers>`:

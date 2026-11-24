@@ -28,9 +28,11 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "npm": "12.2.1",
+    "npm": "12.2.3",
     "undici": "^8.12.2",
-    "zod": "^4.6.6"
+    "zod": "^4.6.6",
+    "minimatch": "^11.0.1",
+    "@hono/node-server": "^2.1.3"
   },
   "peerDependencies": {
     "openclaw": ">=2026.9.7"

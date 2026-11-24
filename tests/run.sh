@@ -182,6 +182,10 @@ image_id=$(docker image inspect mammothmail-go:1.27 --format '{{.Id}}' 2>/dev/nu
     echo "git_br:    ${git_branch}"
     echo "git_state: ${git_dirty}"
     echo "image:     ${image_id}"
+    echo "cores:     $(nproc 2>/dev/null || echo unknown)"
+    echo "mem_kb:    $(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo unknown)"
+    echo "go_image:  ${MAIL_GO_IMAGE:-mammothmail-go:1.27}"
+    echo "env:       MAIL_TEST_LANES=${MAIL_TEST_LANES:-auto} MAIL_GO_MEM=${MAIL_GO_MEM:-auto} MAIL_GO_PARALLEL=${MAIL_GO_PARALLEL:-auto} MAIL_GO_TMPFS=${MAIL_GO_TMPFS:-auto}"
 } > "$RUN_DIR/meta.txt"
 
 # --- run tiers ------------------------------------------------------------
@@ -191,10 +195,52 @@ declare -A TIER_FIRST_ERROR=()
 
 run_start=$(date +%s.%N)
 
-for t in "${SELECTED[@]}"; do
+# --- lanes ----------------------------------------------------------------
+# Tiers share no mutable state (each writes only its own $RUN_DIR/<tier>/, the Go
+# build cache is concurrency-safe, and each Go tier gets its own container with a
+# private tmpfs /tmp), so independent tiers run at the same time instead of
+# back to back. Wall-clock converges on the slowest lane, not the sum.
+#   lane A: unit            (the long pole)
+#   lane B: vet, lint       (Go containers; run in order so only 2 Go containers
+#                            are ever live at once)
+#   lane C: fmt, js         (light; fmt is a Go container but sub-second)
+# MAIL_TEST_LANES=1 restores the old fully serial behaviour (also the right
+# choice on a 1-2 core host, where lanes only add contention). Default: parallel
+# when the host has >= 4 cores. smoke stays in lane A after unit, never beside it:
+# it compiles and runs a real binary and is timing-sensitive.
+LANES="${MAIL_TEST_LANES:-auto}"
+if [ "$LANES" = "auto" ]; then
+    cores=$(nproc 2>/dev/null || echo 1)
+    case "$cores" in ''|*[!0-9]*) cores=1 ;; esac
+    if [ "$cores" -ge 4 ]; then LANES=3; else LANES=1; fi
+fi
+case "$LANES" in ''|*[!0-9]*) LANES=1 ;; esac
+
+# Each concurrent Go container gets its own RAM ceiling. Left at the wrapper's
+# default (half of RAM each) three containers could legitimately claim more than
+# the host has, so when lanes overlap, default each to 40% of RAM. Overridable
+# with MAIL_GO_MEM (explicit value always wins).
+if [ "$LANES" -gt 1 ] && [ -z "${MAIL_GO_MEM:-}" ]; then
+    mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    case "$mem_kb" in ''|*[!0-9]*) mem_kb=0 ;; esac
+    if [ "$mem_kb" -gt 0 ]; then
+        g=$(( mem_kb * 4 / 10 / 1024 / 1024 ))
+        [ "$g" -lt 2 ] && g=2
+        export MAIL_GO_MEM="${g}g"
+    fi
+fi
+
+# Relative-timestamp phase log: one scan shows where wall-clock went.
+RUN_LOG="$RUN_DIR/run.log"
+rlog() { printf '[%7.1fs] %s\n' "$(awk "BEGIN {printf \"%.1f\", $(date +%s.%N) - $run_start}")" "$*" >> "$RUN_LOG"; }
+rlog "run start tiers=${TIER_LABEL} lanes=${LANES} mem_cap=${MAIL_GO_MEM:-default} cores=$(nproc 2>/dev/null || echo ?)"
+
+# run_tier <tier>: runs one tier, records rc and elapsed under its run folder.
+run_tier() {
+    local t="$1" rc=0 tier_start tier_end
     echo "  running $t ..." >&2
+    rlog "$t start"
     tier_start=$(date +%s.%N)
-    rc=0
     case "$t" in
         unit)
             # -v so per-test timing is available in the output for L2;
@@ -272,13 +318,40 @@ for t in "${SELECTED[@]}"; do
             ;;
     esac
     tier_end=$(date +%s.%N)
-    elapsed=$(awk "BEGIN {printf \"%.1f\", $tier_end - $tier_start}")
+    awk "BEGIN {printf \"%.1f\", $tier_end - $tier_start}" > "$RUN_DIR/$t/elapsed"
+    echo "$rc" > "$RUN_DIR/$t/rc"
+    rlog "$t end rc=$rc"
+}
+
+# run_lane <tier...>: tiers in one lane run in order.
+run_lane() { local t; for t in "$@"; do run_tier "$t"; done; }
+
+lane_a=(); lane_b=(); lane_c=()
+for t in "${SELECTED[@]}"; do
+    case "$t" in
+        unit|smoke) lane_a+=("$t") ;;
+        vet|lint)   lane_b+=("$t") ;;
+        *)          lane_c+=("$t") ;;
+    esac
+done
+
+if [ "$LANES" -le 1 ]; then
+    run_lane "${SELECTED[@]}"
+else
+    pids=()
+    for lane in a b c; do
+        eval "arr=(\"\${lane_${lane}[@]:-}\")"
+        [ -n "${arr[0]:-}" ] || continue
+        run_lane "${arr[@]}" &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || true; done
+fi
+
+for t in "${SELECTED[@]}"; do
+    rc=$(cat "$RUN_DIR/$t/rc" 2>/dev/null || echo 1)
     TIER_RC[$t]=$rc
-    TIER_ELAPSED[$t]=$elapsed
-
-    # let any tee'd process substitution flush before we read the file
-    wait 2>/dev/null || true
-
+    TIER_ELAPSED[$t]=$(cat "$RUN_DIR/$t/elapsed" 2>/dev/null || echo 0.0)
     if [ "$rc" -ne 0 ]; then
         if [ "$t" = "fmt" ]; then
             first_err=$(head -c 300 "$RUN_DIR/$t/out.log" 2>/dev/null || true)
@@ -313,7 +386,7 @@ overall_str=$([ "$overall_rc" -eq 0 ] && echo "PASS" || echo "FAIL")
         fi
     done
     printf "  overall  %s     %ss\n" "$overall_str" "$total_elapsed"
-    echo "  detail: $RUN_DIR/"
+    echo "  detail: $RUN_DIR/ (phase timeline: run.log)"
 } | tee "$RUN_DIR/summary.txt"
 
 # --- L2 timings -----------------------------------------------------------

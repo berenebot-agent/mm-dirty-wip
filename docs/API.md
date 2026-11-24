@@ -1734,7 +1734,7 @@ interface shows:
 | `mailgun` | Mailgun (Mailgun API when sending) | receiving and sending |
 | `postmark` | Postmark | receiving |
 | `resend` | Resend | receiving and sending |
-| `sendgrid` | SendGrid | receiving |
+| `sendgrid` | SendGrid (hidden; not registered, so not currently accepted) | receiving |
 | `brevo` | Brevo API | sending |
 | `smtp` | SMTP | sending |
 
