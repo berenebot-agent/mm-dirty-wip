@@ -41,9 +41,9 @@ All notable changes to Mammoth Mail are documented here. This project follows
   `ws` 8.23.0, `openclaw` 2026.11.6 and `@types/node` ^26.6.6. The Go modules move
   to `go-imap/v2` beta.9, `go-smtp` v0.26.0, `x/crypto` v0.59.0, `x/net` v0.63.0
   and `x/sys` v0.50.0. The plugin's `@hono/node-server` resolves to 2.1.11
-  (clearing the static-path middleware bypass advisory). npm's own bundled
-  `undici` 6.29.0 stays as a dev-only transitive dependency, since npm overrides
-  do not reach it.
+  (clearing the static-path middleware bypass advisory), and npm is pinned to
+  12.2.3 so its bundled `undici` resolves to 6.29.1. Only npm's dev-only
+  bundled `minimatch` 10.2.5 remains, since npm overrides do not reach it.
 
 - **Editing a placed draft is safer.** Saving a draft that lives in a connected
   mailbox now needs Assistant or Owner access (read access is no longer enough),
