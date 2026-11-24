@@ -1,8 +1,64 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { resolveMammothMailAccount } from "../src/accounts.js";
-import { claimMammothMailSetupCode, mammothMailSetupContract, parseSetupCode } from "../src/setup.js";
+import {
+  claimMammothMailSetupCode,
+  mammothMailSetupAdapter,
+  mammothMailSetupContract,
+  parseSetupCode,
+} from "../src/setup.js";
+
+test("manifest accepts required credentials at the root or per named account", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  const schema = manifest.channelConfigs.mammothmail.schema;
+  assert.deepEqual(schema.anyOf, [
+    { required: ["baseUrl", "gatewayId", "secret"] },
+    { required: ["accounts"] },
+  ]);
+  assert.deepEqual(schema.allOf[0], {
+    if: {
+      anyOf: [
+        { required: ["baseUrl"] },
+        { required: ["gatewayId"] },
+        { required: ["secret"] },
+      ],
+    },
+    then: { required: ["baseUrl", "gatewayId", "secret"] },
+  });
+  assert.deepEqual(schema.properties.accounts.additionalProperties.required, [
+    "baseUrl",
+    "gatewayId",
+    "secret",
+  ]);
+  assert.equal(schema.properties.accounts.minProperties, 1);
+});
+
+test("named-account setup writes credentials under accounts", () => {
+  const patched = mammothMailSetupAdapter.applyAccountConfig({
+    cfg: {},
+    accountId: "uat-pr25",
+    input: {
+      baseUrl: "http://mail.example.com",
+      gatewayId: "gw-test",
+      secret: "secret-test",
+    },
+  });
+  assert.deepEqual(patched.channels?.mammothmail, {
+    enabled: true,
+    accounts: {
+      "uat-pr25": {
+        enabled: true,
+        baseUrl: "http://mail.example.com",
+        gatewayId: "gw-test",
+        secret: "secret-test",
+      },
+    },
+  });
+});
 
 test("promotes the paired default before adding a named connector", () => {
   const cfg = { channels: { mammothmail: {

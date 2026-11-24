@@ -13,7 +13,22 @@
       "schema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["baseUrl", "gatewayId", "secret"],
+        "anyOf": [
+          { "required": ["baseUrl", "gatewayId", "secret"] },
+          { "required": ["accounts"] }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "anyOf": [
+                { "required": ["baseUrl"] },
+                { "required": ["gatewayId"] },
+                { "required": ["secret"] }
+              ]
+            },
+            "then": { "required": ["baseUrl", "gatewayId", "secret"] }
+          }
+        ],
         "properties": {
           "enabled": {
             "type": "boolean",
@@ -49,6 +64,29 @@
           "agentId": {
             "type": "string",
             "description": "Optional agent id to route this inbox to"
+          },
+          "accounts": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["baseUrl", "gatewayId", "secret"],
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "name": { "type": "string" },
+                "baseUrl": { "type": "string", "description": "Mammoth Mail base URL" },
+                "gatewayId": { "type": "string", "description": "Connector gateway id" },
+                "secret": { "type": "string", "description": "Relay authentication secret" },
+                "allowFrom": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Optional OpenClaw-side sender allowlist. Mammoth Mail inbox allowlists are the primary gate."
+                },
+                "dmPolicy": { "type": "string", "enum": ["allowlist", "open", "pairing"], "default": "allowlist" },
+                "agentId": { "type": "string", "description": "Optional agent id to route this inbox to" }
+              }
+            }
           }
         }
       },
