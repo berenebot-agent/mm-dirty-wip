@@ -47,6 +47,9 @@
       "./dist/index.js"
     ],
     "setupEntry": "./dist/setup-entry.js",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "compat": {
       "pluginApi": ">=2026.9.7",
       "minGatewayVersion": "2026.9.7"

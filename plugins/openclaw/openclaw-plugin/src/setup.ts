@@ -123,6 +123,7 @@ export async function claimMammothMailSetupCode(params: {
 }
 
 export const mammothMailSetupAdapter = {
+  singleAccountKeysToMove: ["baseUrl", "gatewayId", "agentId"],
   resolveAccountId: ({ accountId }: { accountId?: string }) =>
     normalizeAccountId(accountId || DEFAULT_ACCOUNT_ID),
   prepareAccountConfigInput: async ({
