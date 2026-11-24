@@ -43,7 +43,8 @@ All notable changes to Mammoth Mail are documented here. This project follows
   and `x/sys` v0.50.0. The plugin's `@hono/node-server` resolves to 2.1.11
   (clearing the static-path middleware bypass advisory), and npm is pinned to
   12.2.3 so its bundled `undici` resolves to 6.29.1. Only npm's dev-only
-  bundled `minimatch` 10.2.5 remains, since npm overrides do not reach it.
+  bundled `minimatch` 10.2.5 remains, since npm overrides do not reach it; that
+  copy's Dependabot alert is dismissed as an accepted risk (`D163`).
 
 - **Editing a placed draft is safer.** Saving a draft that lives in a connected
   mailbox now needs Assistant or Owner access (read access is no longer enough),
