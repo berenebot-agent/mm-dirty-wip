@@ -67,9 +67,10 @@ stylesheet in step.
   cards.
 - **Tables:** 12 px semibold grey headers in sentence case, 1 px row rules,
   tabular numerals. Dense dashboard tables use `table.dense`. At ≤900 px the
-  inbox and activity tables reflow into stacked rows. Dashboard inbox rows put
-  the name and status first, the address and size second, and connector and
-  management controls last. Other wide tables scroll inside `.table-wrap`.
+  dashboard inbox list puts the name and address beside the status, counts and
+  management controls in one compact row. The inbox settings dialog provides
+  connector and storage details. Activity rows stack, and other wide tables
+  scroll inside `.table-wrap`.
 - **Mailbox navigation:** On phones, the current folder or label opens the
   folder list beside Compose. The folder list is collapsed initially and opens
   above the messages. Wider views show the folder list in the sidebar.

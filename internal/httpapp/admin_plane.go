@@ -812,7 +812,7 @@ func htmlEscape(v string) string {
 // mailboxes they own, rendered with the same counts and readiness flags as the
 // account Admin's dashboard table.
 const operatorBody = `<h1>Mailboxes</h1><p class="muted">You have Owner access to the following mailboxes.</p>
-{{if .Inboxes}}<section class="card">{{template "inboxes-table" .}}</section>{{else}}<p class="muted">No mailboxes have been assigned to you yet.</p>{{end}}`
+{{if .Inboxes}}<section class="card dashboard-inboxes-card">{{template "inboxes-table" .}}</section>{{else}}<p class="muted">No mailboxes have been assigned to you yet.</p>{{end}}`
 
 func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

@@ -2177,7 +2177,7 @@
     button.classList.toggle('empty', !name);
     button.querySelector('.dashboard-row-group-name').textContent = name || 'Group';
     var label = table === 'inboxes' ? 'inbox' : 'client';
-    button.setAttribute('aria-label', 'Set group for ' + label + ' ' + (row.cells[0] ? row.cells[0].textContent.trim() : ''));
+    button.setAttribute('aria-label', 'Set group for ' + label + ' ' + (row.cells[0] ? row.cells[0].textContent.trim() : '') + (name ? '. Current group: ' + name : ''));
     button.title = name ? 'Group: ' + name : 'Set group';
   }
 

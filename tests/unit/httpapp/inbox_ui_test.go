@@ -848,10 +848,8 @@ func TestUISyncScheduleInlineUnderAddress(t *testing.T) {
 	}
 }
 
-// TestUIDeleteInboxConfirmDialog locks in that the dashboard renders the
-// type-to-confirm inbox delete modal, that every delete entry point carries the
-// inbox address so the dialog can display it, and that the existing delete
-// route still works.
+// TestUIDeleteInboxConfirmDialog covers the settings delete confirmation and
+// keeps deletion and connector creation out of dashboard inbox rows.
 func TestUIDeleteInboxConfirmDialog(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
@@ -871,11 +869,16 @@ func TestUIDeleteInboxConfirmDialog(t *testing.T) {
 		`id="inbox-delete-input"`,
 		`id="inbox-delete-submit"`,
 		`id="inbox-delete-address"`,
-		`class="secondary icon-btn danger open-delete-inbox" data-id="` + box.ID + `" data-address="` + box.Address + `"`,
 		`class="secondary danger open-delete-inbox" id="inbox-edit-delete"`,
+		`id="inbox-connector-add"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{`icon-btn danger open-delete-inbox`, `connector-add add-connector`} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("dashboard inbox row still contains %q", unwanted)
 		}
 	}
 	if strings.Contains(body, `/ui/inboxes/`+box.ID+`/delete" data-confirm=`) {
