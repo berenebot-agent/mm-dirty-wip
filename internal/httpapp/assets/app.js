@@ -8417,6 +8417,20 @@ function generateBearerSecret() {
 (function () {
   var sidebar = document.querySelector('[data-sidebar]');
   if (!sidebar) { return; }
+  var toggle = sidebar.querySelector('.mailnav-toggle');
+  if (toggle) {
+    var current = sidebar.querySelector('a.folder.active');
+    if (current) {
+      var label = current.querySelector('.labelname') || current.firstChild;
+      var name = label.textContent.trim();
+      toggle.querySelector('span').textContent = name;
+      toggle.setAttribute('aria-label', name + ' — switch folder or label');
+    }
+    toggle.addEventListener('click', function () {
+      toggle.setAttribute('aria-expanded', String(toggle.getAttribute('aria-expanded') !== 'true'));
+    });
+    toggle.hidden = false;
+  }
   var inboxID = sidebar.getAttribute('data-inbox') || '';
   var folderNewDlg = document.getElementById('folder-new-dialog');
   var labelNewDlg = document.getElementById('label-new-dialog');

@@ -298,6 +298,9 @@ run_tier() {
                 node tests/passkey-error-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then
+                node tests/mailbox-nav-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
                 node tests/empty-trash-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             if [ "$rc" -eq 0 ]; then

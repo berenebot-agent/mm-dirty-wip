@@ -548,6 +548,8 @@ dialog .dialog-head{display:flex;align-items:flex-start;justify-content:space-be
 .mailcontent{display:flex;flex-direction:column;min-width:0;min-height:0;align-self:stretch}
 .card.mail-reader{flex:1 1 auto;min-height:0}
 .mailnav{position:sticky;top:16px;display:flex;flex-direction:column;gap:4px}
+.mailnav nav{display:flex;flex-direction:column;gap:4px;min-width:0}
+.mailnav .mailnav-toggle{display:none}
 .mailnav .compose{width:100%;justify-content:center;margin-bottom:8px}
 .mailnav a.folder{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;border-radius:var(--mm-r-sm);color:var(--mm-text-2);text-decoration:none;font-size:var(--mm-text-md);font-weight:500}
 .mailnav a.folder:hover{background:var(--mm-subtle)}
@@ -571,15 +573,26 @@ dialog .dialog-head{display:flex;align-items:flex-start;justify-content:space-be
 .mailnav .folder-row a.folder.label{display:flex;align-items:center;justify-content:space-between}
 .mailnav .newfolder{width:100%;justify-content:center;margin-top:6px}
 .folder-dialog{width:420px;max-width:calc(100vw - 24px)}
-@media (max-width:760px){
-  .mail-layout{grid-template-columns:1fr;gap:12px}
-  .mailnav{position:static;flex-direction:row;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--mm-divider);padding-bottom:8px}
-  .mailnav .compose{width:auto;margin:0 4px 0 0}
-  .mailnav a.folder{padding:6px 10px}
-  .mailnav .navgroup-head{flex:0 0 100%;box-sizing:border-box;border-top:1px solid var(--mm-divider);margin:8px 0 0;padding:8px 8px 0}
-  .mailnav .folder-row{flex:1 1 100%;width:100%}
-  .mailnav .folder-row a.folder.label{padding-left:10px}
-  .mailnav .folder-manage{margin-right:4px}
+@media (max-width:640px){
+  .mail-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(min-content,1fr);gap:12px}
+  .mailnav{position:static;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+  .mailnav .compose{grid-column:2;width:auto;min-height:44px;margin:0}
+  .mailnav .mailnav-toggle{display:flex;justify-content:space-between;min-width:0;min-height:44px;padding:0 12px}
+  .mailnav-toggle span{overflow:hidden;text-overflow:ellipsis}
+  .mailnav-toggle::after{content:"";width:7px;height:7px;flex:none;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg)}
+  .mailnav-toggle[aria-expanded=true]::after{transform:translateY(2px) rotate(225deg)}
+  .mailnav nav{grid-column:1/-1;gap:0;padding:4px;border:1px solid var(--mm-border);border-radius:var(--mm-r);background:var(--mm-surface)}
+  .mailnav-toggle:not([hidden])[aria-expanded=false]~nav{display:none}
+  .mailnav a.folder{box-sizing:border-box;min-height:44px;overflow-wrap:anywhere}
+  .mailnav .folder-row a.folder.label{padding-left:12px}
+  .mailnav .folder-manage,.mailnav .navgroup-new{min-width:44px;min-height:44px}
+  .mailnav .navgroup-head{border-top:1px solid var(--mm-divider);margin:4px 0 0;padding:4px 12px 0}
+  .mailnav .system-folder-heading{display:none}
+  .pagehead:has(.inboxhead){gap:8px}
+  .inboxtitle{align-items:flex-start;flex-direction:column;gap:4px}
+  .inboxaddr{box-sizing:border-box;max-width:100%;margin:0;padding:2px 0}
+  .inboxbar .icon-btn,.msghead .actions .icon-btn{width:44px;height:44px;min-width:44px}
+  .mailcontent [data-live-list]>p.muted{margin:12px 0}
 }
 .mailaction button{width:112px;text-align:center}
 .mailaction button.icon-btn{width:30px;padding:0}
@@ -590,16 +603,17 @@ dialog .dialog-head{display:flex;align-items:flex-start;justify-content:space-be
   header{margin:0 -14px 14px;padding:0 14px 10px;gap:8px 10px}
   .brand-logo{height:30px}
   .menu{flex:1 1 auto}
-  .menu-right{gap:6px;flex-wrap:nowrap}
+  .menu-right{gap:6px;flex-wrap:wrap;justify-content:flex-end}
   .menu-right .tab{min-height:30px;padding:0 10px}
   .quota{display:none}
   .card{padding:12px}
   .mailheader{display:none}
   .mailrows{margin:0 -12px -12px}
   /* Mobile mail row: sender + date, then subject; the row opens the message. */
-  .mailrow,.mailrow.outbox,.mailrow.drafts{grid-template-columns:26px minmax(0,1fr);column-gap:8px;row-gap:0;padding:10px 12px}
+  .mailrow,.mailrow.outbox,.mailrow.drafts{grid-template-columns:44px minmax(0,1fr);column-gap:4px;row-gap:0;padding:10px 12px}
   .mailrow.outbox,.mailrow.requests{grid-template-columns:minmax(0,1fr)}
   .mailrow .mailcheck{grid-column:1}
+  .mailrow label.mailcheck{min-height:44px;cursor:pointer}
   .mailrow .maildot{display:none}
   .mailrow .mailrowlink,.mailrow.outbox .mailrowlink,.mailrow.drafts .mailrowlink,.mailrow.requests .mailrowlink{grid-column:2;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;row-gap:2px;align-items:center;padding:0;min-width:0}
   .mailrow.outbox .mailrowlink,.mailrow.requests .mailrowlink{grid-column:1}
@@ -864,6 +878,7 @@ td.actions>form{display:inline-block}
 .inbox-name .unnamed{font-weight:400;font-style:italic;color:var(--mm-text-3)}
 .inbox-address{white-space:nowrap;color:var(--mm-text-2);font-size:var(--mm-text-md)}
 .inbox-flags{white-space:nowrap}
+.inbox-size{white-space:nowrap}
 .inbox-flag{color:var(--mm-text-3)}
 .issue-dot{cursor:help;border-radius:4px}
 .issue-dot[data-tone=warn]{color:var(--mm-warn-solid)}
@@ -923,16 +938,22 @@ td.actions>form{display:inline-block}
   .dashboard-inboxes-card table.dense thead,.activity-table thead{display:none}
   .dashboard-inboxes-card table.dense,.dashboard-inboxes-card table.dense tbody,.activity-table,.activity-table tbody{display:block}
   .dashboard-inboxes-card table.dense tr[data-inbox-id],.activity-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:8px;row-gap:3px;align-items:center;padding:10px 0;border-bottom:1px solid var(--mm-divider)}
+  .dashboard-inboxes-card table.dense tr[data-inbox-id]{grid-template-columns:minmax(44px,1fr) repeat(4,auto);column-gap:4px}
   .dashboard-inboxes-card table.dense tr[data-inbox-id] td,.activity-table td{display:block;border:0;padding:0;max-width:none;text-align:left}
-  .dashboard-inboxes-card .inbox-name{grid-column:1;grid-row:1;min-width:0}
-  .dashboard-inboxes-card td[data-cell=unread]{grid-column:2;grid-row:1}
-  .dashboard-inboxes-card td[data-cell=pending]{grid-column:3;grid-row:1}
+  .dashboard-inboxes-card .inbox-name{grid-column:1 / 3;grid-row:1;min-width:0;overflow-wrap:anywhere}
+  .dashboard-inboxes-card td[data-cell=unread]{grid-column:4;grid-row:1}
+  .dashboard-inboxes-card td[data-cell=pending]{grid-column:5;grid-row:1;justify-self:end}
   .dashboard-inboxes-card td[data-cell] .muted{display:none}
-  .dashboard-inboxes-card .inbox-address{grid-column:1 / -1;grid-row:2;white-space:normal;overflow-wrap:anywhere;font-size:var(--mm-text-sm)}
-  .dashboard-inboxes-card .inbox-flags{grid-column:1;grid-row:3}
-  .dashboard-inboxes-card .inbox-connectors{grid-column:1;grid-row:4}
-  .dashboard-inboxes-card table.dense tr[data-inbox-id] td:nth-last-child(2):not(.inbox-connectors):not([data-cell]){grid-column:2 / -1;grid-row:3;text-align:right;font-size:var(--mm-text-xs);color:var(--mm-text-3)}
-  .dashboard-inboxes-card td.actions{grid-column:2 / -1;grid-row:4;text-align:right}
+  .dashboard-inboxes-card .inbox-address{grid-column:1 / -2;grid-row:2;white-space:normal;overflow-wrap:anywhere;font-size:var(--mm-text-sm)}
+  .dashboard-inboxes-card .inbox-flags{grid-column:3;grid-row:1}
+  .dashboard-inboxes-card .inbox-connectors{grid-column:1;grid-row:3;min-width:0;margin-top:4px}
+  .dashboard-inboxes-card .inbox-size{grid-column:5;grid-row:2;justify-self:end;font-size:var(--mm-text-xs);color:var(--mm-text-3)}
+  .dashboard-inboxes-card table.dense tr[data-inbox-id] .actions{grid-column:2 / -1;grid-row:3;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;margin-top:4px}
+  .dashboard-inboxes-card td.actions>*{margin-left:0}
+  .dashboard-inboxes-card .dashboard-row-group{max-width:clamp(96px,28vw,120px)}
+  .dashboard-inboxes-card :is(table.dense .icon-btn,.dashboard-row-group,.connector-add,.connector-chip){min-height:44px;height:44px;min-width:44px}
+  .dashboard-inboxes-card .dashboard-group-head,.dashboard-inboxes-card .dashboard-group-head td{display:block}
+  .dashboard-inboxes-card .dashboard-group-toggle{min-height:44px;white-space:normal;overflow-wrap:anywhere}
   .activity-table td:nth-child(1){grid-column:1;grid-row:1;font-size:var(--mm-text-xs)}
   .activity-table td:nth-child(2){grid-column:2 / -1;grid-row:1;text-align:right}
   .activity-table td:nth-child(3){grid-column:1 / -1;grid-row:2;color:var(--mm-text-2)}

@@ -76,6 +76,7 @@ jobs:
           {
             node tests/tusk-wizard-check.cjs
             node tests/receiver-settings-check.cjs
+            node tests/mailbox-nav-check.cjs
             node tests/empty-trash-check.cjs
             node tests/release-config-check.cjs
           } 2>&1 | tee ci-logs/js.log

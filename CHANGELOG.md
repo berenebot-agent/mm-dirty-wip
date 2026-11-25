@@ -35,6 +35,10 @@ All notable changes to Mammoth Mail are documented here. This project follows
 
 ### Fixed
 
+- **Mobile inbox layout.** Dashboard inbox rows wrap their controls within the
+  card. The mailbox view puts Compose and a collapsible folder picker above
+  the messages and removes the gap before the empty state.
+
 - **Adding a second OpenClaw connector preserves the first.** Existing default
   connector credentials now move with the default account during promotion.
 
